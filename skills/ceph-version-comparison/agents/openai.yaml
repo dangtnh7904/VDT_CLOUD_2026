@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ceph Version Comparison"
+  short_description: "Create evidence-based Ceph version comparisons"
+  default_prompt: "Use $ceph-version-comparison to compare two Ceph versions and produce Markdown/CSV report pairs."

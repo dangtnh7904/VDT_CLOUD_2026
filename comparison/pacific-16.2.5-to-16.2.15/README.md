@@ -1,13 +1,13 @@
 # So sánh Ceph Pacific v16.2.5 → v16.2.15
 
-> **Trạng thái bàn giao 1 — 2026-09-16:** đã chốt nguồn, tạo README và inventory đầy đủ. Các báo cáo phân tích code `01`–`15` chưa được tạo trong đợt này.
+> **Trạng thái bàn giao 2 — 2026-09-16:** đã chốt nguồn, hoàn thành inventory và ba cặp phân tích `01`–`03`. Các cặp `04`–`15` chưa được tạo.
 >
 > **Phạm vi:** net diff trực tiếp giữa hai đầu tag Pacific. Đây chưa phải đánh giá GO/NO-GO Production và chưa phải kết luận tác động cho một cluster cụ thể.
 
 ## Mục lục nhanh
 
 - [1. Hai mốc nguồn](#1-hai-mốc-nguồn)
-- [2. Kết luận chính ở giai đoạn inventory](#2-kết-luận-chính-ở-giai-đoạn-inventory)
+- [2. Kết luận đã kiểm chứng đến phần 03](#2-kết-luận-đã-kiểm-chứng-đến-phần-03)
 - [3. Mục lục bộ báo cáo](#3-mục-lục-bộ-báo-cáo)
 - [4. Phương pháp](#4-phương-pháp)
 - [5. Cách đọc inventory](#5-cách-đọc-inventory)
@@ -24,7 +24,7 @@
 
 Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không phải SHA của tag object. `v16.2.5` là ancestor của `v16.2.15`; khoảng lịch sử ở giữa có 5.547 commit. Inventory vẫn dùng net diff hai đầu để không nhầm thay đổi trung gian hoặc thay đổi đã revert với khác biệt còn tồn tại ở `v16.2.15`.
 
-## 2. Kết luận chính ở giai đoạn inventory
+## 2. Kết luận đã kiểm chứng đến phần 03
 
 1. Net diff có **2.665 file**: `A 605`, `M 1.842`, `D 162`, `R 56`; tổng `+323.147/-176.246` dòng. Đây là quy mô đọc, không phải thước đo rủi ro.
 2. Phân bố theo path đích gồm `src/` 1.569 file, `qa/` 736 file và `doc/` 232 file. Riêng QA + tài liệu đã là 968 file, nên không thể coi toàn bộ file đổi là thay đổi runtime.
@@ -32,31 +32,35 @@ Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không p
 4. Inventory ghi riêng 7 file nhị phân, 71 bản ghi `0/0`, 2 file đổi mode và metadata gitlink. Trong 56 rename, 34 bản ghi có `0/0`; nhiều file là marker rỗng nên kết quả rename của Git có thể chỉ là heuristic, không chứng minh một lần di chuyển logic.
 5. Chỉ một gitlink đổi: `src/isa-l`, từ `806b55ee578efd8158962b90121a4568eb1ecb66` sang `4b36e413c9ac28b4757b297779470693b699aeae`. `.gitmodules` và gitlink `src/rocksdb` không đổi. Ý nghĩa của diff bên trong ISA-L sẽ thuộc báo cáo `13`.
 6. Triage ban đầu có `P0 105`, `P1 1.296`, `P2 1.264`. Đây là **ưu tiên đọc dựa trên owner tree và loại file**, không phải số lượng lỗi hay mức rủi ro của upgrade.
-7. Chưa có kết luận đã xác minh về OMAP, PGLog, peering, MGR, ceph-volume, RBD, CephFS, RGW, CVE hay lợi ích hiệu năng. Những chủ đề này cần các báo cáo code-level tiếp theo.
+7. [OSD/PG](./01-osd-pg-recovery.md) xác nhận target giữ EC async recovery không xuống dưới `min_size`, xử lý hinfo lỗi mà không assert ở các đường đã sửa, giới hạn dần PGLog `dups` và sửa nhiều trạng thái scrub/peering. Tác động mixed-version phụ thuộc OSD giữ vai trò primary; upgrade không tự cho phép repair hay offline trim.
+8. [BlueStore/BlueFS](./02-bluestore-bluefs.md) xác nhận các sửa crash-durability, deferred replay, legacy OMAP conversion và fsck/repair. Target cũng có opcode BlueFS log mà reader base không hiểu; vì vậy rollback một OSD đã ghi log mới cần test/restore device snapshot, không chỉ hạ package.
+9. [RocksDB/KV/block device](./03-rocksdb-block-device.md) xác nhận bounded iterator/range-delete, reshard option handling, `O_EXCL` và errno mapping. Gitlink `src/rocksdb` không đổi, không thấy DB/WAL format migration trong sáu dòng owner, và compact-on-deletion mặc định tắt.
+10. Không báo cáo nào tuyên bố mức tăng IOPS/latency: các thay đổi hiệu năng phụ thuộc workload, layout DB/WAL, option và thiết bị; test repository đã đọc nhưng chưa chạy.
+11. MGR, cephadm, ceph-volume, RBD client, CephFS, RGW, packaging và security cross-reference vẫn chờ các báo cáo `04`–`15`; chưa có kết luận GO/NO-GO Production.
 
 ## 3. Mục lục bộ báo cáo
 
-| Thứ tự | File | Trạng thái | Mục đích |
-| ---: | --- | --- | --- |
-| — | `README.md` | **Đã tạo** | Nguồn, phương pháp, kết luận tổng hợp và thứ tự đọc |
-| 00 | [00-file-inventory.md](./00-file-inventory.md) | **Đã tạo** | Toàn bộ file đổi, A/M/D/R, `+/-`, owner, ưu tiên và quyết định đọc sâu |
-| 01 | `01-osd-pg-recovery.md` | Chưa tạo | OSD, PG, peering, recovery/backfill, scrub và EC |
-| 02 | `02-bluestore-bluefs.md` | Chưa tạo | BlueStore/BlueFS, data/metadata, replay và fsck/repair |
-| 03 | `03-rocksdb-block-device.md` | Chưa tạo | RocksDB integration, KV, block device và DB/WAL |
-| 04 | `04-mon-osdmap-crush.md` | Chưa tạo | MON, OSDMap, CRUSH, placement và pool flags |
-| 05 | `05-messaging-auth-common.md` | Chưa tạo | Messenger, protocol, auth, caps, encode/decode và common runtime |
-| 06 | `06-config-defaults.md` | Chưa tạo | Options, defaults, schema và điều kiện có hiệu lực |
-| 07 | `07-mgr-modules-monitoring.md` | Chưa tạo | MGR modules, dashboard, metrics, alerts và monitoring |
-| 08 | `08-cephadm-orchestrator.md` | Chưa tạo | Upgrade, stop checks, daemon lifecycle và redeploy |
-| 09 | `09-ceph-volume-activation.md` | Chưa tạo | Inventory, LVM, activation, encryption và DB/WAL |
-| 10 | `10-rados-rbd-clients.md` | Chưa tạo | RADOS/RBD, class, snapshot, fast-diff và object-map |
-| 11 | `11-cephfs-mds.md` | Chưa tạo | MDS/CephFS client, session, caps, volumes và NFS |
-| 12 | `12-rgw.md` | Chưa tạo | S3, auth/policy, bucket/object và multisite |
-| 13 | `13-build-packaging-submodules.md` | Chưa tạo | Build, package, systemd, dependency và submodule |
-| 14 | `14-security-cross-reference.md` | Chưa tạo | Security fix/CVE đã xác minh và liên kết về báo cáo owner |
-| 15 | `15-upgrade-validation.md` | Chưa tạo | Ma trận thay đổi → bằng chứng → tình huống kiểm chứng |
+| Thứ tự | Markdown | CSV thay đổi liên quan | Trạng thái | Mục đích |
+| ---: | --- | --- | --- | --- |
+| — | `README.md` | — | **Đã tạo** | Nguồn, phương pháp, kết luận tổng hợp và thứ tự đọc |
+| 00 | [00-file-inventory.md](./00-file-inventory.md) | [00-file-inventory.csv](./00-file-inventory.csv) | **Đã tạo** | Markdown giữ thống kê/quy ước; CSV giữ toàn bộ 2.665 file đổi |
+| 01 | [01-osd-pg-recovery.md](./01-osd-pg-recovery.md) | [01-osd-pg-recovery.csv](./01-osd-pg-recovery.csv) | **Đã phân tích** | OSD, PG, peering, recovery/backfill, scrub và EC |
+| 02 | [02-bluestore-bluefs.md](./02-bluestore-bluefs.md) | [02-bluestore-bluefs.csv](./02-bluestore-bluefs.csv) | **Đã phân tích** | BlueStore/BlueFS, data/metadata, replay và fsck/repair |
+| 03 | [03-rocksdb-block-device.md](./03-rocksdb-block-device.md) | [03-rocksdb-block-device.csv](./03-rocksdb-block-device.csv) | **Đã phân tích** | RocksDB integration, KV, block device và DB/WAL |
+| 04 | `04-mon-osdmap-crush.md` | `04-mon-osdmap-crush.csv` | Chưa tạo | MON, OSDMap, CRUSH, placement và pool flags |
+| 05 | `05-messaging-auth-common.md` | `05-messaging-auth-common.csv` | Chưa tạo | Messenger, protocol, auth, caps, encode/decode và common runtime |
+| 06 | `06-config-defaults.md` | `06-config-defaults.csv` | Chưa tạo | Options, defaults, schema và điều kiện có hiệu lực |
+| 07 | `07-mgr-modules-monitoring.md` | `07-mgr-modules-monitoring.csv` | Chưa tạo | MGR modules, dashboard, metrics, alerts và monitoring |
+| 08 | `08-cephadm-orchestrator.md` | `08-cephadm-orchestrator.csv` | Chưa tạo | Upgrade, stop checks, daemon lifecycle và redeploy |
+| 09 | `09-ceph-volume-activation.md` | `09-ceph-volume-activation.csv` | Chưa tạo | Inventory, LVM, activation, encryption và DB/WAL |
+| 10 | `10-rados-rbd-clients.md` | `10-rados-rbd-clients.csv` | Chưa tạo | RADOS/RBD, class, snapshot, fast-diff và object-map |
+| 11 | `11-cephfs-mds.md` | `11-cephfs-mds.csv` | Chưa tạo | MDS/CephFS client, session, caps, volumes và NFS |
+| 12 | `12-rgw.md` | `12-rgw.csv` | Chưa tạo | S3, auth/policy, bucket/object và multisite |
+| 13 | `13-build-packaging-submodules.md` | `13-build-packaging-submodules.csv` | Chưa tạo | Build, package, systemd, dependency và submodule |
+| 14 | `14-security-cross-reference.md` | `14-security-cross-reference.csv` | Chưa tạo | Security fix/CVE đã xác minh và liên kết về báo cáo owner |
+| 15 | `15-upgrade-validation.md` | `15-upgrade-validation.csv` | Chưa tạo | Ma trận thay đổi → bằng chứng → tình huống kiểm chứng |
 
-Các tên file chưa tạo được để dạng code thay vì link nhằm tránh liên kết hỏng. Kế hoạch gốc nằm tại [PLAN-pacific-16.2.5-to-16.2.15.md](../PLAN-pacific-16.2.5-to-16.2.15.md).
+Các tên file chưa tạo được để dạng code thay vì link nhằm tránh liên kết hỏng. Từ phần `00` trở đi, mỗi phần dùng Markdown cho phân tích và CSV cùng basename cho danh sách file thay đổi liên quan. Kế hoạch gốc nằm tại [PLAN-pacific-16.2.5-to-16.2.15.md](../PLAN-pacific-16.2.5-to-16.2.15.md).
 
 ## 4. Phương pháp
 
@@ -72,13 +76,14 @@ Các tên file chưa tạo được để dạng code thay vì link nhằm trán
 - Chuẩn hóa trạng thái về `A/M/D/R`; giữ rename similarity, path cũ → mới, mode, binary và gitlink.
 - Đối soát 2.665 khóa path ở cả ba biểu diễn, tổng trạng thái và tổng `+/-` với `--shortstat`.
 - Không bỏ docs, tests, generated/data, asset, build/package hoặc dependency chỉ vì chúng không phải runtime.
+- Ghi chi tiết từng file vào CSV UTF-8. Markdown chỉ giữ thống kê, phương pháp và kết luận; không lặp bảng file thay đổi.
 
 ### 4.3 Phân nhóm và ưu tiên
 
 - Mỗi file có đúng một owner chính `01`–`15`; owner tree thắng keyword lồng bên trong. Ví dụ toàn bộ cây dashboard thuộc `07`, suite `krbd` thuộc `10`, suite `fs` thuộc `11`.
 - Rename được gán theo path đích. Path cũ chỉ là metadata; đặc biệt không dùng rename `R100 0/0` của marker rỗng để suy ra owner hoặc ý nghĩa nghiệp vụ.
 - `P0/P1/P2` là triage đọc: runtime lõi/cluster state/protocol trước; runtime vận hành/config/deploy/client tiếp theo; test/doc/generated/cơ học làm bằng chứng hỗ trợ.
-- Cột “Lý do/quyết định” trong inventory nói rõ file cần đọc sâu, đọc theo điều kiện hay không phân tích độc lập.
+- Các cột `review_mode` và `analysis_decision` trong CSV nói rõ file cần đọc sâu, đọc theo điều kiện hay chỉ dùng làm tham chiếu.
 
 ### 4.4 Phương pháp cho các báo cáo tiếp theo
 
@@ -88,15 +93,13 @@ Thứ tự bằng chứng là: **code/diff và test trong hai source tree → co
 
 ## 5. Cách đọc inventory
 
-| Cột | Cách hiểu |
-| --- | --- |
-| `TT` | `A` thêm, `M` sửa, `D` xóa, `R` rename do Git phát hiện |
-| `+` / `−` | Numstat sau rename detection; `—/—` nghĩa là file nhị phân, không phải 0 dòng |
-| `Nhóm` | Owner chính, tra tên báo cáo trong bảng nhóm ở đầu inventory |
-| `Ưu tiên` | Thứ tự đọc P0/P1/P2; không phải severity/risk rating |
-| `Loại` | Runtime/source, test/QA, docs, generated/lock/data, asset, build/package, dependency hoặc cơ học |
-| `Lý do/quyết định` | Vì sao đọc sâu, đọc theo điều kiện hay chỉ dùng làm bằng chứng |
-| `Ghi chú diff` | Rename similarity, mode change, binary hoặc SHA gitlink |
+Chi tiết từng file nằm trong [00-file-inventory.csv](./00-file-inventory.csv):
+
+- `path`, `old_path`, `status`, `status_detail`: path đích, path cũ nếu rename và trạng thái Git.
+- `additions`, `deletions`, `binary`: numstat; hai cột số dòng để trống khi `binary=true`.
+- `old_mode`, `new_mode`, `old_blob`, `new_blob`: mode và object SHA để nhận diện mode change/gitlink.
+- `group`, `owner_report`, `priority`, `file_type`: owner chính, thứ tự đọc và loại file.
+- `review_mode`, `analysis_decision`, `diff_note`: cách xử lý khi phân tích và ghi chú diff.
 
 File không có net diff nhưng cần đọc để hiểu caller/callee sẽ được ghi là **ngữ cảnh** trong báo cáo thành phần, không được thêm vào danh sách “file đã đổi”.
 
@@ -105,22 +108,22 @@ File không có net diff nhưng cần đọc để hiểu caller/callee sẽ đ�
 | Bước | Đọc | Mục tiêu |
 | ---: | --- | --- |
 | 1 | `README.md` | Nắm nguồn, giới hạn và các fact đã kiểm chứng |
-| 2 | [00-file-inventory.md](./00-file-inventory.md) | Kiểm tra toàn bộ phạm vi; lọc theo nhóm, P0/P1/P2 và loại file |
-| 3 | `01` → `04` | Lõi lưu trữ, OSD/PG, BlueStore/BlueFS, KV/device và MON/placement |
+| 2 | [00-file-inventory.md](./00-file-inventory.md) và [00-file-inventory.csv](./00-file-inventory.csv) | Đọc thống kê trong Markdown, rồi lọc CSV theo nhóm, P0/P1/P2 và loại file |
+| 3 | [01](./01-osd-pg-recovery.md) → [03](./03-rocksdb-block-device.md), rồi `04` khi có | Lõi lưu trữ, OSD/PG, BlueStore/BlueFS, KV/device và MON/placement |
 | 4 | `05` → `09` | Protocol/auth/config, MGR, cephadm và ceph-volume |
 | 5 | `10` → `12` | RADOS/RBD, CephFS/MDS và RGW theo workload đang dùng |
 | 6 | `13` → `15` | Build/package/dependency, security cross-reference và validation |
 | 7 | Quay lại `README.md` | Đọc kết luận tổng hợp sau khi các báo cáo code-level được hoàn tất |
 
-Nếu chỉ rà nhanh phần hiện có, đọc README rồi vào bảng tổng hợp theo nhóm của inventory; không bắt đầu bằng cách đọc tuần tự 2.665 dòng.
+Nếu chỉ rà nhanh phần hiện có, đọc README rồi vào bảng tổng hợp theo nhóm trong `00.md`; chỉ mở CSV khi cần lọc hoặc truy một file cụ thể.
 
 ## 7. Giới hạn kết luận
 
 - Chỉ kết luận cho Pacific `16.2.5 → 16.2.15`; nội dung Quincy/Reef ngoài phạm vi nếu không có bằng chứng độc lập trong hai tag.
 - Chưa có As-Is cluster, deployment mode, dịch vụ đang dùng, client versions, storage layout, config overrides, benchmark hay integration test.
-- Chưa phân tích toàn bộ hunk/commit/test theo component, nên chưa kết luận impact cụ thể, security applicability, mức cải thiện hiệu năng hoặc GO/NO-GO Production.
+- Đã phân tích code-level các owner `01`–`03`; `04`–`15` chưa hoàn tất. Chưa có test runtime nên chưa kết luận security applicability toàn suite, mức cải thiện hiệu năng hoặc GO/NO-GO Production.
 - Tác động tới OpenStack sau này chỉ có thể là suy luận có điều kiện từ Ceph nếu chưa kiểm tra code và cấu hình Nova/Cinder/Glance/Manila.
-- Không có thao tác repair, trim, migrate, thay cấu hình, nâng daemon hoặc lệnh ghi lên cluster trong hai đầu ra này.
+- Không có thao tác repair, trim, migrate, thay cấu hình, nâng daemon hoặc lệnh ghi lên cluster trong bộ đầu ra hiện tại.
 
 ## 8. Cách tái lập
 
