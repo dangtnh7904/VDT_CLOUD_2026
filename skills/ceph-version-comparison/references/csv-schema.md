@@ -105,6 +105,18 @@ finding_id;symbols;commit_shas;evidence_status;risk_level;confidence
 
 Define any extension column before using it and keep its semantics stable across the suite. Do not delete or repurpose a base column.
 
+For a component whose Markdown analysis is handed off as complete, append or otherwise maintain an equivalent explicit mapping for:
+
+```text
+upgrade_disposition;finding_id;disposition_reason
+```
+
+- `upgrade_disposition` is one of `material`, `conditional`, `support`, `trivial`, or `mixed` as defined in `upgrade-relevance.md`.
+- `finding_id` lists the stable finding ID or comma-separated IDs supported by the row; it may be blank for `trivial` and for support evidence that is only cited generally.
+- `disposition_reason` is a concise final reason tied to the upgrade-relevance gate, not a copy of path-based triage.
+
+These are final analysis fields. The base `review_mode` and `analysis_decision` remain initial triage and must still match the master inventory byte-for-byte after CSV decoding.
+
 ## Validation invariants
 
 - Three Git representations resolve to the same endpoint-path key set.

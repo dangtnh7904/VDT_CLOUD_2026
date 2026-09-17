@@ -1,10 +1,10 @@
 # Kế hoạch phân tích diff Ceph Pacific 16.2.5 → 16.2.15
 
-Trạng thái: **Đã chốt nguồn, tạo inventory và hoàn thành các cặp phân tích `01`–`03`; các cặp `04`–`15` còn chờ triển khai.**
+Trạng thái: **Đã chốt nguồn, tạo inventory và hoàn thành các cặp phân tích `01`–`10`; các cặp `11`–`15` còn chờ triển khai.**
 
 ## 1. Mục tiêu và phạm vi
 
-Phân tích các thay đổi quan trọng đối với nâng cấp **16.2.5 → 16.2.15** theo từng thành phần. Mỗi phần đánh số `00`–`15` có một báo cáo Markdown và một CSV cùng basename. Markdown trình bày phương pháp, bằng chứng và kết luận; CSV chứa danh sách file thay đổi liên quan. Mỗi thay đổi được chọn phải giải thích được: code đổi ở đâu, hành vi trước/sau, điều kiện ảnh hưởng và cách kiểm chứng.
+Phân tích các thay đổi quan trọng đối với nâng cấp **16.2.5 → 16.2.15** theo từng thành phần. Mỗi phần đánh số `00`–`15` có một báo cáo Markdown và một CSV cùng basename. CSV giữ đầy đủ mọi file đổi thuộc owner để truy vết; Markdown chỉ phân tích sâu thay đổi có chuỗi tác động tới rollout, mixed-version, restart/replay, compatibility, dữ liệu, availability, rollback hoặc validation. Mỗi thay đổi được chọn sâu phải giải thích được: code đổi ở đâu, hành vi trước/sau, điều kiện ảnh hưởng và cách kiểm chứng.
 
 Nguồn sử dụng:
 
@@ -24,6 +24,7 @@ Phạm vi kết luận chỉ là Pacific. Các nội dung Quincy/Reef trong tài
 | Commit 16.2.5                                      | `0883bdea7337b95e4b611c768c0279868462204a`                                                                        |
 | Commit 16.2.15                                     | `618f440892089921c3e944a991122ddc44e60516`                                                                        |
 | Git history                                        | Cả hai repository không phải shallow clone và đều có hai tag cần so sánh                                   |
+| Git/rename detection                               | Git`2.49.0.windows.1`; net diff dùng `--find-renames`                                                          |
 | Working tree                                       | `git status --short` không báo thay đổi ở cả hai repository                                                 |
 | Quy mô diff toàn repository                      | 2.665 bản ghi file thay đổi; 323.147 dòng thêm, 176.246 dòng xóa theo`git diff --shortstat --find-renames` |
 | Báo cáo trong`comparison/` trước bước này | Có`submodule.md`                                                                                                 |
@@ -58,7 +59,7 @@ Thư mục đầu ra: `comparison/pacific-16.2.5-to-16.2.15/`.
 
 Mỗi phần `00`–`15` bàn giao theo cặp cùng basename: `.md` để đọc kết luận và `.csv` để lọc danh sách thay đổi. Markdown không nhúng lại bảng liệt kê từng file. `README.md` là mục lục tổng hợp nên không có CSV riêng.
 
-Mỗi file nguồn có một nhóm phân tích chính. CSV của báo cáo owner chứa file đó; báo cáo khác đặt liên kết tham chiếu thay vì sao chép toàn bộ phân tích. Ví dụ `OSDMap.*` thuộc báo cáo MON/OSDMap, còn phân tích OSD chỉ dẫn tới đó. Test và QA đi kèm thay đổi được ghi trong CSV của báo cáo thành phần; ma trận kiểm chứng tổng hợp ở phần 15.
+Mỗi file nguồn có một nhóm phân tích chính. CSV của báo cáo owner chứa file đó; báo cáo khác đặt liên kết tham chiếu thay vì sao chép toàn bộ phân tích. Ví dụ `OSDMap.*` thuộc báo cá	o MON/OSDMap, còn phân tích OSD chỉ dẫn tới đó. Test và QA đi kèm thay đổi được ghi trong CSV của báo cáo thành phần; ma trận kiểm chứng tổng hợp ở phần 15.
 
 File không có net diff nhưng cần đọc để hiểu caller/callee hoặc dữ liệu dùng chung được ghi là **ngữ cảnh**, không đưa vào danh sách file đã đổi. Với nhóm không có thay đổi quan trọng sau rà soát, ghi rõ kết quả thay vì tạo ra nhận định để lấp nội dung.
 
@@ -95,6 +96,8 @@ Schema chung bắt buộc của CSV inventory: `index`, `base_tag`, `target_tag`
 Ưu tiên đọc ban đầu: BlueStore/BlueFS và OSD/PG → MON/protocol/config → MGR/cephadm/ceph-volume → RBD/CephFS/RGW → packaging/dependency và tổng hợp security. Thứ tự có thể điều chỉnh khi diff chỉ ra vấn đề quan trọng hơn.
 
 Không giới hạn tùy ý ở “top N file”. Chưa biết dịch vụ nào đang dùng thì vẫn rà cả RBD, CephFS và RGW, đồng thời ghi rõ điều kiện áp dụng. Mức ưu tiên đọc và mức rủi ro khi nâng cấp là hai thông tin riêng.
+
+Sau khi rà, một thay đổi chỉ được nâng thành finding Markdown khi có chuỗi tác động nâng cấp đáng tin cậy. Tác động hiếm hoặc phụ thuộc deployment vẫn được giữ và gắn điều kiện; test/doc/frontend/client/refactor/build-only không có chuỗi tác động đó được tổng hợp là `trivial/support`, nhưng không bị xóa khỏi CSV.
 
 ### Bước 3 — Đọc hunk, hàm và lịch sử commit
 
@@ -136,8 +139,9 @@ Mỗi phần bàn giao một cặp Markdown/CSV cùng basename. Báo cáo Markdo
 3. Các thay đổi chính, có hunk ngắn hoặc đoạn code trước/sau khi cần.
 4. Tác động lúc rolling upgrade và sau khi toàn cụm lên 16.2.15.
 5. Tình huống kiểm chứng, test liên quan và các điểm còn thiếu bằng chứng.
+6. Một mục tổng hợp `trivial/support` cho phần diff không ảnh hưởng quyết định nâng cấp; không viết một finding cho từng file.
 
-CSV của từng phần là tập con theo owner từ `00-file-inventory.csv`, giữ nguyên schema chung và thứ tự cột. Khi phân tích sâu cần thêm dữ liệu, CSV có thể bổ sung các cột như `finding_id`, `symbols`, `commit_shas` hoặc `evidence_status`, nhưng không được bỏ các cột chung. File ngữ cảnh không có net diff chỉ được nhắc trong Markdown, không được đưa vào CSV thay đổi.
+CSV của từng phần là tập con theo owner từ `00-file-inventory.csv`, giữ nguyên schema chung và thứ tự cột. Khi hoàn tất phân tích, có thể bổ sung `upgrade_disposition`, `finding_id`, `disposition_reason`, `symbols`, `commit_shas` hoặc `evidence_status` ở bên phải; các cột nền không được bỏ hay đổi. File ngữ cảnh không có net diff chỉ được nhắc trong Markdown, không được đưa vào CSV thay đổi.
 
 Mẫu cho một thay đổi:
 
@@ -163,6 +167,7 @@ Liên kết code được cố định theo tag/SHA để tránh trôi dòng the
 - Mỗi CSV thành phần là tập con hợp lệ của `00-file-inventory.csv`; tổng các dòng owner chính bằng 2.665 và không trùng owner.
 - Header, kiểu dữ liệu, UTF-8, số dòng và tổng A/M/D/R, `+/-`, binary, mode/gitlink được kiểm tra trước khi bàn giao.
 - Mỗi kết luận quan trọng có bằng chứng code, điều kiện áp dụng và cách kiểm chứng.
+- Mọi dòng CSV được bao phủ bởi finding có liên quan nâng cấp hoặc mục tổng hợp `trivial/support`; Markdown không phân tích sâu phần không ảnh hưởng.
 - Không lẫn thay đổi trước baseline hoặc Quincy/Reef vào lợi ích của 16.2.5 → 16.2.15.
 - Các nhận định đầu vào được đánh dấu: đã xác nhận, cần sửa, ngoài phạm vi hoặc chưa đủ bằng chứng.
 - Security cross-reference và báo cáo thành phần không mâu thuẫn, không phân tích lặp toàn bộ cùng một vấn đề.
@@ -170,7 +175,7 @@ Liên kết code được cố định theo tag/SHA để tránh trôi dòng the
 
 ## 5. Điều kiện hoàn thành và giới hạn
 
-Hoàn thành khi có cặp inventory đầy đủ, đủ cặp Markdown/CSV cho từng nhóm, và ma trận kiểm chứng truy được từ thay đổi → bằng chứng → tác động có điều kiện. Markdown phải giữ phần phân tích; CSV phải giữ danh sách file thay đổi liên quan và metadata diff.
+Hoàn thành khi có cặp inventory đầy đủ, đủ cặp Markdown/CSV cho từng nhóm, và ma trận kiểm chứng truy được từ thay đổi → bằng chứng → tác động có điều kiện. Markdown giữ phân tích upgrade-relevant cùng một tóm tắt trivial/support; CSV giữ đầy đủ danh sách file thay đổi và metadata diff.
 
 Không cần As-Is inventory để bắt đầu phân tích code. Thông tin deployment mode, dịch vụ đang sử dụng, client, storage layout và cấu hình override sẽ được ghi thành các câu hỏi áp dụng cho cluster cụ thể. Chưa có các thông tin và kết quả thử nghiệm đó thì không đưa ra kết luận GO/NO-GO Production hoặc số liệu cải thiện hiệu năng.
 
@@ -184,4 +189,4 @@ Không cần As-Is inventory để bắt đầu phân tích code. Thông tin dep
 4. Các cặp báo cáo RADOS/RBD, CephFS và RGW.
 5. Các cặp packaging/submodules, security, validation và README tổng hợp.
 
-Plan đã được áp dụng cho `00-file-inventory.{md,csv}` và ba cặp `01`–`03`. Các cặp `04`–`15` sẽ tiếp tục theo cùng quy ước ở các bước triển khai sau.
+Plan đã được áp dụng cho `00-file-inventory.{md,csv}` và mười cặp `01`–`10`. Các cặp `11`–`15` sẽ tiếp tục theo cùng quy ước ở các bước triển khai sau.

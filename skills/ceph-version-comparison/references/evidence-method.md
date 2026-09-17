@@ -24,7 +24,7 @@ The report answers how the two endpoints differ. Commit history explains why; it
 
 ## Finding workflow
 
-For each material behavior:
+First apply the upgrade-relevance gate in `upgrade-relevance.md`. A code change can be behaviorally real yet still not deserve a detailed upgrade finding. For each behavior that passes the gate:
 
 1. Read the full hunk with useful context.
 2. Read the relevant function, type, option, schema, or state machine in both endpoint trees.
@@ -35,6 +35,8 @@ For each material behavior:
 7. Write the conclusion with explicit conditions and uncertainty.
 
 Group files that implement one behavior into one finding. Do not produce a prose item for every changed file.
+
+For a weak but credible upgrade path, retain a conditional finding and identify the deployment fact that decides applicability. For no demonstrated upgrade path, retain the row in CSV and summarize its class as trivial/support in Markdown. Do not manufacture an impact merely to justify analysis. Keep evidence confidence distinct from estimated likelihood, consequence, and deployment applicability; rare code paths can still have high-confidence evidence.
 
 ## Required finding fields
 

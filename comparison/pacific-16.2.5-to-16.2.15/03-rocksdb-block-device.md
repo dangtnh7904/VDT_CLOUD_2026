@@ -1,6 +1,6 @@
 # 03 — RocksDB, KV và block device: v16.2.5 → v16.2.15
 
-> **Kết quả:** đã phân tích đủ 6 dòng do `03-rocksdb-block-device` sở hữu trong net diff hai đầu tag. Các thay đổi đáng chú ý nhất là giới hạn iterator OMAP/RocksDB, sửa đường xóa range và reshard column family, khóa độc quyền block device, cùng việc chuẩn hóa lỗi đọc đồng bộ. Không có bằng chứng trong tập owner này về thay đổi định dạng DB/WAL, protocol trên mạng hay một migration tự động khi nâng cấp.
+> **Kết quả:** CSV bao phủ đủ 6 dòng do `03-rocksdb-block-device` sở hữu; Markdown chỉ phân tích sâu những hành vi có đường tác động tới restart, data path, phục hồi sự cố hoặc validation của upgrade. Trọng tâm là iterator/range-delete RocksDB và block-device open/error handling. Không có bằng chứng trong tập owner này về thay đổi định dạng DB/WAL, protocol trên mạng hay migration tự động.
 >
 > **Trạng thái kiểm chứng:** đã đọc code ở cả hai endpoint, lịch sử commit và test trong repository; chưa build, chưa chạy unit/integration test, chưa thao tác cluster hay thiết bị thật.
 
@@ -14,6 +14,8 @@
 
 Phạm vi CSV gồm các inventory index `1099`, `1100`, `1272`–`1274` và `2590`: tổng `+383/-173`, tất cả là `P1`; 5 dòng `deep`, 1 dòng `conditional`. Các path chính thuộc `src/blk/`, `src/kv/` và công cụ KV. Báo cáo không lặp danh sách file thành bảng.
 
+`review_mode` là triage đọc, không tự động biến một dòng thành finding. Dòng build-only vẫn được giữ nguyên trong CSV nhưng được hạ xuống trivial/support sau khi không tìm thấy tác động runtime với package chính thức.
+
 Ba file có net diff nhưng do báo cáo khác sở hữu được dùng làm **ngữ cảnh**, không chèn vào CSV này:
 
 - `src/os/bluestore/BlueStore.cc` — inventory `1561`, owner `02-bluestore-bluefs`: caller truyền OMAP lower/upper bounds.
@@ -23,14 +25,9 @@ Không có thay đổi gitlink `src/rocksdb` giữa hai endpoint. Sáu dòng own
 
 ## 2. Kết luận nhanh
 
-1. `v16.2.15` đưa OMAP bounds xuống RocksDB `ReadOptions` và, khi có thể chứng minh toàn range ở cùng shard, chỉ mở iterator của một column family. Đây là thay đổi tự động trên OSD đã nâng cấp, mặc định bật, nhằm tránh quét tombstone/range không liên quan; mức cải thiện thực tế chưa được benchmark trong môi trường này.
-2. Xóa KV range đọc `rocksdb_delete_range_threshold` tại thời điểm thao tác, có fast path `DeleteRange` khi threshold bằng `0`, và dùng iterator có bound cho column family. Default vẫn là `1048576`; không có migration dữ liệu.
-3. Reshard RocksDB column family bằng `ceph-bluestore-tool` nay hiểu pseudo-option `block_cache` trong sharding spec. Đây là hành động offline, thủ công; không tự chạy trong rolling upgrade.
-4. Compact-on-deletion được bổ sung nhưng mặc định tắt. Khi bật, nó có thể đổi tải compaction/I/O và chỉ áp dụng khi column-family options được dựng lại.
-5. `KernelDevice` thêm `O_EXCL` cho lần mở đầu tiên của block device để chặn hai alias cùng major/minor bị mở độc quyền bởi hai tiến trình. Cấu hình hợp lệ không cần thao tác; cấu hình xung đột sẽ fail sớm thay vì cùng ghi thiết bị.
-6. Đường đọc đồng bộ truyền `-errno` đúng vào bộ phân loại lỗi; với `allow_eio`, các lỗi I/O dự kiến mới được chuẩn hóa chính xác thành `-EIO`.
-7. `ceph-kvstore-tool ... destructive-repair` cho backend `rocksdb`/`leveldb` không còn dereference con trỏ null; bản thân repair vẫn là thao tác phá hủy, không được xem là bước nâng cấp mặc định.
-8. Thư viện nội bộ `blk` được ép build `STATIC`, chỉ ảnh hưởng build tùy biến có `BUILD_SHARED_LIBS`; không đổi hành vi package chạy sẵn.
+1. **Tự động sau restart:** target đổi OMAP iterator/range-delete cục bộ trên từng OSD; default threshold và on-disk format không đổi. Cần kiểm correctness ở boundary và đo tải thực tế, không suy diễn phần trăm hiệu năng.
+2. **Rủi ro startup/fault path:** `KernelDevice` thêm `O_EXCL`, nên duplicate device alias tiềm ẩn có thể khiến OSD target fail sớm lúc restart thay vì cho phép hai writer; synchronous read cũng phân loại errno đúng hơn.
+3. **Chỉ theo điều kiện:** reshard, compact-on-deletion và destructive repair chỉ liên quan khi As-Is/runbook thực sự dùng chúng. Chúng không tự chạy trong rolling upgrade; build `blk` static và các hunk log-only là trivial đối với package chính thức.
 
 ## 3. Phát hiện chi tiết
 
@@ -109,7 +106,7 @@ Default `rocksdb_delete_range_threshold=1048576` không đổi giữa hai endpoi
 
 **Đánh giá.** Priority `P1`; rủi ro mặc định **thấp** vì tắt, rủi ro khi bật **trung bình** do I/O nền; confidence **high** về activation, **medium** về tác động. Không có test Ceph chuyên biệt được thêm cùng commit.
 
-### KVBD-005 — `O_EXCL` chặn mở trùng cùng block device qua alias
+### KVBD-005/006 — Block-device restart chặn alias trùng và phân loại lỗi đọc đúng hơn
 
 **Owner/evidence.** Inventory `1100`, `src/blk/kernel/KernelDevice.cc`; commit `59f6535b1780d142a84117d4199b30cb596d080e`. Symbol `KernelDevice::open` ở cả hai endpoint bắt đầu tại dòng `123`. Target `stat()` path, nhận diện `S_IFBLK`, và thêm `O_EXCL` cho direct fd đầu tiên khi `lock_exclusive` bật; `_lock()`/`flock()` vẫn được giữ cho regular file và để hiện trong `/proc/locks`.
 
@@ -121,17 +118,9 @@ Một gap đáng lưu ý từ endpoint code: nếu `stat()` thất bại, target
 
 **Rolling/full upgrade và hành động.** Local theo daemon. Trong mixed phase, chỉ OSD target có hard exclusion; không có protocol/format change. Không cần action nếu inventory thiết bị sạch. Trước upgrade nên kiểm tra symlink/LVM/container mapping để phát hiện hai OSD trỏ cùng major/minor.
 
-**Đánh giá.** Priority `P1`; rủi ro upgrade **thấp với mapping hợp lệ**, **trung bình về availability nếu đang có conflict tiềm ẩn**; confidence **high** cho O_EXCL, **medium** cho biểu hiện lỗi `stat` vì chưa chạy. `unittest_bdev` chỉ có `KernelDevice.Ticket45337` trên regular temp file (`src/test/objectstore/test_bdev.cc:45`), không phủ block alias/O_EXCL.
+**Error-path evidence.** Cùng inventory `1100`, commit `25664452919d360bd37fa3a9eb62202a58ac72e7` sửa `KernelDevice::read`: POSIX `pread()` trả `-1` và đặt `errno`, nhưng base truyền `-1` vào `is_expected_ioerr`; target truyền `-errno`. Khi `IOContext::allow_eio=true`, lỗi thuộc tập dự kiến mới được chuẩn hóa đúng thành `-EIO`. Đây là fault path local, tự có sau restart và không thay đổi dữ liệu hay format.
 
-### KVBD-006 — Sửa phân loại errno trên đường đọc đồng bộ
-
-**Owner/evidence.** Inventory `1100`; commit `25664452919d360bd37fa3a9eb62202a58ac72e7`. Symbol `KernelDevice::read` ở base `KernelDevice.cc:1032`, target `:1053`; hunk target nằm quanh `:1080`. `is_expected_ioerr()` nhận mã âm kiểu `-EIO`, `-ENOSPC`, `-ETIMEDOUT`, v.v.
-
-**Trước → sau.** POSIX `pread()` trả `-1` và đặt `errno`. Base truyền trực tiếp `r == -1` vào `is_expected_ioerr`, khiến hầu hết lỗi dự kiến không được nhận diện; target truyền `-errno`. Khi `IOContext::allow_eio=true`, lỗi thuộc tập dự kiến được chuẩn hóa thành `-EIO`; nếu không, code vẫn trả `-errno` theo nhánh hiện hữu.
-
-**Điều kiện và tác động.** Chỉ kích hoạt khi synchronous `pread` thất bại; BlueFS và BlueStore có caller của `BlockDevice::read`. Đây là thay đổi **correctness/error propagation**, không phải phục hồi dữ liệu. Không cần config/migration; tự có sau restart vào binary target. Mixed phase chỉ khác theo OSD local.
-
-**Đánh giá.** Priority `P1`; rủi ro nâng cấp **thấp**, hậu quả của lỗi thiết bị vốn có thể cao; confidence **high**. Không có regression test fault-injection đi kèm commit và test bdev hiện hữu không phủ `allow_eio`.
+**Đánh giá.** Priority `P1`; rủi ro upgrade **thấp với mapping/device khỏe**, **trung bình về availability nếu đang có conflict alias tiềm ẩn**; confidence **high** cho O_EXCL và error mapping, **medium** cho biểu hiện lỗi `stat` vì chưa chạy. `unittest_bdev` chỉ có `KernelDevice.Ticket45337` trên regular temp file (`src/test/objectstore/test_bdev.cc:45`), không phủ block alias/O_EXCL hay `allow_eio` fault injection.
 
 ### KVBD-007 — Công cụ repair giữ được DB handle thay vì segfault
 
@@ -145,15 +134,9 @@ Một gap đáng lưu ý từ endpoint code: nếu `stat()` thất bại, target
 
 **Đánh giá/test.** Priority `P1`; confidence **high**. `qa/workunits/cephtool/test_kvstore_tool.sh:63` chỉ gọi destructive repair qua `bluestore-kv`, nên không bắt đúng null-handle của backend `rocksdb`; responsible commit không thêm test trực tiếp. Chưa chạy tool.
 
-### KVBD-008 — `blk` luôn là static convenience library
+## 4. Thay đổi trivial/support không ảnh hưởng upgrade chuẩn
 
-**Owner/evidence.** Inventory `1099`, `src/blk/CMakeLists.txt:28`; commit `d645ced6781f0c4876c90282d5495212c6686c64`. Base dùng `add_library(blk ${libblk_srcs})`; target dùng `add_library(blk STATIC ${libblk_srcs})`.
-
-**Trước → sau và điều kiện.** Khi build tùy biến đặt global `BUILD_SHARED_LIBS=ON`, base có thể tạo `blk` thành shared library dù nó là internal convenience library và không được cài đặt; target ép static. Official prebuilt deployment không đổi runtime. Có hiệu lực ở build/link, không cần cluster restart ngoài việc triển khai binary/package mới.
-
-**Đánh giá/test.** Priority inventory `P1` nhưng rủi ro upgrade runtime **thấp**; confidence **high**. Cần một build CI với `BUILD_SHARED_LIBS=ON` để xác nhận link/install, chưa chạy trong đợt phân tích này.
-
-## 4. Các delta đã đọc nhưng không nâng thành finding riêng
+CSV vẫn giữ đủ **6/6 dòng**. Dòng `src/blk/CMakeLists.txt` ép thư viện nội bộ `blk` thành `STATIC`; nó chỉ đáng xem lại với custom source build dùng `BUILD_SHARED_LIBS=ON`, không đổi runtime của package chính thức nên không còn là finding hay validation mặc định.
 
 - `b44541a519a4c4e1af7d5237ffbd2f76d4558294` bổ sung RocksDB status vào log khi `ListColumnFamilies()` thất bại (`verify_sharding`); hỗ trợ chẩn đoán KVBD-003, không đổi return `-EIO`.
 - `ba50fc87869719fd531cd32b85b32d78113c84de` thêm debug quanh `rm_range_keys`; các log này được giữ và mở rộng trong KVBD-002, không tự đổi semantics.
@@ -169,7 +152,6 @@ Một gap đáng lưu ý từ endpoint code: nếu `stat()` thất bại, target
 | KVBD-004 | Chỉ OSD target mở DB với option bật có collector | Nhất quán nếu cấu hình được rollout và OSD reopen | Mặc định tắt; bật cần config + restart/reopen |
 | KVBD-005/006 | Khóa/open và error mapping local theo OSD | Tất cả OSD có hard exclusion và errno mapping mới | Tự động sau restart; kiểm tra device mapping trước |
 | KVBD-007 | Phiên bản tool quyết định hành vi | Không có trạng thái cluster cần hội tụ | Chỉ hành động repair có chủ đích |
-| KVBD-008 | Không áp dụng | Binary/package target đã link theo build mới | Build/deploy, không có migration dữ liệu |
 
 Không finding nào trong owner 03 yêu cầu đồng thời nâng MON/MGR/client, đổi feature bit hoặc chuyển đổi on-disk format. Điều đó không loại trừ phụ thuộc nâng cấp khác ngoài phạm vi báo cáo này.
 
@@ -186,6 +168,8 @@ Không responsible commit nào ở trên bổ sung test trực tiếp cho `block
 
 ### Ma trận validation môi trường
 
+`V03-01/02/05/06` kiểm tra behavior tự động có thể xuất hiện khi restart OSD. `V03-03/04/07` chỉ cần đưa vào runbook nếu deployment thật sự reshard, bật compact-on-deletion hoặc dự kiến dùng destructive repair.
+
 | ID | Tiền điều kiện và pha | Workload/hành động trong lab | Kết quả mong đợi và tín hiệu lỗi | Quan sát/điều kiện dừng |
 | --- | --- | --- | --- | --- |
 | V03-01 | OSD target, CF sharded, OMAP có nhiều key và tombstone; post-upgrade | Đọc/list/clone OMAP với bounds bật, rồi lặp lại trên dữ liệu tương đương với bounds tắt | Tập key/header giống nhau; không vượt tail; không có RocksDB iterator error | So sánh checksum/key count và latency; dừng nếu thiếu/thừa key hoặc OSD assert |
@@ -195,7 +179,6 @@ Không responsible commit nào ở trên bổ sung test trực tiếp cho `block
 | V03-05 | Hai path block alias cùng major/minor trong lab, thêm case regular file và path thiếu | Mở path thứ nhất exclusive, thử path thứ hai; thử path không tồn tại | Lần hai bị từ chối; regular-file soft lock còn hoạt động; errno path thiếu được ghi nhận | Không dùng device có dữ liệu; dừng ngay nếu cả hai writer mở được |
 | V03-06 | Fault-injection/mock `pread`, không dùng production device | Trả từng errno dự kiến với `allow_eio=true/false` | `true` nhận `-EIO`; `false` theo policy/error gốc | Assert return code và log; không inject lỗi trên OSD thật |
 | V03-07 | RocksDB fixture hỏng có thể bỏ, tool target | Gọi direct-backend destructive repair trong sandbox | Không segfault/null dereference; có status rõ và DB được kiểm tra sau đó | Chỉ fixture; dừng và bỏ bản sao nếu repair báo lỗi |
-| V03-08 | CI source build target | Configure với `BUILD_SHARED_LIBS=ON`, build/link/install targets dùng `blk` | `blk` là static archive nội bộ, không thiếu shared object lúc install/run | Kiểm tra CMake artifact/link map và smoke test binary |
 
 Các scenario trên là thiết kế kiểm chứng, không phải ủy quyền chạy trên cluster. Với thao tác reshard/repair/compaction, cần runbook, backup và stop condition cụ thể của môi trường trước khi thực thi.
 

@@ -14,6 +14,7 @@ Resolve these paths relative to this skill directory.
 - Always read [references/output-contract.md](references/output-contract.md) before creating or restructuring a comparison suite.
 - Read [references/csv-schema.md](references/csv-schema.md) before generating, editing, splitting, or validating any comparison CSV.
 - Read [references/component-map.md](references/component-map.md) when assigning ownership, priority, or the default `00`–`15` report structure.
+- Always read [references/upgrade-relevance.md](references/upgrade-relevance.md) before writing or revising component Markdown. It defines what belongs in the decision-focused report versus the complete CSV ledger.
 - Read [references/evidence-method.md](references/evidence-method.md) before writing code-level findings, security claims, performance claims, or upgrade recommendations.
 
 Do not load a reference when the request is only a narrow action that does not use it, such as validating an already classified CSV.
@@ -60,6 +61,8 @@ Do not discard docs, tests, generated files, binary files, mode-only changes, or
 
 Apply the component map in precedence order. Each row gets exactly one `group` and `owner_report`; use the target path for a rename and retain the source in `old_path`. Assign `priority`, `file_type`, `review_mode`, and `analysis_decision` as reading triage, not as a final risk score.
 
+Treat `review_mode` and the base `analysis_decision` as initial triage. Do not silently repurpose them as the final relevance verdict in only a component CSV; after evidence review, record the final upgrade disposition in appended analysis columns or another explicit row-to-disposition mapping that reconciles with the CSV.
+
 Resolve ambiguous paths by inspecting their purpose. Do not invent a catch-all classification silently: document the chosen rule or leave the suite incomplete until the row has a defensible owner.
 
 ### 4. Create or update the report suite
@@ -82,11 +85,17 @@ python <skill-dir>/scripts/split_component_csvs.py \
 
 Omit `--owner` only when all component pairs are ready to be created. The splitter refuses to overwrite existing component CSVs unless `--force` is explicitly supplied; avoid `--force` after analysis columns have been added.
 
-### 5. Analyze important changes
+### 5. Gate on upgrade relevance, then analyze
 
-For each selected change, follow the evidence method: hunk and both symbol versions, callers/callees or schema, commits in the range, tests changed with the fix, then official PRs/issues/advisories only when needed. Distinguish the endpoint net diff from intermediate changes and reverts.
+Keep every owned changed-file row in the component CSV, but apply the upgrade-relevance gate before spending Markdown space. Promote a change to a detailed finding only when the evidence shows a credible causal path to upgrade preparation, mixed-version operation, restart/mount/replay, compatibility, data safety, availability, rollback, stabilization, or upgrade validation. Category alone is not decisive: most client, frontend, test, documentation, generated, and refactor changes are non-material, but retain an exception when it genuinely changes an upgrade outcome.
+
+Perform a lightweight relevance screen for every row, or for a coherent commit/behavior cluster that explicitly covers it, before exclusion. Inspect at least its diff/hunk or special Git metadata, commit intent, and enough surrounding context to detect a rare exception. Never mark a row trivial solely from its path, `P2`, `file_type`, `review_mode`, churn, or commit title.
+
+For each promoted change, follow the evidence method: hunk and both symbol versions, callers/callees or schema, commits in the range, tests changed with the fix, then official PRs/issues/advisories only when needed. Distinguish the endpoint net diff from intermediate changes and reverts. Group files that implement the same upgrade-relevant behavior.
 
 State the before/after behavior, activation conditions, mixed-version versus post-upgrade effect, confidence, and verification path. Separate reading priority from upgrade risk. Do not make GO/NO-GO, CVE-applicability, or performance claims without the required evidence and deployment context.
+
+Record a final disposition for every component row as `material`, `conditional`, `support`, `trivial`, or `mixed`, following the CSV schema reference. Summarize the non-material rows in one compact `Trivial/support changes` section and reconcile the disposition counts to the component CSV total. State why they do not change an upgrade decision; do not create one finding or one prose paragraph per file. Tests and documentation may support a finding without becoming findings themselves. When applicability is uncertain but a credible upgrade path exists, keep the finding, label applicability as conditional, and state what deployment fact decides it. Keep evidence confidence separate from likelihood and deployment applicability.
 
 ### 6. Validate before handoff
 
@@ -115,4 +124,4 @@ Fix validation failures rather than weakening checks. Also inspect the generated
 
 ## Completion standard
 
-A comparison is complete only when source provenance is recorded, the inventory reconciles with Git, every row has one owner, each required Markdown/CSV pair exists, component CSVs preserve and partition the inventory, local links resolve, Markdown contains no per-file diff table, and material conclusions have code-level evidence plus stated applicability and validation.
+A comparison is complete only when source provenance is recorded, the inventory reconciles with Git, every row has one owner, each required Markdown/CSV pair exists, component CSVs preserve and partition the inventory, local links resolve, Markdown contains no per-file diff table, every CSV row is accounted for by either a material finding or the aggregate trivial/support disposition, and material conclusions have code-level evidence plus stated applicability and validation.

@@ -66,4 +66,4 @@ Do not assign risk from path alone. A P2 test can be decisive evidence for a P0 
 - `support`: use as corroborating test, documentation, fixture, or integration evidence.
 - `reference-only`: retain for inventory completeness without spending deep-analysis time unless new evidence changes the decision.
 
-`analysis_decision` must explain the choice in task-specific language. Avoid generic text that says only “analyze this file.”
+Review mode is triage, not automatic admission to Markdown. Even a `deep` row becomes only an aggregate trivial/support item if inspection finds no credible upgrade impact; a `support` or `reference-only` row can be cited when it proves a material finding. `analysis_decision` explains the initial task-specific reading choice, not the final verdict. Record the post-review verdict in the final disposition fields defined by `csv-schema.md`; do not alter base fields in only a component subset. Avoid generic text that says only “analyze this file.”

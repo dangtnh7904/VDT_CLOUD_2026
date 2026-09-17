@@ -69,16 +69,17 @@ Aggregate tables are allowed. A row-per-file table is forbidden.
 Each component report should include:
 
 1. role and scoped paths;
-2. a link to the same-basename CSV and a concise coverage summary;
-3. material findings grouped by behavior rather than by file;
+2. a link to the complete same-basename CSV and a coverage summary whose final-disposition counts reconcile to the CSV total;
+3. upgrade-relevant findings grouped by behavior rather than by file;
 4. before/after behavior and evidence;
 5. activation conditions and affected deployment/workload;
 6. mixed-version and fully upgraded effects;
 7. operational impact, confidence, and unresolved questions;
-8. repository tests plus proposed environment validation;
-9. cross-references to the owning report instead of duplicate analysis.
+8. repository tests plus proposed environment validation tied to promoted findings, not a catalog of every P2 row;
+9. a compact aggregate summary of trivial/support rows that did not pass the upgrade-relevance gate;
+10. cross-references to the owning report instead of duplicate analysis.
 
-A finding should have a stable ID. Cite paths and symbols, relevant commit SHAs, and tests. Use short diff excerpts only when they materially explain the conclusion.
+A finding should have a stable ID. Cite paths and symbols, relevant commit SHAs, and tests. Use short diff excerpts only when they materially explain the conclusion. Do not create a finding for every changed file. Tests, docs, refactors, client/frontend changes, generated assets, and unused build variants remain in CSV and are summarized rather than analyzed deeply unless evidence ties them to an upgrade outcome.
 
 ## CSV pairing and ownership
 
@@ -107,5 +108,6 @@ Allowed:
 - No stale hard-coded totals remain after an inventory rebuild.
 - CSVs satisfy the schema, encoding, subset, and partition rules.
 - Markdown contains no row-per-file diff table.
+- Every component CSV row is covered either by an upgrade-relevant finding or by the aggregate trivial/support disposition; the Markdown does not need to enumerate those rows.
 - Material claims state evidence, applicability, confidence, and verification.
 - Known gaps are explicit; missing As-Is information is not replaced by assumptions.

@@ -18,6 +18,8 @@ CSV thành phần là tập con giữ nguyên thứ tự của inventory, gồm 
 
 `P0/P1/P2` là thứ tự đọc, không phải mức rủi ro. Không có test repository hay lệnh cluster nào được chạy; các test dưới đây chỉ được đọc.
 
+CSV vẫn giữ đủ **45/45 dòng** để truy vết. Markdown chỉ nâng một hành vi thành finding khi có đường tác động cụ thể tới rolling/mixed-version, restart, recovery, dữ liệu, availability, rollback hoặc validation của nâng cấp. Loại file không phải bộ lọc tuyệt đối: thay đổi client ở `OSD-013` vẫn được giữ vì có thể đổi kết quả RBD theo primary version; ngược lại test, build, log và tối ưu runtime không chứng minh được tác động upgrade chỉ nằm trong mục trivial/support.
+
 ## 2. Kết luận điều hành
 
 | ID | Hành vi đã xác minh | Priority | Rủi ro nâng cấp | Confidence |
@@ -30,9 +32,8 @@ CSV thành phần là tập con giữ nguyên thứ tự của inventory, gồm 
 | `OSD-006` | Peering/backfill sửa ưu tiên acting trong stretch mode và khôi phục accounting sau khi backfill bị ngắt | P0 | Cao theo topology/điều kiện | high |
 | `OSD-007` | Lower bound trim OSDMap của cluster được persist và dùng để kiểm tra past intervals/map gap | P0 | Trung bình; liên quan peering sau restart/map gap | high |
 | `OSD-008` | OMAP range delete và EC getattr phân biệt đúng vùng dirty, object thiếu và attr thiếu | P0 | Cao cho correctness ở workload tương ứng | high |
-| `OSD-009` | Chuỗi `stat+write` không đọc data dùng `RWWRITE` thay vì `RWEXCL` | P0 | Thấp về correctness; tác động hiệu năng cần benchmark | high |
-| `OSD-010` | Chuyển legacy SnapMapper giữ nguyên suffix object; không tự sửa key đã bị hỏng trước đó | P0 | Cao chỉ khi còn store pre-Octopus chưa convert | high |
-| `OSD-011` | mClock Pacific vẫn opt-in; target benchmark/persist capacity và sửa wait/worker wakeup | P0 | Trung bình khi đã bật mClock; thấp với WPQ mặc định | high |
+| `OSD-010` | Chuyển legacy SnapMapper giữ nguyên suffix object; chỉ liên quan store cũ chưa có `SNAPMAPPER2` và không tự sửa key đã hỏng | P0 | Cao nhưng activation rất hẹp | high |
+| `OSD-011` | OSD dùng mClock có thể benchmark/persist capacity khi restart; Pacific vẫn dùng WPQ mặc định | P0 | Trung bình khi đã bật mClock; thấp với WPQ mặc định | high |
 | `OSD-012` | Startup/shutdown/map-delivery fail rõ hoặc an toàn hơn ở một số đường lỗi | P0 | Trung bình, phụ thuộc lỗi nền | medium |
 | `OSD-013` | `rbd-read-only` được phép `metadata_list` đúng object; grant `rbd` được thu hẹp | P0 | Trung bình cho client/cap tương ứng | high |
 | `OSD-014` | Object manifest/tiering phục hồi adjacent clone trước khi tính refcount và truyền đúng clone context | P0 | Cao nếu dùng `set_chunk`/dedup manifest với snapshot degraded | high |
@@ -171,19 +172,7 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Tác động/đánh giá.** Category: correctness/availability. Rủi ro exposure **cao** ở workload tương ứng; confidence `high`. Cần scrub/read-only validation trước mọi repair.
 
-### OSD-009 — `stat+write` dùng lock ít độc quyền hơn mà vẫn giữ read-data ordering
-
-**Owner/evidence.** Inventory `1587`, `1596`, `1602–1605`. Symbols `OpInfo::may_read_data` và `PrimaryLogPG::get_rw_locks` (base/target `src/osd/PrimaryLogPG.h:871`). Commit `79bf6fcea7244b999c7ee2d5f718c034c8a7742b`.
-
-**Trước → sau.** Base coi mọi op vừa read vừa write là `RWEXCL`. Target thêm flag `CEPH_OSD_RMW_FLAG_READ_DATA`: `STAT` chỉ đọc cached `object_info` nên chuỗi `stat+write` dùng `RWWRITE`; các op thực sự đọc data và `WATCH` vẫn dùng `RWEXCL`. Intent trực tiếp là cho phép nhiều request `stat+write` trên cùng object (librbd clone path) tiến hành đồng thời hơn.
-
-**Điều kiện/hiệu lực.** Tự động với compound request write-ordered có `STAT` nhưng không data read. Primary target quyết định lock. Không cần config hay format change.
-
-**Tác động/đánh giá.** Category: performance/concurrency. Rủi ro correctness thấp theo phân loại flag hiện hữu; rủi ro regression trung bình-thấp vì hot lock path. Confidence `high` cho lock selection, `low` cho mức cải thiện do chưa benchmark. Không chuyển commit title thành cam kết IOPS/latency.
-
-**Test.** Responsible commit không thêm benchmark/regression test trong owner CSV; cần workload clone/write đồng thời và checksum.
-
-### OSD-010 — Legacy SnapMapper conversion không còn làm mất suffix object
+### OSD-010 — Ngoại lệ legacy: SnapMapper conversion không còn làm mất suffix object
 
 **Owner/evidence.** Inventory `1599–1600`; context test inventory `2548`. Symbol `SnapMapper::convert_legacy_key` target `src/osd/SnapMapper.cc:684` và `convert_legacy` `:695`. Commit `0af27423a981959e42dc76d3b68b537d3d411b08`.
 
@@ -197,15 +186,15 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Test đã đọc.** `src/test/test_snap_mapper.cc::SnapMapperTest.LegacyKeyConvertion` so key converted với key chuẩn; chưa chạy.
 
-### OSD-011 — mClock Pacific là opt-in; benchmark và worker wait được làm cứng
+### OSD-011 — Restart OSD dùng mClock có thêm benchmark/persist capacity
 
-**Owner/evidence.** Inventory `1580–1581`, `1608–1612`. Target option context vẫn đặt `osd_op_queue=wpq` và mô tả `mclock_scheduler` là experimental. Commit chain:
+**Owner/evidence.** Inventory `1580–1581`, `1608–1612`. Target option context vẫn đặt `osd_op_queue=wpq` và mô tả `mclock_scheduler` là experimental. Upgrade-relevant commit chain:
 
 - `cf876406d876ad35d9adc985814a22be908db42c` tách `OSD::run_osd_bench_test` và dùng kết quả để update capacity;
 - `433793a78239f0d1c38faa17f3cd22ba027dcc65` persist IOPS vào MON config store, tránh benchmark lại khi value khác default;
 - `b48d709d30d8514d9bc9242772f4b56f6bc3534e` thêm force-run startup option; `69d3d5903550a4b30d341dfb3fbd39396df56763` thêm skip option;
 - `9f3937d98150f6d3afef04fe95b3914428e91e3f` clear heartbeat timeout khi worker chờ future item rồi reset khi thức;
-- `8662711a63b6dc714ec0c703fff0f78e317302e6` đánh thức nhiều shard workers khi consume map requeue nhiều peering ops.
+- `8662711a63b6dc714ec0c703fff0f78e317302e6` đánh thức nhiều shard workers khi consume map requeue nhiều peering ops; hai hunk này là evidence hỗ trợ cho ổn định sau restart, không phải finding riêng.
 
 **Trước → sau.** Base `16.2.5` chưa có init-time capacity workflow này. Target, **chỉ khi cấu hình mClock**, có thể benchmark random 4 KiB writes vào 100 object, persist IOPS, cập nhật scheduler shards; historical value giúp skip lần sau. Scheduler wait không còn phát heartbeat timeout giả chỉ vì item chưa đến thời điểm, và map consume gọi `notify_all` khi requeue nhiều item.
 
@@ -230,7 +219,7 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Trước → sau.** Target chờ mkfs transaction hoàn tất trước exit, fail rõ thay vì dereference meta collection rỗng, tránh use-after-move/double-put và làm stop state machine đầy đủ hơn. Đây là nhiều đường lifecycle nhỏ cùng mục tiêu fail-fast/resource safety, không phải một thay đổi data format.
 
-**Điều kiện/hiệu lực.** Mkfs/provisioning, object-store corruption/missing meta, map sharing, recovery-delete race hoặc explicit stop/fast shutdown. Upgrade OSD hiện hữu không tự chạy mkfs. Một lỗi nền có thể làm target fail sớm nơi base đi tiếp rồi crash/hành xử không xác định.
+**Điều kiện/hiệu lực.** Object-store corruption/missing meta, map sharing, recovery-delete race hoặc explicit stop/fast shutdown có thể xuất hiện khi thay binary và restart. Upgrade OSD hiện hữu không tự chạy mkfs; hunk flush trong `mkfs` chỉ là support, trừ khi runbook đồng thời provision/thay OSD. Một lỗi nền có thể làm target fail sớm nơi base đi tiếp rồi crash/hành xử không xác định.
 
 **Mixed/full/đánh giá.** Chủ yếu local; fast-shutdown có message/monitor side nên phải kiểm với report `04/05`. Category: availability/correctness/maintainability. Rủi ro `trung bình` theo lỗi nền, confidence `medium` vì nhóm đường hiếm chưa được chạy end-to-end.
 
@@ -241,6 +230,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Trước → sau.** Base profile `rbd-read-only` thiếu grant class method `rbd.metadata_list`, dù việc mở image cần list metadata. Target cho phép method này trên object `rbd_info` ở global namespace của đúng pool; đồng thời grant tương tự của profile `rbd` được thu hẹp từ mọi object trong pool xuống đúng `rbd_info`. Đây vừa là compatibility fix cho read-only client vừa giảm scope grant read-write.
 
 **Điều kiện/hiệu lực.** Áp dụng khi auth entity dùng profile `rbd-read-only` hoặc `rbd` và client gọi `metadata_list`. Có hiệu lực ngay trên OSD target sau restart, không cần thay caps text. Trong mixed phase, request tới primary base có thể vẫn bị từ chối; cần thử primary trên cả version.
+
+Đây là ngoại lệ client-facing được giữ trong Markdown vì version của OSD primary có thể thay đổi service continuity ngay trong rolling upgrade; không phải vì mọi thay đổi RBD/client đều mặc nhiên quan trọng.
 
 **Tác động/đánh giá.** Category: compatibility/security least-privilege. Rủi ro `trung bình` nếu deployment dùng read-only RBD; confidence `high`. Không gọi đây là CVE vì commit/advisory không ánh xạ CVE.
 
@@ -265,12 +256,13 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Test đã đọc.** `src/test/librados/tier_cxx.cc` có `TierFlushDuringFlush` và nhiều case `manifest_set_chunk`; `src/test/osd/TestRados.cc` có workload `--set_chunk`. Commit `1610a624f2ba564d1aa90a132d3b3a4f411012da` sửa đồng bộ test tier-flush. Chưa chạy.
 
-## 4. Delta hỗ trợ không nâng thành finding riêng
+## 4. Thay đổi trivial/support chỉ giữ đầy đủ trong CSV
 
-- `ae554b2c8cfe44228d18a4d50ea0b6e31d2daa86` thêm debug sparse read; `b122242e9075f8a64f62dbe1ac9e108762400671` thêm mô tả delayed op và `a1156c922a470f05052fe63236eb82324d57b54e` aggregate slow-op detail. Chúng tăng khả năng chẩn đoán, không tự sửa I/O.
-- `eb4df1c680181ee94ff6b3130fc12b1c64462de8` và `311b70c87b67ab2fa527fd7b1cf32bd32877e27c` ghi `created_ceph_version`/`created_at` metadata; không đổi placement hay data path.
-- `src/osd/CMakeLists.txt` thêm private link `fmt::fmt` (inventory `1577`); đây là build dependency, không phải runtime OSD behavior.
-- Rename `qa/suites/powercycle/osd/ignorelist_health.yaml` là `R100 0/0` marker/suite path; không dùng làm bằng chứng logic.
+Tất cả vẫn có diff và metadata trong CSV. **8 dòng P2** (test/QA/marker) chỉ làm evidence; chúng không có tác động upgrade độc lập. Một hunk trivial có thể nằm cùng file P0 với hunk quan trọng, nên không ép số lượng hunk trivial thành số dòng CSV.
+
+- Debug/log wording, slow-op detail và metadata `created_ceph_version`/`created_at` hỗ trợ chẩn đoán nhưng không đổi placement, I/O hay quyết định rollout.
+- Private link `fmt::fmt`, hunk `mkfs` khi không provision OSD, và rename marker `R100 0/0` không đổi hành vi rolling upgrade chuẩn.
+- Thay đổi lock cho compound `stat+write` (`79bf6fcea7244b999c7ee2d5f718c034c8a7742b`) là tối ưu concurrency thực, nhưng chưa có bằng chứng rằng nó thay đổi an toàn, thời lượng hoặc tiêu chí chấp nhận của upgrade này; vì vậy không còn là finding và không có validation scenario riêng.
 
 ## 5. Hành vi rolling upgrade và sau full upgrade
 
@@ -279,7 +271,7 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 | EC recovery (`001–002`) | Primary/participant base vẫn có đường cũ; đổi primary có thể đổi outcome | Guard `min_size` và hinfo error handling đồng nhất | Tự động; repair/unfound action vẫn thủ công |
 | PGLog (`003`) | Primary version quyết định trim policy; warning chỉ trên target | Mọi PG khi được xử lý sẽ hội tụ theo giới hạn mới | Auto trim theo hoạt động; offline tool chỉ có runbook |
 | Scrub/peering (`004–007`) | Primary target mang FSM/selection mới nhưng replica có thể còn base | Coordinator và participant đồng nhất | Tự động; flags/repair không tự đổi |
-| Object ops (`008–009`) | Primary version quyết định dirty regions, errno và lock | Semantics đồng nhất | Tự động sau restart |
+| Object ops (`008`) | Primary version quyết định dirty regions và errno | Semantics đồng nhất | Tự động sau restart |
 | SnapMapper (`010`) | Chỉ store chưa có `SNAPMAPPER2` mới convert | Không tự sửa conversion hỏng lịch sử | Conversion tự động theo compat feature; repair riêng |
 | mClock/lifecycle (`011–012`) | Local theo OSD; tải/latency có thể lệch theo queue/version | Đồng nhất code, nhưng WPQ vẫn default | mClock chỉ khi cấu hình; mkfs/tool/stop theo hành động |
 | Caps (`013`) | Client result có thể phụ thuộc primary version | Read-only metadata open đồng nhất | Tự động với caps/profile hiện hữu |
@@ -309,7 +301,6 @@ Không test nào được chạy trong lần phân tích này.
 | `V01-06` | Stretch lab và backfill capacity guard | Interrupt backfill, failover primary rồi resume | Existing acting được ưu tiên; reservation bytes không reset sai; không bypass full ratio | Acting set, reservation, `backfill_toofull`; dừng nếu headroom guard bị vượt |
 | `V01-07` | OSD có local map lag và restart | Trim map trong lab, restart/failover, xem admin status | Lower bound không lùi; past intervals/peering hoàn tất không warning giả | `cluster_osdmap_trim_lower_bound`, peering logs; dừng nếu incomplete/stale PG |
 | `V01-08` | Replicated + EC pool; OMAP range và missing copy target | Range-delete rồi recovery/scrub; chạy copy case object thiếu | OMAP recovery đầy đủ; attr errno đúng; scrub clean sau recovery | Key cardinality/checksum/PGLog size; dừng nếu inconsistent |
-| `V01-09` | RBD clone workload | Compound stat+write concurrency trên primary base/target | Kết quả/checksum giống nhau; target không cần `RWEXCL` cho stat-only read | p95/p99, lock wait, checksum; dừng nếu ordering/data error |
 | `V01-10` | Clone của store thật sự thiếu `SNAPMAPPER2` | Mở clone bằng target và so toàn bộ old/new keys | Mỗi object suffix/cardinality được giữ; không collision | Không thử trên bản duy nhất; dừng nếu key count/checksum khác |
 | `V01-11` | Hai cấu hình riêng WPQ và mClock | Restart OSD, ghi nhận benchmark/IOPS; chạy client + recovery | WPQ không benchmark mClock; mClock dùng/persist capacity đúng, không heartbeat giả | Startup latency, config source, p99/recovery; dừng nếu tải benchmark vi phạm guardrail |
 | `V01-12` | Auth `profile rbd-read-only` | Mở/list metadata image với primary lần lượt base/target | Base có thể fail đúng exposure; target chỉ cho `metadata_list` trên đúng `rbd_info`/pool | Audit denied/allowed ops; dừng nếu method/object ngoài scope được phép |

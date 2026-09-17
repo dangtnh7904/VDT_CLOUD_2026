@@ -19,6 +19,8 @@ Các option nằm ở `src/common/options.cc` và `src/common/legacy_config_opts
 
 `P0/P1/P2` dưới đây là thứ tự đọc. **Rủi ro** được gán riêng theo điều kiện kích hoạt, hậu quả và khả năng phát hiện; không suy ra từ churn hoặc priority. Không có test repo nào được chạy trong lần phân tích này; các test được nêu là test đã đọc trong source.
 
+CSV giữ đủ **37/37 dòng** để truy vết. Markdown chỉ phân tích sâu hành vi có đường tác động tới restart/replay, dữ liệu, rollback, thời lượng ổn định hoặc tín hiệu stop/go của upgrade. Các test, refactor, logging và chi tiết performance không chứng minh được liên hệ đó được gom ở mục trivial/support, không tạo finding riêng.
+
 ## 2. Kết luận điều hành
 
 | ID | Hành vi đã xác minh | Priority | Rủi ro nâng cấp | Confidence |
@@ -35,6 +37,8 @@ Các option nằm ở `src/common/options.cc` và `src/common/legacy_config_opts
 | `BS-010` | Alert/counter/metadata quan sát được sửa hoặc bổ sung, không phải bằng chứng tăng hiệu năng | P1 | Thấp | high |
 
 Kết luận quan trọng nhất là `BS-001`: rolling upgrade không tạo một protocol BlueFS giữa các OSD, nhưng dữ liệu BlueFS là local và target bắt đầu ghi một opcode mà binary cũ không đọc được. Do đó “mixed cluster chạy được” không đồng nghĩa “có thể hạ một OSD đã kích hoạt target về `16.2.5`”.
+
+Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực tiếp tới restart, replay, data path hoặc validation trong rollout. `BS-004/005/009` chỉ áp dụng nếu runbook nâng cấp hoặc phục hồi sự cố thật sự gọi quick-fix, repair, import, migrate, provisioning hay ghi superblock; chúng không phải bước mặc định của package upgrade.
 
 ## 3. Findings chi tiết
 
@@ -203,7 +207,13 @@ Kết luận quan trọng nhất là `BS-001`: rolling upgrade không tạo mộ
 
 **Tác động và mức chắc chắn.** Category: operability/detectability. Priority `P1`; rủi ro `thấp`, nhưng có thể gây false interpretation trong cửa sổ upgrade. Confidence `high`. Test `SpilloverTest` kiểm tra alert; các counter còn lại chủ yếu được xác minh bằng hunk, chưa chạy runtime.
 
-## 4. Mixed-version, fully upgraded và activation
+## 4. Thay đổi trivial/support chỉ giữ đầy đủ trong CSV
+
+Tất cả **37 dòng** vẫn nằm trong CSV. **11 dòng P2** là test/QA và chỉ được dùng làm evidence cho các finding; chúng không có tác động runtime độc lập. Các hunk header/refactor, logging, counter plumbing và tối ưu/preallocation không có chuỗi tác động riêng tới upgrade cũng không được nâng thành finding mới. Chi tiết provisioning AArch64/label chỉ có ý nghĩa khi rollout đồng thời tạo, thay hoặc relabel OSD; nếu không, nó thuộc phần support của `BS-009`.
+
+Không lọc theo tên thư mục: tool hoặc test vẫn có thể chứng minh ranh giới rollback/recovery, nhưng bản thân chúng chỉ được phân tích sâu khi runbook có thể kích hoạt hành vi đó. Danh sách diff đầy đủ và quyết định triage từng dòng nằm trong [02-bluestore-bluefs.csv](./02-bluestore-bluefs.csv).
+
+## 5. Mixed-version, fully upgraded và activation
 
 | Trạng thái | Điều có thể kết luận từ code | Điều không được giả định |
 | --- | --- | --- |
@@ -214,7 +224,7 @@ Kết luận quan trọng nhất là `BS-001`: rolling upgrade không tạo mộ
 
 Không thấy feature bit cluster cho các thay đổi này. Biên kích hoạt chủ yếu là lần daemon target ghi state local, config local và thao tác offline; vì thế kế hoạch rollback phải bảo vệ image/block device theo từng OSD, không chỉ OSDMap hoặc package version.
 
-## 5. Repository tests đã đọc, chưa chạy
+## 6. Repository tests đã đọc, chưa chạy
 
 - `unittest_bluefs`: compaction sync/async, replay/growth, durability tracker, truncate, unlink+fsync, log delta continuation.
 - `ceph_test_objectstore`: deferred write, bug 56488, OMAP legacy conversion, shared-blob repair, single/no-WAL layout và spillover.
@@ -225,7 +235,7 @@ Không thấy feature bit cluster cho các thay đổi này. Biên kích hoạt 
 
 Không có build artifact được xác nhận trong task này và không test nào ở trên được thực thi; vì vậy kết luận “test đã đọc” không được chuyển thành “test đã pass”.
 
-## 6. Validation đề xuất trước Production
+## 7. Validation đề xuất trước Production
 
 Các scenario dưới đây chỉ là thiết kế test trên lab hoặc snapshot/clone có thể phục hồi. Chúng **không** cho phép thực thi trên cluster thật.
 
@@ -241,7 +251,7 @@ Các scenario dưới đây chỉ là thiết kế test trên lab hoặc snapsho
 | `V-BS-08` provisioning | Nếu có AArch64 page 64 KiB | Provision scratch OSD, ghi/đọc label và superblock qua nhiều restart | Superblock vẫn decode, OSD mount, không overwrite vùng `0x2000` | Scratch device duy nhất; dừng ngay khi label/superblock mismatch |
 | `V-BS-09` mixed rolling | Cluster lab cùng release/config/workload | Nâng từng OSD, chạy object/OMAP/snapshot workload và theo dõi alerts/counters theo version | PG ổn định; checksum/client result đúng; khác metric được giải thích bởi version | Stop rollout khi có replay/mount error, checksum mismatch hoặc recovery bất thường |
 
-## 7. Dữ liệu As-Is còn thiếu và câu hỏi chưa khép
+## 8. Dữ liệu As-Is còn thiếu và câu hỏi chưa khép
 
 1. Media class và giá trị hiệu dụng của `bluestore_prefer_deferred_size` trên từng OSD; nếu toàn SSD và threshold `0`, phần selection của `BS-003` ít áp dụng hơn nhưng rollback/các finding khác vẫn còn.
 2. Topology `block`, `block.db`, `block.wal`, dung lượng/free/spillover và `bluestore_volume_selection_policy`; không thể kết luận placement/fragmentation từ source alone.
@@ -251,6 +261,6 @@ Các scenario dưới đây chỉ là thiết kế test trên lab hoặc snapsho
 6. Chính sách rollback hiện tại có restore block-device snapshot hay chỉ downgrade package. `BS-001` yêu cầu phương án thứ nhất hoặc một test chứng minh khác.
 7. Không có benchmark nên không gán phần trăm cải thiện cho allocator, preallocation, lock split hay compaction.
 
-## 8. Kết luận phạm vi
+## 9. Kết luận phạm vi
 
 Target `16.2.15` chứa nhiều sửa lỗi correctness có bằng chứng trực tiếp cho BlueFS replay/durability, deferred writes, OMAP conversion và shared-blob repair. Tuy nhiên, nó đồng thời kích hoạt format log BlueFS mà `16.2.5` không đọc được; đây là ràng buộc rollback quan trọng nhất. Rolling upgrade nên tách rõ ba việc: thay binary/restart, validation data path, và mọi thao tác repair/migrate/import. Chỉ bước đầu là tự động; hai bước sau cần cửa sổ, bản sao phục hồi và tiêu chí dừng riêng.
