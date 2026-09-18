@@ -18,8 +18,8 @@ Disposition cuối của 474 dòng:
 | --- | ---: | --- |
 | `conditional` | 28 | Runtime effect phụ thuộc feature/client/workload tương ứng |
 | `mixed` | 51 | File có cả hunk finding-relevant và refactor/feature thường |
-| `support` | 123 | Test, QA, docs hoặc helper hỗ trợ finding |
-| `trivial` | 272 | Đã sàng lọc nhưng không có causal chain upgrade độc lập |
+| `support` | 124 | Test, QA, docs hoặc helper hỗ trợ finding |
+| `trivial` | 271 | Đã sàng lọc nhưng không có causal chain upgrade độc lập |
 | **Tổng** | **474** | Khớp chính xác CSV |
 
 Không có dòng `material` vô điều kiện: đây là client-side/component behavior và chỉ kích hoạt khi deployment dùng fast-diff, PWL, journaling, mirroring, self-managed snapshots hoặc gặp lock/blocklist path. Điều đó không làm các finding conditional kém nghiêm trọng.
@@ -156,11 +156,11 @@ Target còn sửa RefreshRequest retry/ENOENT, pool-validation lockup và một 
 
 ## 5. Trivial/support changes
 
-- **123 support rows** gồm unit/integration tests, RBD/krbd/rados QA suites, mirror workunits, docs và helper dùng để chứng minh bảy finding; chúng chưa phải 123 rủi ro riêng và chưa được chạy ở đây.
-- **272 trivial rows** chủ yếu là suite topology/marker rename, test maintenance, CLI formatting/convenience, crypto/migration feature work không có upgrade edge đã chứng minh, refactor và ancillary tools.
+- **124 support rows** gồm unit/integration tests, RBD/krbd/rados QA suites, mirror workunits, docs và helper dùng để chứng minh bảy finding; dòng `qa/workunits/rados/test_crash.sh` là bằng chứng chéo cho `VAL-001`/CVE-2022-3650 vì workunit phải chuyển crash files cho user `ceph`. Chúng chưa phải 124 rủi ro riêng và chưa được chạy ở đây.
+- **271 trivial rows** chủ yếu là suite topology/marker rename, test maintenance, CLI formatting/convenience, crypto/migration feature work không có upgrade edge đã chứng minh, refactor và ancillary tools.
 - **28 conditional + 51 mixed rows** được map tới RBD-001…RBD-007 trong CSV. Một file có thể hỗ trợ nhiều finding nên không cộng row theo ID để suy ra tổng.
 
-Tổng `28 conditional + 51 mixed + 123 support + 272 trivial = 474`; mọi owner row đã qua relevance screen.
+Tổng `28 conditional + 51 mixed + 124 support + 271 trivial = 474`; mọi owner row đã qua relevance screen.
 
 ## 6. Validation matrix đề xuất
 

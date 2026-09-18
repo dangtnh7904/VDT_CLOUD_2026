@@ -6,7 +6,11 @@
 >
 > **Giới hạn:** đây là checklist chuẩn bị, kiểm chứng và ra quyết định; không phải lệnh cho phép thay đổi cluster. Không có lệnh nâng cấp, repair, migrate, trim hay thay cấu hình nào đã được chạy khi tạo tài liệu.
 >
-> **Ngày lập:** 2026-09-17.
+> **Ngày lập:** 2026-09-17. **Cập nhật:** 2026-09-18 — PA1/PA2 + H0 chọn nguồn đúng và kiểm chứng trước khi X trở lại.
+>
+> **Phạm vi bổ sung:** dùng checksum H0 độc lập để chọn replica đúng, cập nhật payload sai trên OSD vừa nâng, đọc lại xác minh rồi mới cho primary/nguồn recovery. Hai phương án nâng vẫn là PA1 spare/upmap và PA2 drain weight; không đổi chúng thành “backup so với H0”. Cụm 100 TB không là prerequisite mặc định của lab H0; bỏ yêu cầu đó ở production cần quyết định phạm vi phục hồi có bằng chứng.
+>
+> **Provenance:** các dấu đã kiểm trong bộ source comparison `00`–`15` là trạng thái kế thừa từ file gốc; lần sửa này không tái kiểm bộ source đó. G14–G16, T30–T38 và R3A/R3B/R3H dưới đây là thiết kế dự án mới, mọi kết quả thực thi vẫn chưa được điền.
 
 ## 1. Phạm vi và cách dùng
 
@@ -72,6 +76,14 @@ Mỗi checkbox khi đóng phải có tối thiểu: owner, thời điểm, kết
 | Last reversible point / boundary forward-only | |
 | Nguồn telemetry độc lập khi Prometheus lỗi | |
 | Evidence root, quy ước tên file và retention | |
+| Phương án nâng OSD | PA1 — spare/upmap/giữ store; hoặc PA2 — drain CRUSH weight/canary/tăng từng nấc |
+| Lựa chọn bảo vệ / mức triển khai | H + H-LAB hoặc H-ENFORCE; hoặc B100 với điểm phục hồi được giữ |
+| X / S / Y–Z / PG canary và mọi PG ảnh hưởng | |
+| H0 manifest, thuật toán, identity/version/range và nơi giữ độc lập | |
+| Nguồn payload phục hồi đã khớp H0 / thời hạn giữ | |
+| Build/verifier/enforcement và recovery API/procedure được review | |
+| Quyết định về yêu cầu cụm 100 TB | PENDING / chấp thuận phạm vi thay thế / vẫn bắt buộc |
+| Owner H0 / nguồn phục hồi / người chấp thuận residual risk | |
 | Trạng thái cuối | HOLD / GO LAB / GO CANARY / GO PRODUCTION / NO-GO |
 
 ### 1.4 Ma trận applicability bắt buộc
@@ -138,6 +150,14 @@ Mỗi checkbox khi đóng phải có tối thiểu: owner, thời điểm, kết
 | MON IPv6 mount path | | | | G13, T09 |
 | Automation dùng target CLI msgr/range/named args | | | | G13, T09 |
 | `ceph-dencoder` dùng cho recovery/debug/package validation | | | | G12/G13, T09A |
+| PA1 dùng spare/upmap, dừng X sớm để giữ store | | | | G14, T30, R3A |
+| PA2 drain CRUSH weight=0 rồi canary/tăng weight | | | | G14, T31, R3B |
+| H0 chọn nguồn khớp và sửa payload trên X | | | | G15/G16, T32–T37, R3H |
+| H0 cần bao phủ dữ liệu đang ghi/metadata/mapping biến đổi | | | | G15, T32/T33/T35/T37 |
+| Không dùng cụm payload 100 TB trong production | | | | G16, T36/T38, quyết định phạm vi phục hồi |
+| Có giữ/dự định dùng B100 làm nguồn độc lập | | | | G16, T38; G10/G11 và mirror/multisite tests nếu áp dụng |
+
+RBD mirror/RGW multisite không được tự đánh N/A chỉ vì bỏ đề xuất cụm 100 TB: dịch vụ có thể đã được dùng ở nơi khác. Chỉ N/A sau inventory. EC hoặc CephFS đang có trên X vẫn phải giữ các gate hiện hữu; MVP H0 chỉ replicated RGW/RBD không bao phủ chúng.
 
 ### 1.5 Guardrail, time budget và điều kiện resume
 
@@ -154,9 +174,29 @@ Không có ngưỡng số chung an toàn cho mọi cluster. Mỗi hàng phải l
 | CPU/RSS, disk queue, network reset/reconnect | | | | | | | |
 | Prometheus scrape/parser/golden-query và alert delivery | | | | | | | |
 | RBD/CephFS/RGW correctness hoặc service-specific SLO | | | | | | | |
+| H0 MATCH/MISMATCH/STALE/UNKNOWN, backlog/tuổi và coverage | | | | | | | |
+| Thời gian phát hiện→chặn, quyền primary/source/read ngoài phạm vi | | | | | | | |
+| Nguồn H0 còn hợp lệ, job sửa/retry, version drift và read-back sau sửa | | | | | | | |
+| PA1 degraded PG-seconds / PA2 PG ngoài canary / byte ra-về | | | | | | | |
 
 - [ ] Mỗi phase có deadline, soak tối thiểu, người ra quyết định và thời điểm tự động STOP nếu thiếu telemetry.
 - [ ] Resume chỉ sau khi signal trở lại trong ngưỡng qua một cửa sổ ổn định đã định, nguyên nhân có disposition và owner ký; không resume chỉ vì `HEALTH_OK` xuất hiện lại.
+
+### 1.6. Liên kết với kế hoạch PA1/PA2 + H0
+
+Đọc cùng `ceph-osd-upgrade-lab-production-plan(1).md`, đặc biệt mục 5–8.7 và ma trận lỗi mục 9. Checklist này vẫn chỉ xác nhận hop **16.2.5 → 16.2.15**; không tự chuyển PASS sang Quincy/Reef.
+
+| Nhãn trong plan | Nghĩa | Gate checklist |
+| --- | --- | --- |
+| U0–U5 | Chuẩn bị, rút PG, nâng, canary và hoàn tất một X | G14 + R3A/R3B |
+| HG0–HG2 | Tham chiếu/nguồn tốt, cách ly rejoin, kiểm bản replica X | G15/G16 + R3H |
+| HG3–HG5 | Cấp quyền đúng version, primary canary và mở rộng | G15 + R3H/R4 |
+| PA1-H / PA2-H | Hai cách nâng dùng chung H0; H-LAB hoặc H-ENFORCE được ghi riêng | T30/T31 + T32–T37 |
+| B100 | Đối chiếu hoặc giải pháp payload độc lập được giữ | G16/T38 |
+
+**Chuẩn dữ liệu:** checksum H0 chỉ chọn nguồn đúng nếu được tin cậy và gắn đúng identity/version/range. Dữ liệu từ nguồn khớp phải được sao chép qua recovery/procedure đã kiểm, rồi đọc lại X đối chiếu. Không thay checksum metadata để làm dữ liệu sai thành “đúng”; không dùng đa số thay nguồn H0.
+
+**Giới hạn:** H-LAB là quan sát/phát hiện, chưa phải cơ chế chặn dùng bản chưa verify. H-ENFORCE và H0 điều phối recovery là phần cần phát triển/review/test, không có sẵn chỉ bằng affinity/upmap. H0 không phục hồi được khi không còn payload nào khớp; nếu requirement production vẫn cần bản độc lập thì nhánh H đơn lẻ chưa đáp ứng.
 
 ## 2. Gate tổng hợp trước khi nâng cấp
 
@@ -176,6 +216,9 @@ Không có ngưỡng số chung an toàn cho mọi cluster. Mỗi hàng phải l
 | G11 — CephFS/RGW security và correctness | Applicability CVE đã audit; mọi serving endpoint/daemon được canary/drain; CephFS session/mixed-client/replay và RGW write/auth/TLS/multisite/worker tests áp dụng PASS; bucket repair bị tách change | CephX path caps chưa audit khi CVE-2022-0670 áp dụng; Browser POST còn base; session/write checksum/auth decision/TLS/MON connection sai hoặc repair bị dùng như smoke test | CEPHFS-001–008, RGW-001–008, SEC-003/005 |
 | G12 — Package/service boundary | Đúng direct base→target transaction đã rehearsal; systemd/sudoers/cephadm-user/SELinux/ceph-crash đã kiểm trên OS thực; DEB/dependency/Python layout, dencoder plugins, custom build/toolchain, mirror assets và ISA-L/AArch64 smoke PASS hoặc N/A có provenance | Old scriptlet xóa key/user; service policy chặn device; ceph-crash lỗi quyền; dependency/plugin/build/service asset không đồng bộ hoặc không tái lập | BLD-001–010, VAL-001/005, SEC-004 |
 | G13 — Validation coverage | Có run artifact cho exact base→target hoặc plan bù từng exclusion; cmpomap empty-U64, IPv6 mount, CLI parser và dencoder test áp dụng đã PASS; release-note/legacy suite chỉ là evidence hỗ trợ | Dùng recipe chưa chạy, legacy suite hay release note làm acceptance duy nhất; intentional skip không có compensating test | VAL-002–008 |
+| G14 — Phương án nâng và placement | PA1 hoặc PA2 đã rehearsal; X/S/peer/C hợp lệ, đúng up/acting/primary; đủ capacity, ownership, budget và điều kiện dừng | PA1 giảm replica vượt budget; PA2 có PG ngoài canary; nhầm weight/affinity, remap drift, native cleanup giữ store khác giả định | Thiết kế PA1/PA2, T30/T31 |
+| G15 — H0 chọn nguồn, sửa và cấp quyền | HG0–HG5 đúng phase; tham chiếu/version/coverage rõ; chọn nguồn khớp, ràng buộc source+version, sửa payload/read-back đạt; enforcement trước primary/source/read đã test | Chỉ GET qua Y nhưng chứng nhận X; dùng majority hoặc version cũ; sửa hash thay dữ liệu; auto-promote/source trước verify; stale/UNKNOWN vẫn mở quyền | Thiết kế H0, T32–T37 |
+| G16 — Khả năng phục hồi và yêu cầu 100 TB | Nguồn payload đúng, retention/checkpoint và bài phục hồi đã thử; mô hình H/B100 cùng residual risk được duyệt; production có quyết định rõ nếu bỏ cụm thứ hai | Không nguồn đúng nhưng coi H0 là backup; requirement payload độc lập còn bắt buộc nhưng chưa đáp ứng; restore/RPO/RTO chỉ giả định | Thiết kế phục hồi, T36/T38 |
 
 **Ý nghĩa của HOLD hiện tại:** acceptance của tài liệu đã hoàn tất, nhưng chưa có As-Is, lab/canary evidence và sign-off của cluster đích. Đây chưa phải kết luận rằng 16.2.15 không thể nâng cấp.
 
@@ -284,6 +327,19 @@ Không có ngưỡng số chung an toàn cho mọi cluster. Mỗi hàng phải l
 - [ ] Ghi rõ SEC-001/002 đã được fix trước base và chỉ dùng làm provenance/hygiene; không tính chúng là lợi ích mới của target. [SEC-001/002]
 - [ ] Kiểm `auth_allow_insecure_global_id_reclaim` và health alerts/client cũ liên quan; nếu còn insecure reclaim thì mở security workstream riêng, không ghi là target delta đã xử lý. [SEC-001]
 
+### 3.9 H0 và phương án đưa OSD trở lại
+
+- [ ] Inventory **mọi** PG của X trong up/acting, primary, pool/rule/class/failure domain; nếu lẫn EC/CephFS ngoài phạm vi H0 thì không gắn nhãn toàn X được bảo vệ.
+- [ ] Lưu W0, R0, A0, balancer, autoscaler, cờ gồm norebalance và mọi ngoại lệ upmap/pg_temp; ghi ownership/restore theo từng entry.
+- [ ] Chọn PA1/PA2, target S/peer, byte cần chuyển, capacity và khoảng giảm replica; giữ workload/offered load ngang nhau khi so hai PA.
+- [ ] Lưu H0 manifest theo version/checkpoint từ nguồn độc lập, quyền sửa, retention, hash thuật toán và mapping ứng dụng↔RADOS.
+- [ ] Có phép kiểm payload **trên bản X**, cùng version/range; không dùng một GET qua primary/cache để thay bằng chứng local X.
+- [ ] Inventory OMAP/xattr/RGW index/RBD metadata, snapshot/discard/delete-recreate và phạm vi chưa có coverage.
+- [ ] Lưu nguồn payload Y/Z/S đủ điều kiện phục hồi và bằng chứng hash/version; peer chạy bản cũ không tự được xem là đúng.
+- [ ] Ghi capability H-LAB/H-ENFORCE, hook/API source selection và contract version/PG interval khi sửa; không có thì chưa tự sửa live.
+- [ ] Inventory client replica-read/caching, failover/recovery paths, auto repair và automation có thể cấp quyền ngoài controller; đối chiếu effective config.
+- [ ] Có trạng thái sau restart/partition, bảo vệ manifest khỏi rollback, dirty tracking và cơ chế vô hiệu hóa quyền; không có evidence thì không tự PASS.
+
 ## 4. Thay đổi hoặc sửa đổi cần chuẩn bị
 
 ### 4.1 Sáu key cấu hình cũ phải audit
@@ -365,6 +421,17 @@ Không có ngưỡng số chung an toàn cho mọi cluster. Mỗi hàng phải l
 
 Các thao tác trên cần change riêng, backup/clone phục hồi được, peer review, tiêu chí dừng và test chuyên biệt.
 
+### 4.5 H0 repair và enforcement là thay đổi thiết kế riêng
+
+- [ ] Chốt fault model và threat boundary: lỗi local media, sai logic cùng checksum, cùng sai giữa replica, sai ghi mới sau promote; không nói một lần H0 PASS bảo vệ mọi bug tương lai.
+- [ ] Tách build native và custom H0; review diff/hook, protocol negotiation, crash/restart và mixed-version trước khi gộp vào upgrade.
+- [ ] Recovery chỉ được tự động khi có nguồn khớp H0 đúng version, phạm vi hẹp, cơ chế tuần tự hóa, read-back và budget retry đã test. NO_VALID_SOURCE/UNKNOWN/STALE chặn apply; có disposition riêng.
+- [ ] Chuẩn bị barrier/dirty tracking để không sửa đè ghi mới; không trộn restore checkpoint cũ với repair replica current version.
+- [ ] Định nghĩa quyền primary/source/replica-read theo PG/version; affinity OSD-wide và polling không đủ chứng minh enforcement trước I/O.
+- [ ] Không tắt gate bắt buộc vì p99 tăng; giảm tốc/mở batch chậm lại, đo chờ I/O. Hậu kiểm bất đồng bộ giữ nguyên ACK thì phải báo cửa sổ phát hiện trễ.
+
+Mục 4.4 vẫn chặn repair tùy tiện trong rolling change. H0-guided repair chỉ được đưa vào MOP sau khi phần chức năng này đã có rehearsal và scope riêng được review; không coi một lần `pg repair` là đã chọn đúng nguồn theo H0.
+
 ## 5. Activation: điều gì tự xảy ra, điều gì không
 
 | Nhóm | Activation | Lưu ý |
@@ -390,6 +457,7 @@ Các thao tác trên cần change riêng, backup/clone phục hồi được, pe
 | systemd/sudoers/RPM lifecycle | Khi package được cài/nâng và unit/scriptlet chạy | Package manager/distro và policy auto-restart quyết định activation |
 | `ceph-crash` hạ quyền | Khi service target khởi động | Không hạ được quyền thì process thoát; crash files phải đọc được bởi user `ceph` |
 | ISA-L AArch64 relocation fix | Khi build/link target dùng gitlink mới | Không phải state migration; cần smoke trên artifact/architecture thực nếu áp dụng |
+| H0-guided repair và quyền HG | Chỉ khi verifier/enforcement/recovery contract tùy biến đã triển khai và kích hoạt theo MOP | Không tự xuất hiện khi nâng 16.2.15; H0 nguồn độc lập, version binding và source selection phải có bằng chứng |
 
 ## 6. Kế hoạch test bắt buộc
 
@@ -487,6 +555,24 @@ Tất cả test fault injection, corruption, power-cut, repair, map trim, device
 - [ ] Hoàn thành soak time, không có sự cố mới hoặc trend xấu chưa giải thích.
 - [ ] Bàn giao aftercare: owner/on-call, thời gian theo dõi tiếp, evidence retention, exception expiry và tiêu chí reopen incident đã được ghi vào change record.
 
+### 6.4 PA1/PA2 và H0 — ma trận bổ sung
+
+T30–T38 là test thiết kế mới, không phải finding được phát hiện sẵn trong source diff. Chạy trên fixture disposable trước; **không inject lỗi vào production**. Mỗi bài cần artifact SHA/digest, H0/version, tập PG, timestamp, nguồn/đích thực, kết quả payload/metadata và số đo QoS. Trong lab phát triển được phép có test đang FAIL để tìm lỗi; chưa dùng nó làm GO CANARY production.
+
+| Test | Kịch bản | PASS | FAIL / giới hạn |
+| --- | --- | --- | --- |
+| **T30 — PA1-H** | Chuyển primary, dừng X giữ store, upmap tới S, nâng X, trả C rồi batch; thử norebalance và cleanup | U0–U5 đúng; degraded time/byte ra-về đo đủ; HG1 trước rejoin và HG2–HG5 trước mở quyền | Copy kẹt, cleanup khác giả định chưa xử lý, thiếu replica quá budget, PG ngoài phạm vi hoặc H0 chỉ quan sát nhưng gọi enforce |
+| **T31 — PA2-H** | Drain CRUSH weight=0 khi X chạy; nâng; Wε/upmap C; tăng weight theo budget | X drain đầy đủ trước dừng; đúng C; mọi PG mới có HG; phục hồi W0/R0/A0 theo journal | Nhầm override/CRUSH weight, PG ngoài C, auto-primary khi hoàn nguyên affinity, bước tăng chỉ theo thời gian |
+| **T32 — Tham chiếu và bản X** | X sai, Y/Z đúng; GET qua Y vẫn đúng; thêm sai metadata/missing object và version mapping | Đọc đúng X và phát hiện sai theo H0; coverage app/RADOS/metadata rõ; H0 không bị ghi đè | Hash tự khai hoặc GET qua peer/cache tạo false PASS; payload đúng nhưng metadata chưa phủ lại ghi toàn PG PASS |
+| **T33 — Chặn trước sử dụng** | Y primary chết khi X chưa đạt; X được chọn làm source recovery hoặc replica-read; thử khôi phục affinity toàn X | Các quyền chưa đạt HG bị chặn trước sử dụng, đúng từng PG/version; đo availability khi không còn peer hợp lệ | Chỉ cảnh báo sau truyền dữ liệu, X tự primary/source/read, hoặc hạ min_size/bỏ gate để giữ IOPS |
+| **T34 — H0 chọn đúng nguồn** | Cùng version: X/Z sai, chỉ Y khớp; lặp case nhiều nguồn khớp và hash local hợp lệ nhưng payload sai | Chọn Y dù thiểu số; recovery dùng đúng source, cập nhật payload X và metadata, read-back khớp H0; có bằng chứng durability | Lấy đa số, cập nhật checksum thay payload, actual source khác source đã verify, repair success nhưng đọc lại sai |
+| **T35 — Ghi mới/TOCTOU** | Overwrite, delete/recreate, remap, snapshot head đổi sau verify/trước sửa hoặc promote; source chết giữa copy | Stale token bị loại, không đè version mới, partial repair chưa được publish như verified; retry với nguồn/version hợp lệ | So H0 cũ với head mới, bỏ mất ghi đã ACK, publish nửa bản hoặc cấp quyền bằng kết quả stale |
+| **T36 — Không còn nguồn tốt** | Tất cả bản sai cùng nội dung; mọi bản thiếu/không đọc được; chỉ còn hash đúng | NO_VALID_SOURCE/UNKNOWN; không tự ghi sửa hay chọn đa số; B100 nếu có thì restore nguồn tốt và đo RPO/RTO | Báo “đã phục hồi” dù không payload đúng, tạo lại H0 từ bản sai; case H chỉ chứng minh dừng đúng, không chứng minh phục hồi |
+| **T37 — Sau promote và lỗi bộ kiểm** | Ghi mới sai khi X primary; verifier crash, manifest rollback, partition; controller/OSD restart; nâng peer tiếp theo | Theo dõi expected version mới; phát hiện/thu hồi đúng contract; không dùng token cũ sau restart; nguồn tốt/aftercare rõ | Một lần HG3 PASS bị dùng cho mọi ghi sau này; fail-open; nguồn tốt biến mất; hậu kiểm bị ghi thành chặn trước ACK |
+| **T38 — So sánh H/B100 và quyết định phục hồi** | PA1-H/PA2-H cùng tải/coverage; nếu có lab thứ hai thử sync, retention, write/delete sai, failover/restore | Bảng chi phí, coverage, recovery cases, detection/fence lag và RPO/RTO thực đo; quyết định requirement 100 TB có owner | Không có B100 thì NOT_RUN cho bài đó; chưa được kết luận H tương đương backup độc lập hoặc performance 100 TB từ lab nhỏ |
+
+**Ánh xạ ma trận plan:** T30/T31 bao phủ các run PA1-H/PA2-H; T32–T37 mở rộng F9–F20 của plan. PA1/PA2 vẫn phải chạy các test native T00–T29 áp dụng, gồm store history, peering, BlueStore, RBD/RGW. Không dùng gate H0 để bỏ gate version/durability hiện có.
+
 ## 7. Gate rollout theo deployment path
 
 Các mục này là gate logic, không phải lệnh nâng cấp. Runbook chỉ được chọn **một** nhánh dưới đây; thứ tự của nhánh này không được áp sang nhánh khác nếu chưa có bằng chứng của orchestrator/package thực tế.
@@ -505,10 +591,10 @@ Các mục này là gate logic, không phải lệnh nâng cấp. Runbook chỉ 
 
 ### 7.2 R0 — Trước first target process
 
-- [ ] G00–G13 áp dụng đã PASS; exception/waiver chỉ hợp lệ khi có owner, phạm vi, expiry và compensating control.
+- [ ] G00–G16 áp dụng đã PASS theo phase; G14–G16 có evidence lab trước production canary. Exception/waiver phải có owner, phạm vi, expiry và compensating control, không thay correctness evidence.
 - [ ] T02 device alias đã PASS. Với rollback OSD, T01 đã PASS **hoặc** forward-only/rebuild strategy đã được phê duyệt và rehearsal; với monitoring, T04 đã PASS **hoặc** Prometheus không phải stop/go và telemetry độc lập đã verify.
 - [ ] Migration/upgrade/action/host state, package/service state, registry pull từng host, ceph-volume device mapping và client/service applicability đã được chụp. [ADM-003–009, CVOL-001–003, BLD-009, RBD-001–007, CEPHFS-001–008, RGW-001–008]
-- [ ] Backup/snapshot/config/map artifacts có checksum, retention và restore test phù hợp; artifact base/target vẫn truy xuất được.
+- [ ] Config/map/control-state artifacts và nguồn phục hồi theo H hoặc B100 có checksum/retention và test phù hợp; H có manifest cùng payload source đúng, B100 có điểm restore độc lập. Artifact base/target vẫn truy xuất được; không tự suy phải dựng thêm cụm 100 TB để chạy lab.
 - [ ] Mọi cờ `no*`, maintenance mode, traffic drain, autoscaler freeze và alert silence dự kiến có owner, reason, TTL/restore point; state có trước change được đánh dấu riêng.
 - [ ] Change freeze, time budget, communication path, STOP/resume conditions và người quyết định đã được truyền đạt.
 
@@ -533,12 +619,52 @@ Các mục này là gate logic, không phải lệnh nâng cấp. Runbook chỉ 
 - [ ] Chọn một OSD đại diện mỗi media/layout/host/class mà không phá failure-domain safety.
 - [ ] Device ownership, allocator config, mClock policy và effective location mask đã PASS.
 - [ ] Host/container inventory khớp; raw/LVM/dm-crypt activation canary tìm đúng identity, block/DB/WAL, mapper và unit. [CVOL-001–003/006]
-- [ ] Mount/replay sạch; PG peering/recovery/scrub và client workload trong guardrail; cố ý quan sát primary base lẫn target.
+- [ ] Mount/replay sạch; PG peering/recovery/scrub và client workload trong guardrail; với nhánh H chỉ mở primary target sau HG2/HG3, sau đó chạy HG4. Không promote trước để “thử xem H0 có bắt lỗi không” trên production.
 - [ ] Không dùng package-only downgrade nếu OSD đã ghi BlueFS target; batch record phải đánh dấu OSD nào đã vượt boundary.
+
+### 7.5.1 R3A — PA1: spare/upmap và giữ store
+
+- [ ] U0/U1: X/S/C, W0/R0/A0, upmap trước phiên, headroom và nguồn H0 đã ghi; spare hợp lệ từng PG.
+- [ ] Chuyển primary khỏi X và kiểm primary thực tế; affinity không thay HG1.
+- [ ] Đánh giá cửa sổ thiếu replica của **toàn bộ P_X** trước khi dừng X; ok-to-stop tại thời điểm dừng, norebalance/noout đúng ownership.
+- [ ] Áp mapping X→S đã kiểm; không chặn recovery cần thiết bằng nobackfill/norecover; đợi U2 đủ replica và không phụ thuộc X trước mở store bằng B.
+- [ ] Store block/DB/WAL có lịch sử được giữ tại lúc dừng; ghi cleanup/reuse thực tế sau start, không coi store cũ là backup current version.
+- [ ] HG1 có hiệu lực trước X nhận lại C; mở backfill cân bằng theo journal; chưa cho PG ngoài C vào X.
+- [ ] Chạy R3H cho C; mỗi batch PG mới lặp HG2–HG5; chưa khôi phục affinity rộng khi còn PG chưa đủ điều kiện.
+- [ ] U5: phục hồi cấu hình sở hữu, giám sát remap/balancer và giữ nguồn phục hồi theo retention; mới xét OSD tiếp theo.
+
+### 7.5.2 R3B — PA2: drain weight và tăng từng nấc
+
+- [ ] U0/U1: chốt **CRUSH weight** là biến điều khiển, lưu W0/R0/A0; không nhầm CRUSH weight với override reweight.
+- [ ] Giữ X chạy khi weight về 0; mọi PG đã rời X đủ replica/up-acting hội tụ và ok-to-stop đạt trước dừng.
+- [ ] Start B tại weight=0; HG1 chặn quyền chưa cấp, không PG vào ngoài kế hoạch.
+- [ ] Dự đoán Wε dương hợp lệ, áp weight/upmap không nguyên tử; kiểm toàn bộ map qua epoch, chỉ C được vào X.
+- [ ] Không coi norebalance hoặc weight nhỏ là allowlist; PG ngoài C hoặc remap drift thì dừng mở rộng.
+- [ ] Chạy R3H cho C trước tăng weight; mỗi nấc dựa vào PG/byte/QoS và coverage HG mới.
+- [ ] Trả W0/R0/A0 và xử lý upmap theo ownership khi HG5/U5 đạt; theo dõi sau bật balancer.
+
+### 7.5.3 R3H — H0 chọn nguồn và sửa trước khi cấp quyền
+
+Checklist này chạy **trong cả PA1 và PA2**. Từng ô cần timestamp, binding, actual source/target và evidence; không chỉ một cột “checksum OK”.
+
+- [ ] **HG0:** H0 tin cậy, đúng identity/version/range và coverage metadata; manifest độc lập, nguồn payload tốt còn sẵn.
+- [ ] **HG1:** X chưa được primary/source/replica-read ở phạm vi chưa verify; thực thi cả khi failover/restart, không chỉ giá trị affinity.
+- [ ] **HG2:** đọc lại đúng bản X. MATCH còn hiệu lực mới qua bước; STALE/UNKNOWN retry/hold; MISMATCH đi luồng sửa dưới đây.
+- [ ] Khi MISMATCH: giữ evidence, chặn quyền X liên quan; liệt kê các replica còn có payload theo PG history hiện tại.
+- [ ] Đọc/hash từng nguồn ứng viên, so với H0 **cùng version**; chọn nguồn khớp. Nếu chỉ một nguồn khớp vẫn chọn theo bằng chứng, không theo đa số.
+- [ ] **Không có nguồn khớp:** NO_VALID_SOURCE; không auto-repair/ghi đè, không tạo lại H0. Escalate hoặc restore payload độc lập nếu thực sự có.
+- [ ] Trước sửa kiểm lại version/PG interval, ghim version nguồn hoặc staging đã verify, ràng buộc dirty writes/ordering theo barrier đã test; có ghi mới thì hủy/retry với reference mới. Bản copy một phần chưa được publish thành verified.
+- [ ] Recovery/rebuild **truyền payload đúng** từ nguồn đã xác minh vào X qua procedure/API đã test; giữ metadata/PG history và retry budget. Lưu actual source để chứng minh không bị Ceph chọn lại nguồn khác chưa kiểm.
+- [ ] X hoàn tất ghi theo durability contract; đọc lại/hash khớp H0 và kiểm metadata. Reopen/restart durability test có evidence lab; không chỉ đọc lại checksum metadata hoặc cache.
+- [ ] **HG3:** version/token/coverage còn hợp lệ tại điểm cấp quyền; không dùng result của snapshot cũ cho head mới hoặc một PG cho cả OSD.
+- [ ] **HG4:** primary canary có read/write/overwrite/delete và kiểm expected version mới; báo detection/fence lag của hậu kiểm sau ACK.
+- [ ] **HG5:** mọi PG mới hoặc batch mới đạt gate tương ứng, không pending/stale bị bỏ qua; giữ nguồn tốt và aftercare tới mốc đã chốt.
+
+Trạng thái bắt buộc phân biệt: `MATCH`, `MISMATCH`, `STALE`, `UNKNOWN`, `NO_VALID_SOURCE`, `REPAIRING`, `REVERIFY`, `VERIFIED`. Lệnh sửa trả success chưa đủ thành VERIFIED. Nếu H-LAB chưa có enforcement/source binding thì ghi trạng thái chức năng chưa đạt; không dùng để thay requirement backup production.
 
 ### 7.6 R4 — Mở rộng mixed fleet và service cohort
 
-- [ ] Mỗi batch chỉ mở sau soak, guardrail và review evidence của batch trước; không có unexplained PG state, checksum mismatch, daemon loop, reset storm hoặc recovery spike.
+- [ ] Mỗi batch chỉ mở sau soak, guardrail và review evidence của batch trước; không có unexplained PG state, checksum mismatch, daemon loop, reset storm hoặc recovery spike. Nhánh H phải đạt HG5 và lặp HG cho PG/version mới; không kế thừa PASS của C cho toàn bộ X.
 - [ ] Nhánh cephadm tiếp tục đúng order còn lại: MDS safety sequence; RGW; RBD/CephFS mirror; iSCSI/NFS; cuối cùng monitoring stack. Không dùng filter để nhảy qua type trước đó. [ADM-001/003]
 - [ ] Host unreachable/maintenance và action queue có disposition; `scheduled`/`starting` không được coi là complete; NFS/HAProxy reschedule không tạo duplicate serving. [ADM-005/006]
 - [ ] Trước mỗi specialized-service redeploy, diff rendered config; sau đó kiểm VIP/port/TLS/session/export/scrape/rules. [ADM-009]
@@ -558,7 +684,7 @@ Các mục này là gate logic, không phải lệnh nâng cấp. Runbook chỉ 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | | | | | | | | | |
 
-- [ ] Ghi expected và actual daemon count, action terminal state, primary/active transitions, time budget, soak và mọi deviation.
+- [ ] Ghi expected và actual daemon count, action terminal state, primary/active transitions, time budget, soak và mọi deviation. Nhánh H ghi PA/H-mode, H0 manifest/version, HG, source–target sửa, hash trước/sau, dirty token, byte/metadata coverage, detection/fence lag và nguồn tốt còn lại.
 - [ ] Nếu STOP, giữ nguyên record, gắn incident/evidence và mở một quyết định resume/forward-fix/rollback mới; không sửa đè kết quả cũ.
 
 ## 8. STOP conditions và phạm vi bị chặn
@@ -585,12 +711,23 @@ Dừng batch hiện tại ngay khi có một trong các dấu hiệu sau:
 - Package upgrade mất cephadm user/key, dependency/plugin/service asset thiếu, chạy restart trái policy, MON mất device visibility hoặc `ceph-crash` không thể hạ quyền/đọc crash directory.
 - Artifact/version/digest thực tế khác manifest đã duyệt, hoặc mất nguồn telemetry bắt buộc quá thời gian budget.
 
+Với PA1/PA2 + H0, STOP còn gồm:
+
+- X có PG/quyền primary/source/read ngoài phạm vi HG, kể cả do failover hoặc khôi phục affinity cả OSD.
+- H0 mismatch, metadata mismatch, nguồn duy nhất chưa verify hoặc actual recovery source khác nguồn đã chốt.
+- Manifest mất/sai/rollback, token stale, version đổi khi apply, ghi mới bị đè hoặc job sửa vượt retry budget.
+- Không còn payload khớp, hoặc mất nguồn phục hồi bắt buộc khi nâng peer tiếp theo.
+- Coverage chỉ lấy mẫu nhưng báo đủ; H0 hết ngân sách/telemetry mà vẫn cấp quyền mới.
+- Requirement phục hồi độc lập chưa đáp ứng nhưng production vẫn dự định mở rộng không có quyết định thay thế.
+
+STOP nghĩa dừng mở rộng và chặn quyền nguy hiểm theo MOP; không mặc định tắt cả cụm. Nếu không còn peer đủ điều kiện thì phải báo khả năng mất I/O, không bypass HG/min_size.
+
 Khi STOP:
 
 1. Không mở rộng sang batch/role tiếp theo.
 2. Giữ log, map/config dump, metrics và image/clone liên quan; không repair để “thử”.
 3. So với baseline và xác định lỗi đã có trước hay do phase vừa thực hiện.
-4. Chọn forward-fix, failback role hoặc restore state theo ma trận rollback; không mặc định hạ package OSD.
+4. Chọn forward-fix, failback role hoặc restore state theo ma trận rollback; không mặc định hạ package OSD. Với dữ liệu sai, chỉ sửa từ nguồn khớp H0 cùng version theo R3H; thiếu nguồn thì NO_VALID_SOURCE, không dùng hash làm payload.
 5. Chỉ resume sau khi owner tương ứng ký PASS mới.
 
 ## 9. Rollback: có thể hay không?
@@ -618,11 +755,13 @@ Khi STOP:
 | RGW request/shared state | Theo từng process/site; security-limited | Không trả Browser POST traffic về base vulnerable daemon. Binary rollback không undo index/log/orphan/multisite state; drain, endpoint pin và shared-state recovery cần plan riêng |
 | Package/service state | Có điều kiện theo distro | First-hop base `%postun` có thể chạy sau target install; cần backup cephadm key/user state, mitigation đã test và package config. Binary rollback không tự hoàn tác scriptlet side effects |
 | Repair/quick-fix/migrate/import/reshard/set-superblock | Không phải rollback thường lệ | Restore pre-action image; không chain repair trên state lỗi |
+| H0-guided repair một replica | Phục hồi dữ liệu trong phạm vi có nguồn đúng | Phải truyền payload cùng version, giữ metadata/history, đọc lại verify; không phải rollback binary hoặc phục hồi mọi ghi mới |
+| Chỉ còn H0, không còn payload khớp | **Không thể restore từ hash** | Giữ incident; cần nguồn dữ liệu độc lập còn tốt nếu muốn phục hồi; không suy từ metadata manifest rằng có backup |
 
 ### 9.1 Checklist rollback readiness
 
 - [ ] Chọn một trong hai strategy cho OSD: restoreable snapshot/image **hoặc** forward-only/rebuild được phê duyệt.
-- [ ] Chứng minh restore trên clone, không chỉ chứng minh snapshot tạo thành công.
+- [ ] Nếu chọn image/snapshot restore: chứng minh restore trên clone, không chỉ snapshot tạo thành công. Nếu chọn forward-only/rebuild: chứng minh nguồn payload hợp lệ và rebuild/read-back. Nhánh H chạy thêm T34/T36; không áp bắt buộc snapshot cho mọi nhánh.
 - [ ] Lưu MonMap, OSDMap, CRUSH map, FSMap nếu dùng CephFS, config DB và effective config baseline.
 - [ ] Lưu package/image repository cần cho failback và xác minh artifact.
 - [ ] Lưu rules, routes, silences, Dashboard/LB và custom module artifact tương thích base.
@@ -670,6 +809,11 @@ Mỗi artifact nên có timestamp UTC, cluster/cohort/batch, lệnh hoặc scena
 | SEC-005 Browser POST closure | | G11, T24B | | | | | |
 | Canary batch/soak records | | R0–R5 | | | | | |
 | Rollback/restore rehearsal | | G02, §9 | | | | | |
+| PA1/PA2 placement, batch/weight, store cleanup và QoS | | G14, T30/T31, R3A/R3B | | | | | |
+| H0 provenance, coverage, bản X, dirty/version và source chọn theo hash | | G15, T32/T34/T35, R3H | | | | | |
+| Payload repair, durability/read-back, NO_VALID_SOURCE | | G15/G16, T34/T36 | | | | | |
+| Enforcement primary/source/read, failover/restart và ghi sau promote | | G15, T33/T35/T37 | | | | | |
+| H/B100, nguồn phục hồi và quyết định requirement 100 TB | | G16, T38 | | | | | |
 
 ### 10.1 Exception/waiver register
 
@@ -684,10 +828,10 @@ Mỗi artifact nên có timestamp UTC, cluster/cohort/batch, lệnh hoặc scena
 
 | Quyết định | Điều kiện tối thiểu |
 | --- | --- |
-| GO LAB | Applicability đã điền; G00/G02/G04 đủ cho lab an toàn; G12/G13 có artifact, fixture, backup, approved scenario và owner ở trạng thái **plan/readiness** — lab sẽ tạo execution evidence |
-| GO CANARY | Mọi gate áp dụng, gồm execution evidence G12/G13, đã PASS hoặc có exception hợp lệ; lab test bắt buộc PASS; guardrail/time budget/rollback và telemetry độc lập sẵn sàng |
-| GO PRODUCTION | Tất cả batch/canary và stabilization PASS; artifact đúng trên mọi cohort; không STOP chưa đóng; soak hoàn tất; rollback/forward-only boundary và sign-off đầy đủ |
-| NO-GO | Có blocker không thể đóng trong window, correctness/security failure, artifact mismatch hoặc rollback/telemetry requirement không đạt |
+| GO LAB | Applicability và G00/G02/G04 đủ cho fixture disposable; G12–G16 áp dụng có artifact, nguồn tái tạo dữ liệu/manifest, plan và owner. Được thử H-LAB để tạo evidence, chưa yêu cầu H-ENFORCE PASS hoặc dựng cụm 100 TB mới |
+| GO CANARY | Canary production: mọi gate áp dụng G00–G16 có evidence; PA1/PA2 và H0 tests bắt buộc PASS đúng mức tuyên bố; source/repair/enforcement và telemetry sẵn sàng; nếu bỏ cụm 100 TB có quyết định phạm vi phục hồi được duyệt |
+| GO PRODUCTION | Cho phép mở rộng trong phạm vi pilot đã PASS: artifact/coverage/HG, soak, nguồn phục hồi, boundary và sign-off đầy đủ, không STOP mở. Mỗi batch tiếp theo vẫn lặp gate; hoàn tất toàn rollout chỉ sau stabilization tương ứng |
+| NO-GO | Có blocker không thể đóng trong window, correctness/security failure, artifact mismatch, enforcement/source/version thiếu, hoặc requirement phục hồi/telemetry chưa đạt. H0 không tự thay requirement payload độc lập |
 
 - [ ] Quyết định ghi timestamp, người phê duyệt, evidence snapshot và danh sách exception còn mở; `HEALTH_OK` hoặc acceptance tài liệu riêng lẻ không đủ cho GO.
 
@@ -748,6 +892,9 @@ Không thu secret/config-key credential vào evidence. Không đưa lệnh repai
 | `SEC-004` | G12, T29; `ceph-crash` privilege + archive/upload |
 | `SEC-005` | G11, T24B; Browser POST negative test trên từng serving daemon |
 | `VAL-001–008` | G12/G13, §1.4, T08/T09/T09A/T09B/T29, coverage register bên dưới |
+| Thiết kế PA1/PA2 mới | §1.6/3.9, G14, T30/T31, R3A/R3B, STOP và journal |
+| Thiết kế H0 chọn nguồn/sửa/cấp quyền | §4.5, G15/G16, T32–T37, R3H, STOP, §9 |
+| Quyết định về cụm 100 TB | §1.3/1.6, G16, T38, §10.2 |
 
 ### 12.2 Test coverage và exclusion register
 
@@ -770,5 +917,17 @@ Không đánh dấu PASS cho một suite nếu không có target SHA/artifact, e
 - [ ] As-Is của cluster, deployment path, client estate, service applicability, guardrail số và artifact thực tế chưa được điền.
 - [ ] Chưa có run artifact cho build, unit/integration, exact-path suite, lab fault injection, canary, rollback rehearsal hoặc Production soak; mọi scenario mục 6 vẫn là kế hoạch kiểm chứng.
 - [ ] Coverage exclusion register, batch records, exception register và owner sign-off chưa được điền.
+- [ ] G14–G16/T30–T38 mới là thiết kế, chưa có kết quả H0 chọn nguồn/sửa payload/enforcement, PA1/PA2 so sánh hoặc quyết định bỏ cụm 100 TB.
+- [ ] Chưa chứng minh nguồn tốt và aftercare qua nhiều OSD; H0 checksum không được ghi thành bản backup payload.
 
 Vì vậy trạng thái vẫn là **HOLD**. Bước tiếp theo là điền dữ liệu môi trường, đóng `UNKNOWN`, phê duyệt test plan rồi thu execution evidence; không được diễn giải acceptance của tài liệu là phê duyệt Production.
+
+
+## 13. Nguồn cho phần H0 bổ sung
+
+- [Ceph Pacific — Architecture](https://docs.ceph.com/en/pacific/architecture/): vai trò PG/replication và scrub. Đổi primary không tự đồng nghĩa chép toàn store đè các bản còn lại.
+- [Ceph Pacific — Repairing PG inconsistencies](https://docs.ceph.com/en/pacific/rados/operations/pg-repair/): chẩn đoán và lựa chọn bản authoritative; không suy `pg repair` nhận được H0 ngoại sinh.
+- [Ceph Pacific — CRUSH maps / primary affinity](https://docs.ceph.com/en/pacific/rados/operations/crush-map/#primary-affinity): affinity là đầu vào lựa chọn primary, không phải hàng rào H0 cho mọi nguồn dữ liệu.
+- [Ceph Pacific — RBD mirroring](https://docs.ceph.com/en/pacific/rbd/rbd-mirroring/), [RGW multisite](https://docs.ceph.com/en/pacific/radosgw/multisite/): đối chiếu mô hình dịch vụ B100.
+
+Phần H0-guided repair, HG0–HG5 và enforcement là đề xuất cần phát triển và kiểm chứng của dự án. Lần cập nhật chỉ sửa tài liệu; chưa chạy Ceph hoặc xác nhận source build tùy biến hoạt động.

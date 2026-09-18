@@ -1,6 +1,6 @@
 # Kế hoạch phân tích diff Ceph Pacific 16.2.5 → 16.2.15
 
-Trạng thái: **Đã chốt nguồn, tạo inventory và hoàn thành các cặp phân tích `01`–`10`; các cặp `11`–`15` còn chờ triển khai.**
+Trạng thái: **Hoàn tất. Đã chốt nguồn, tạo inventory, hoàn thành đủ các cặp phân tích `01`–`15`, enrich mọi component CSV và chạy acceptance gate cho toàn suite.**
 
 ## 1. Mục tiêu và phạm vi
 
@@ -189,4 +189,4 @@ Không cần As-Is inventory để bắt đầu phân tích code. Thông tin dep
 4. Các cặp báo cáo RADOS/RBD, CephFS và RGW.
 5. Các cặp packaging/submodules, security, validation và README tổng hợp.
 
-Plan đã được áp dụng cho `00-file-inventory.{md,csv}` và mười cặp `01`–`10`. Các cặp `11`–`15` sẽ tiếp tục theo cùng quy ước ở các bước triển khai sau.
+Plan đã được áp dụng cho `00-file-inventory.{md,csv}` và đủ mười lăm cặp `01`–`15`. Component partition, immutable CSV prefix, disposition/evidence, thống kê và liên kết chéo đã được đối soát; giới hạn còn lại là dữ liệu As-Is và runtime/lab/canary evidence của cluster đích, không phải scope phân tích source.

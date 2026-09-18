@@ -1,13 +1,13 @@
 # So sánh Ceph Pacific v16.2.5 → v16.2.15
 
-> **Trạng thái bàn giao 5 — 2026-09-17:** đã chốt nguồn, hoàn thành inventory và mười cặp phân tích `01`–`10`. Các cặp `11`–`15` chưa được tạo.
+> **Trạng thái bàn giao 7 — 2026-09-17:** đã chốt nguồn, hoàn thành inventory và đủ mười lăm cặp phân tích `01`–`15`; component partition, CSV ledger và cross-reference đã qua acceptance. [Checklist nâng cấp](./UPGRADE-CHECKLIST.md) đã nhập các gate quyết định của toàn suite.
 >
 > **Phạm vi:** net diff trực tiếp giữa hai đầu tag Pacific. Đây chưa phải đánh giá GO/NO-GO Production và chưa phải kết luận tác động cho một cluster cụ thể.
 
 ## Mục lục nhanh
 
 - [1. Hai mốc nguồn](#1-hai-mốc-nguồn)
-- [2. Kết luận đã kiểm chứng đến phần 10](#2-kết-luận-đã-kiểm-chứng-đến-phần-10)
+- [2. Kết luận đã kiểm chứng toàn suite](#2-kết-luận-đã-kiểm-chứng-toàn-suite)
 - [3. Mục lục bộ báo cáo](#3-mục-lục-bộ-báo-cáo)
 - [4. Phương pháp](#4-phương-pháp)
 - [5. Cách đọc inventory](#5-cách-đọc-inventory)
@@ -24,13 +24,13 @@
 
 Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không phải SHA của tag object. `v16.2.5` là ancestor của `v16.2.15`; khoảng lịch sử ở giữa có 5.547 commit. Inventory vẫn dùng net diff hai đầu để không nhầm thay đổi trung gian hoặc thay đổi đã revert với khác biệt còn tồn tại ở `v16.2.15`.
 
-## 2. Kết luận đã kiểm chứng đến phần 10
+## 2. Kết luận đã kiểm chứng toàn suite
 
 1. Net diff có **2.665 file**: `A 605`, `M 1.842`, `D 162`, `R 56`; tổng `+323.147/-176.246` dòng. Đây là quy mô đọc, không phải thước đo rủi ro.
 2. Phân bố theo path đích gồm `src/` 1.569 file, `qa/` 736 file và `doc/` 232 file. Riêng QA + tài liệu đã là 968 file, nên không thể coi toàn bộ file đổi là thay đổi runtime.
 3. Churn bị lệch mạnh bởi dashboard: `src/pybind/mgr/dashboard/` có 493 file và `+190.355/-82.899`, xấp xỉ 54,7% tổng số dòng thêm/xóa. Phần này chứa package lock, catalog bản địa hóa, asset và code; cần tách generated/data trước khi ưu tiên đọc.
 4. Inventory ghi riêng 7 file nhị phân, 71 bản ghi `0/0`, 2 file đổi mode và metadata gitlink. Trong 56 rename, 34 bản ghi có `0/0`; nhiều file là marker rỗng nên kết quả rename của Git có thể chỉ là heuristic, không chứng minh một lần di chuyển logic.
-5. Chỉ một gitlink đổi: `src/isa-l`, từ `806b55ee578efd8158962b90121a4568eb1ecb66` sang `4b36e413c9ac28b4757b297779470693b699aeae`. `.gitmodules` và gitlink `src/rocksdb` không đổi. Ý nghĩa của diff bên trong ISA-L sẽ thuộc báo cáo `13`.
+5. Chỉ một gitlink đổi: `src/isa-l`, từ `806b55ee578efd8158962b90121a4568eb1ecb66` sang `4b36e413c9ac28b4757b297779470693b699aeae`. `.gitmodules` và gitlink `src/rocksdb` không đổi. Hai ISA-L objects có sẵn; internal range chứa fix AArch64 text relocation, không cho thấy đổi thuật toán EC hay persistent encoding.
 6. Triage ban đầu có `P0 105`, `P1 1.296`, `P2 1.264`. Đây là **ưu tiên đọc dựa trên owner tree và loại file**, không phải số lượng lỗi hay mức rủi ro của upgrade.
 7. [OSD/PG](./01-osd-pg-recovery.md) xác nhận target giữ EC async recovery không xuống dưới `min_size`, xử lý hinfo lỗi mà không assert ở các đường đã sửa, giới hạn dần PGLog `dups` và sửa nhiều trạng thái scrub/peering. Tác động mixed-version phụ thuộc OSD giữ vai trò primary; upgrade không tự cho phép repair hay offline trim.
 8. [BlueStore/BlueFS](./02-bluestore-bluefs.md) xác nhận các sửa crash-durability, deferred replay, legacy OMAP conversion và fsck/repair. Target cũng có opcode BlueFS log mà reader base không hiểu; vì vậy rollback một OSD đã ghi log mới cần test/restore device snapshot, không chỉ hạ package.
@@ -43,7 +43,12 @@ Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không p
 15. [Cephadm/orchestrator](./08-cephadm-orchestrator.md) xác nhận `migration_current` đổi 2→5 là rollback boundary đối với MGR base: sau khi target hoàn tất migration, code 16.2.5 không có transition xử lý state 5 và có thể chặn reconciliation. MDS minor upgrade luôn chạy sequence giảm rank/tắt standby-replay; `upgrade stop` không tự restore preparation state. Private/insecure registry cần gate pull theo từng host.
 16. [Ceph-volume/activation](./09-ceph-volume-activation.md) xác nhận target dùng host namespace cho LVM, hợp nhất raw/LVM activation và sửa device discovery. Regression activation chậm được thêm rồi sửa hoàn toàn trong range, không tồn tại ở baseline 16.2.5. BlueFS `migrate/new-db/new-wal`, zap và provisioning vẫn là thao tác opt-in, không tự chạy khi upgrade; dm-crypt cần canary restart riêng.
 17. [RADOS/RBD clients](./10-rados-rbd-clients.md) xác nhận nhiều sửa correctness cho fast-diff/object-map, journal/discard, mirroring và blocklist recovery. Riêng persistent SSD write-back cache có boundary trực tiếp: base tạo layout version 0, target yêu cầu version 1 và từ chối existing cache; phải chứng minh cache sạch và có procedure chuyển đổi trước khi nâng client.
-18. CephFS/MDS, RGW, packaging/submodules, security cross-reference và validation tổng hợp vẫn chờ các báo cáo `11`–`15`; chưa có kết luận GO/NO-GO Production.
+18. [CephFS/MDS](./11-cephfs-mds.md) xác nhận target harden session metadata eviction, FSMap/standby-replay, journal/sessionmap replay và mixed-client request/cap paths. CVE-2022-0670 chỉ áp dụng cho Manila native CephFS trên cluster có lịch sử từ Nautilus hoặc cũ hơn; target sửa discovery nhưng vẫn phải audit CephX path caps đã cấp. Volumes, NFS và mirror đều cần canary theo feature.
+19. [RGW](./12-rgw.md) xác nhận CVE-2023-43040 ở Browser POST policy, hai causal chain có thể mất/corrupt object ở timeout/POST error, cùng các sửa reshard, multisite và IAM/STS. Khi process target restart, Beast mặc định tắt TLS 1.0/1.1 và RGW mặc định yêu cầu kết nối MON `secure` với `cephx`; legacy client và cluster cố ý tắt CephX đều cần gate. Mọi serving daemon phải được target hoặc drain mới đóng security gap của Browser POST.
+20. [Build/package/submodule](./13-build-packaging-submodules.md) xác nhận systemd/sudoers/dependency và dencoder plugin boundaries, đồng thời đọc được diff ISA-L. `BLD-009` là transition hazard đáng chú ý: direct RPM `16.2.5 → 16.2.15` vẫn chạy `%postun` lưu trong package base sau khi package mới được cài, nên first hop có thể xóa cephadm user/home/key; phải rehearsal đúng transaction hoặc có mitigation được package owner duyệt.
+21. [Security cross-reference](./14-security-cross-reference.md) tách bốn advisory được thêm trong range nhưng runtime fix đã có trước base khỏi ba security delta trong range: CVE-2022-0670 thuộc `CEPHFS-005`, CVE-2022-3650 thuộc `VAL-001`, và CVE-2023-43040 thuộc `RGW-001`. Applicability vẫn phụ thuộc topology/process/API thực tế.
+22. [Upgrade validation](./15-upgrade-validation.md) bổ sung `ceph-crash` privilege drop, mixed-version `cls/cmpomap`, IPv6 mount formatting, CLI parsing, dencoder plugins và evidence boundaries của Pacific p2p/legacy suites. Repository recipe không phải run result; release-note text phải được đối chiếu với hunk/history và owner finding.
+23. Bộ báo cáo đã hoàn tất acceptance nhưng **không đưa GO/NO-GO Production**: chưa có As-Is cluster, artifact thực tế, test lab/canary, rollback rehearsal hay sign-off. Trạng thái checklist vì vậy vẫn là `HOLD`.
 
 ## 3. Mục lục bộ báo cáo
 
@@ -61,13 +66,13 @@ Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không p
 | 08 | [08-cephadm-orchestrator.md](./08-cephadm-orchestrator.md) | [08-cephadm-orchestrator.csv](./08-cephadm-orchestrator.csv) | **Đã phân tích** | Upgrade, stop checks, daemon lifecycle và redeploy |
 | 09 | [09-ceph-volume-activation.md](./09-ceph-volume-activation.md) | [09-ceph-volume-activation.csv](./09-ceph-volume-activation.csv) | **Đã phân tích** | Inventory, LVM, activation, encryption và DB/WAL |
 | 10 | [10-rados-rbd-clients.md](./10-rados-rbd-clients.md) | [10-rados-rbd-clients.csv](./10-rados-rbd-clients.csv) | **Đã phân tích** | RADOS/RBD, class, snapshot, fast-diff và object-map |
-| 11 | `11-cephfs-mds.md` | `11-cephfs-mds.csv` | Chưa tạo | MDS/CephFS client, session, caps, volumes và NFS |
-| 12 | `12-rgw.md` | `12-rgw.csv` | Chưa tạo | S3, auth/policy, bucket/object và multisite |
-| 13 | `13-build-packaging-submodules.md` | `13-build-packaging-submodules.csv` | Chưa tạo | Build, package, systemd, dependency và submodule |
-| 14 | `14-security-cross-reference.md` | `14-security-cross-reference.csv` | Chưa tạo | Security fix/CVE đã xác minh và liên kết về báo cáo owner |
-| 15 | `15-upgrade-validation.md` | `15-upgrade-validation.csv` | Chưa tạo | Ma trận thay đổi → bằng chứng → tình huống kiểm chứng |
+| 11 | [11-cephfs-mds.md](./11-cephfs-mds.md) | [11-cephfs-mds.csv](./11-cephfs-mds.csv) | **Đã phân tích** | MDS/CephFS client, session, caps, volumes và NFS |
+| 12 | [12-rgw.md](./12-rgw.md) | [12-rgw.csv](./12-rgw.csv) | **Đã phân tích** | S3, auth/policy, bucket/object và multisite |
+| 13 | [13-build-packaging-submodules.md](./13-build-packaging-submodules.md) | [13-build-packaging-submodules.csv](./13-build-packaging-submodules.csv) | **Đã phân tích** | Build, package, systemd, dependency và submodule |
+| 14 | [14-security-cross-reference.md](./14-security-cross-reference.md) | [14-security-cross-reference.csv](./14-security-cross-reference.csv) | **Đã phân tích** | Security fix/CVE đã xác minh và liên kết về báo cáo owner |
+| 15 | [15-upgrade-validation.md](./15-upgrade-validation.md) | [15-upgrade-validation.csv](./15-upgrade-validation.csv) | **Đã phân tích** | Ma trận thay đổi → bằng chứng → tình huống kiểm chứng |
 
-Các tên file chưa tạo được để dạng code thay vì link nhằm tránh liên kết hỏng. Từ phần `00` trở đi, mỗi phần dùng Markdown cho phân tích và CSV cùng basename cho danh sách file thay đổi liên quan. Kế hoạch gốc nằm tại [PLAN-pacific-16.2.5-to-16.2.15.md](../PLAN-pacific-16.2.5-to-16.2.15.md).
+Từ phần `00` trở đi, mỗi phần dùng Markdown cho phân tích và CSV cùng basename cho danh sách file thay đổi liên quan. Mọi component CSV giữ 21 cột inventory làm prefix và bổ sung disposition/evidence ở bên phải. Kế hoạch gốc nằm tại [PLAN-pacific-16.2.5-to-16.2.15.md](../PLAN-pacific-16.2.5-to-16.2.15.md); gate triển khai tổng hợp nằm tại [UPGRADE-CHECKLIST.md](./UPGRADE-CHECKLIST.md).
 
 ## 4. Phương pháp
 
@@ -120,8 +125,8 @@ File không có net diff nhưng cần đọc để hiểu caller/callee sẽ đ�
 | 2 | [00-file-inventory.md](./00-file-inventory.md) và [00-file-inventory.csv](./00-file-inventory.csv) | Đọc thống kê trong Markdown, rồi lọc CSV theo nhóm, P0/P1/P2 và loại file |
 | 3 | [01](./01-osd-pg-recovery.md) → [04](./04-mon-osdmap-crush.md) | Lõi lưu trữ, OSD/PG, BlueStore/BlueFS, KV/device và MON/placement |
 | 4 | [05](./05-messaging-auth-common.md) → [09](./09-ceph-volume-activation.md) | Protocol/auth/config, MGR, cephadm và ceph-volume |
-| 5 | [10](./10-rados-rbd-clients.md) → `12` | RADOS/RBD đã hoàn tất; CephFS/MDS và RGW theo workload khi có báo cáo |
-| 6 | `13` → `15` | Build/package/dependency, security cross-reference và validation |
+| 5 | [10](./10-rados-rbd-clients.md) → [12](./12-rgw.md) | RADOS/RBD, CephFS/MDS và RGW theo workload |
+| 6 | [13](./13-build-packaging-submodules.md) → [15](./15-upgrade-validation.md) | Package/submodule, security boundary rồi validation/evidence gaps |
 | 7 | Quay lại `README.md` | Đọc kết luận tổng hợp sau khi các báo cáo code-level được hoàn tất |
 
 Nếu chỉ rà nhanh phần hiện có, đọc README rồi vào bảng tổng hợp theo nhóm trong `00.md`; chỉ mở CSV khi cần lọc hoặc truy một file cụ thể.
@@ -130,7 +135,7 @@ Nếu chỉ rà nhanh phần hiện có, đọc README rồi vào bảng tổng 
 
 - Chỉ kết luận cho Pacific `16.2.5 → 16.2.15`; nội dung Quincy/Reef ngoài phạm vi nếu không có bằng chứng độc lập trong hai tag.
 - Chưa có As-Is cluster, deployment mode, dịch vụ đang dùng, client versions, storage layout, config overrides, benchmark hay integration test.
-- Đã phân tích code-level các owner `01`–`10`; `11`–`15` chưa hoàn tất. Chưa có test runtime nên chưa kết luận security applicability toàn suite, mức cải thiện hiệu năng hoặc GO/NO-GO Production.
+- Đã phân tích code-level và acceptance đủ owner `01`–`15`. Chưa có test runtime nên chưa kết luận security applicability cho cluster đích, mức cải thiện hiệu năng hoặc GO/NO-GO Production.
 - Tác động tới OpenStack sau này chỉ có thể là suy luận có điều kiện từ Ceph nếu chưa kiểm tra code và cấu hình Nova/Cinder/Glance/Manila.
 - Không có thao tác repair, trim, migrate, thay cấu hình, nâng daemon hoặc lệnh ghi lên cluster trong bộ đầu ra hiện tại.
 
