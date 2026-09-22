@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     rbd_image_prefix: str = "rgw-console-"
     rbd_mount_root: Path = Path("/srv/ceph-lab/rbd")
     rbd_default_capacity_mode: Literal["reserved-logical"] = "reserved-logical"
+    rbd_action_lease_seconds: int = Field(default=120, ge=10)
+    rbd_action_poll_seconds: float = Field(default=1.0, gt=0, le=60)
 
     # Capacity policy defaults mirror the plan. Unknown byte budgets stay None;
     # future admission code must block instead of silently treating them as zero.

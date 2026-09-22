@@ -1,0 +1,124 @@
+
+{
+    "election_epoch": 182,
+    "quorum": [
+        0,
+        1,
+        2
+    ],
+    "quorum_names": [
+        "ceph-master",
+        "ceph-node2",
+        "ceph-node3"
+    ],
+    "quorum_leader_name": "ceph-master",
+    "quorum_age": 1434,
+    "features": {
+        "quorum_con": "4540138297136906239",
+        "quorum_mon": [
+            "kraken",
+            "luminous",
+            "mimic",
+            "osdmap-prune",
+            "nautilus",
+            "octopus",
+            "pacific",
+            "elector-pinging"
+        ]
+    },
+    "monmap": {
+        "epoch": 3,
+        "fsid": "17c77e12-a16a-11f1-838e-cf68e9c001d8",
+        "modified": "2026-08-26T16:30:09.689164Z",
+        "created": "2026-08-26T16:20:48.771755Z",
+        "min_mon_release": 16,
+        "min_mon_release_name": "pacific",
+        "election_strategy": 1,
+        "disallowed_leaders: ": "",
+        "stretch_mode": false,
+        "features": {
+            "persistent": [
+                "kraken",
+                "luminous",
+                "mimic",
+                "osdmap-prune",
+                "nautilus",
+                "octopus",
+                "pacific",
+                "elector-pinging"
+            ],
+            "optional": []
+        },
+        "mons": [
+            {
+                "rank": 0,
+                "name": "ceph-master",
+                "public_addrs": {
+                    "addrvec": [
+                        {
+                            "type": "v2",
+                            "addr": "10.20.20.11:3300",
+                            "nonce": 0
+                        },
+                        {
+                            "type": "v1",
+                            "addr": "10.20.20.11:6789",
+                            "nonce": 0
+                        }
+                    ]
+                },
+                "addr": "10.20.20.11:6789/0",
+                "public_addr": "10.20.20.11:6789/0",
+                "priority": 0,
+                "weight": 0,
+                "crush_location": "{}"
+            },
+            {
+                "rank": 1,
+                "name": "ceph-node2",
+                "public_addrs": {
+                    "addrvec": [
+                        {
+                            "type": "v2",
+                            "addr": "10.20.20.12:3300",
+                            "nonce": 0
+                        },
+                        {
+                            "type": "v1",
+                            "addr": "10.20.20.12:6789",
+                            "nonce": 0
+                        }
+                    ]
+                },
+                "addr": "10.20.20.12:6789/0",
+                "public_addr": "10.20.20.12:6789/0",
+                "priority": 0,
+                "weight": 0,
+                "crush_location": "{}"
+            },
+            {
+                "rank": 2,
+                "name": "ceph-node3",
+                "public_addrs": {
+                    "addrvec": [
+                        {
+                            "type": "v2",
+                            "addr": "10.20.20.13:3300",
+                            "nonce": 0
+                        },
+                        {
+                            "type": "v1",
+                            "addr": "10.20.20.13:6789",
+                            "nonce": 0
+                        }
+                    ]
+                },
+                "addr": "10.20.20.13:6789/0",
+                "public_addr": "10.20.20.13:6789/0",
+                "priority": 0,
+                "weight": 0,
+                "crush_location": "{}"
+            }
+        ]
+    }
+}

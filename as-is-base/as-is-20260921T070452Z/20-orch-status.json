@@ -1,0 +1,7 @@
+
+{
+  "available": true,
+  "backend": "cephadm",
+  "paused": false,
+  "workers": 10
+}

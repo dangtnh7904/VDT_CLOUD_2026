@@ -1,0 +1,131 @@
+
+[
+    {
+        "section": "global",
+        "name": "cluster_network",
+        "value": "10.20.30.0/24",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "global",
+        "name": "container_image",
+        "value": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+        "level": "basic",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mon",
+        "name": "auth_allow_insecure_global_id_reclaim",
+        "value": "false",
+        "level": "advanced",
+        "can_update_at_runtime": true,
+        "mask": ""
+    },
+    {
+        "section": "mon",
+        "name": "public_network",
+        "value": "10.20.20.0/24",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/cephadm/container_image_base",
+        "value": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+        "level": "advanced",
+        "can_update_at_runtime": true,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/cephadm/container_init",
+        "value": "True",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/cephadm/migration_current",
+        "value": "2",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/dashboard/ALERTMANAGER_API_HOST",
+        "value": "http://10.20.20.11:9093",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/dashboard/GRAFANA_API_SSL_VERIFY",
+        "value": "false",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/dashboard/GRAFANA_API_URL",
+        "value": "https://10.20.20.11:3000",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/dashboard/PROMETHEUS_API_HOST",
+        "value": "http://10.20.20.11:9095",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/dashboard/ssl_server_port",
+        "value": "8443",
+        "level": "advanced",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "mgr",
+        "name": "mgr/orchestrator/orchestrator",
+        "value": "cephadm",
+        "level": "advanced",
+        "can_update_at_runtime": true,
+        "mask": ""
+    },
+    {
+        "section": "client.rgw.lab.ceph-master.mmsntl",
+        "name": "rgw_frontends",
+        "value": "beast endpoint=10.20.20.11:8080",
+        "level": "basic",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "client.rgw.lab.ceph-node2.dphdvf",
+        "name": "rgw_frontends",
+        "value": "beast endpoint=10.20.20.12:8080",
+        "level": "basic",
+        "can_update_at_runtime": false,
+        "mask": ""
+    },
+    {
+        "section": "client.rgw.lab.ceph-node3.jntpop",
+        "name": "rgw_frontends",
+        "value": "beast endpoint=10.20.20.13:8080",
+        "level": "basic",
+        "can_update_at_runtime": false,
+        "mask": ""
+    }
+]

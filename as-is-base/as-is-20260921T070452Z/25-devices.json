@@ -1,0 +1,107 @@
+
+[
+    {
+        "devid": "Virtual_Disk_600224802bbae82f9faa1652681508c3",
+        "location": [
+            {
+                "host": "ceph-master",
+                "dev": "sdc",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:2"
+            }
+        ],
+        "daemons": [
+            "osd.4"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_600224802f0890a225c76e3fd9292b58",
+        "location": [
+            {
+                "host": "ceph-node2",
+                "dev": "sdb",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:1"
+            }
+        ],
+        "daemons": [
+            "osd.1"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_6002248064ac5d0473cf8d10199e0d4c",
+        "location": [
+            {
+                "host": "ceph-master",
+                "dev": "sdb",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:1"
+            }
+        ],
+        "daemons": [
+            "osd.0"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_60022480704fd6f4b979a5d32b0229f3",
+        "location": [
+            {
+                "host": "ceph-master",
+                "dev": "sda",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:0"
+            }
+        ],
+        "daemons": [
+            "mon.ceph-master"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_6002248082903ab2bf33431ced549efd",
+        "location": [
+            {
+                "host": "ceph-node3",
+                "dev": "sda",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:0"
+            }
+        ],
+        "daemons": [
+            "mon.ceph-node3"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_600224809b6de3f61a8ad745e8616e08",
+        "location": [
+            {
+                "host": "ceph-node2",
+                "dev": "sdc",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:2"
+            }
+        ],
+        "daemons": [
+            "osd.3"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_60022480be46562d98c46a304378cd4d",
+        "location": [
+            {
+                "host": "ceph-node2",
+                "dev": "sda",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:0"
+            }
+        ],
+        "daemons": [
+            "mon.ceph-node2"
+        ]
+    },
+    {
+        "devid": "Virtual_Disk_60022480fc78d3ec70ee881e0e132faf",
+        "location": [
+            {
+                "host": "ceph-node3",
+                "dev": "sdb",
+                "path": "/dev/disk/by-path/acpi-MSFT1000:00-scsi-0:0:0:1"
+            }
+        ],
+        "daemons": [
+            "osd.2"
+        ]
+    }
+]

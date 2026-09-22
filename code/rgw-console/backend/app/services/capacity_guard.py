@@ -699,8 +699,14 @@ def finish_reservation(decision: CapacityDecision, outcome: str) -> None:
         raise RuntimeError("capacity reservation outcome lost its fencing state")
 
 
-def snapshot_response() -> dict[str, Any]:
+def snapshot_response(*, scope_type: str | None = None, scope: str | None = None) -> dict[str, Any]:
     control, snapshot, osds = _load_control_and_snapshot()
+    if scope_type == "pool" and scope:
+        osds = [
+            row
+            for row in osds
+            if scope in {str(pool) for pool in (row.get("scope_metadata") or {}).get("eligible_pools", [])}
+        ]
     if not snapshot:
         return {
             "fsid": None,
@@ -720,6 +726,8 @@ def snapshot_response() -> dict[str, Any]:
             "remaining_persistent_commitment_raw_bytes": 0,
             "contract": "OBSERVE_ONLY" if _setting("capacity_observe_only", True) else "NO_FRESH_EVIDENCE",
             "reasons": [control.get("reason") or "No capacity snapshot has been collected"],
+            "scope_type": scope_type,
+            "scope": scope,
         }
 
     now = datetime.now(timezone.utc)
@@ -731,6 +739,8 @@ def snapshot_response() -> dict[str, Any]:
     ratios = [(int(row["osd_id"]), float(row["used_ratio"])) for row in osds if row.get("used_ratio") is not None]
     most_full_osd, most_full_ratio = max(ratios, key=lambda item: item[1]) if ratios else (None, None)
     state = _physical_state(most_full_ratio) if fresh else "BLOCKED_TELEMETRY"
+    if fresh and scope_type == "pool" and scope and not osds:
+        state = "BLOCKED_UNKNOWN_CAPACITY"
     if control.get("desired_state") == "READ_CLEANUP_ONLY":
         state = "READ_CLEANUP_ONLY"
     with connection() as conn:
@@ -742,21 +752,37 @@ def snapshot_response() -> dict[str, Any]:
                AND lease_expires_at IS NOT NULL AND lease_expires_at < now()
             """
         )
-        reservation = conn.execute(
-            """
-            SELECT
-              coalesce(sum(estimated_raw_bytes) FILTER (
-                WHERE state IN ('PENDING','IN_FLIGHT','SETTLING','LEASE_EXPIRED_UNRECONCILED')
-              ),0) AS pending,
-              coalesce(sum(remaining_commitment_bytes) FILTER (
-                WHERE state IN ('PERSISTENT_COMMITMENT','LEASE_EXPIRED_UNRECONCILED')
-              ),0) AS commitment
-              FROM capacity_reservations
-             WHERE fsid=%s
-            """
-            ,
-            (snapshot["fsid"],),
-        ).fetchone()
+        if scope_type == "pool" and scope:
+            reservation = conn.execute(
+                """
+                SELECT
+                  coalesce(sum(allocation.estimated_bytes) FILTER (
+                    WHERE reservation.state IN ('PENDING','IN_FLIGHT','SETTLING','LEASE_EXPIRED_UNRECONCILED')
+                  ),0) AS pending,
+                  coalesce(sum(allocation.estimated_bytes) FILTER (
+                    WHERE reservation.state IN ('PERSISTENT_COMMITMENT','LEASE_EXPIRED_UNRECONCILED')
+                  ),0) AS commitment
+                  FROM capacity_reservation_allocations allocation
+                  JOIN capacity_reservations reservation ON reservation.id=allocation.reservation_id
+                 WHERE reservation.fsid=%s AND allocation.pool_name=%s
+                """,
+                (snapshot["fsid"], scope),
+            ).fetchone()
+        else:
+            reservation = conn.execute(
+                """
+                SELECT
+                  coalesce(sum(estimated_raw_bytes) FILTER (
+                    WHERE state IN ('PENDING','IN_FLIGHT','SETTLING','LEASE_EXPIRED_UNRECONCILED')
+                  ),0) AS pending,
+                  coalesce(sum(remaining_commitment_bytes) FILTER (
+                    WHERE state IN ('PERSISTENT_COMMITMENT','LEASE_EXPIRED_UNRECONCILED')
+                  ),0) AS commitment
+                  FROM capacity_reservations
+                 WHERE fsid=%s
+                """,
+                (snapshot["fsid"],),
+            ).fetchone()
         conn.commit()
     return {
         "fsid": snapshot.get("fsid"),
@@ -775,5 +801,15 @@ def snapshot_response() -> dict[str, Any]:
         "pending_unobserved_raw_bytes": int(reservation["pending"]),
         "remaining_persistent_commitment_raw_bytes": int(reservation["commitment"]),
         "contract": "OBSERVE_ONLY" if _setting("capacity_observe_only", True) else "STABLE_EPOCH_CONTROLLED_WRITERS",
-        "reasons": [control.get("reason")] if control.get("reason") else ([] if fresh else ["Capacity telemetry is stale"]),
+        "reasons": (
+            [control.get("reason")]
+            if control.get("reason")
+            else (
+                [f"No participating OSD scope is known for pool {scope}"]
+                if fresh and scope_type == "pool" and scope and not osds
+                else ([] if fresh else ["Capacity telemetry is stale"])
+            )
+        ),
+        "scope_type": scope_type,
+        "scope": scope,
     }

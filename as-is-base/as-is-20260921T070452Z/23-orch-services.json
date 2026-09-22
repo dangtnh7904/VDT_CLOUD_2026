@@ -1,0 +1,149 @@
+
+[
+  {
+    "placement": {
+      "count": 1
+    },
+    "service_name": "alertmanager",
+    "service_type": "alertmanager",
+    "status": {
+      "created": "2026-08-26T16:21:20.333622Z",
+      "last_refresh": "2026-09-21T07:02:49.985524Z",
+      "ports": [
+        9093,
+        9094
+      ],
+      "running": 1,
+      "size": 1
+    }
+  },
+  {
+    "placement": {
+      "host_pattern": "*"
+    },
+    "service_name": "crash",
+    "service_type": "crash",
+    "status": {
+      "created": "2026-08-26T16:21:10.927371Z",
+      "last_refresh": "2026-09-21T07:01:44.594510Z",
+      "running": 3,
+      "size": 3
+    }
+  },
+  {
+    "placement": {
+      "count": 1
+    },
+    "service_name": "grafana",
+    "service_type": "grafana",
+    "status": {
+      "created": "2026-08-26T16:21:19.539307Z",
+      "last_refresh": "2026-09-21T07:02:49.985682Z",
+      "ports": [
+        3000
+      ],
+      "running": 1,
+      "size": 1
+    }
+  },
+  {
+    "placement": {
+      "count": 2
+    },
+    "service_name": "mgr",
+    "service_type": "mgr",
+    "status": {
+      "created": "2026-08-26T16:21:10.413390Z",
+      "last_refresh": "2026-09-21T07:01:44.806753Z",
+      "running": 2,
+      "size": 2
+    }
+  },
+  {
+    "placement": {
+      "count": 5
+    },
+    "service_name": "mon",
+    "service_type": "mon",
+    "status": {
+      "created": "2026-08-26T16:21:09.920749Z",
+      "last_refresh": "2026-09-21T07:01:44.594613Z",
+      "running": 3,
+      "size": 5
+    }
+  },
+  {
+    "placement": {
+      "host_pattern": "*"
+    },
+    "service_name": "node-exporter",
+    "service_type": "node-exporter",
+    "status": {
+      "created": "2026-08-26T16:21:19.959625Z",
+      "last_refresh": "2026-09-21T07:01:44.594559Z",
+      "ports": [
+        9100
+      ],
+      "running": 3,
+      "size": 3
+    }
+  },
+  {
+    "placement": {},
+    "service_name": "osd",
+    "service_type": "osd",
+    "spec": {
+      "filter_logic": "AND",
+      "objectstore": "bluestore"
+    },
+    "status": {
+      "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+      "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+      "last_refresh": "2026-09-21T07:01:44.594234Z",
+      "running": 5,
+      "size": 5
+    },
+    "unmanaged": true
+  },
+  {
+    "placement": {
+      "count": 1
+    },
+    "service_name": "prometheus",
+    "service_type": "prometheus",
+    "status": {
+      "created": "2026-08-26T16:21:19.128316Z",
+      "last_refresh": "2026-09-21T07:02:49.986642Z",
+      "ports": [
+        9095
+      ],
+      "running": 1,
+      "size": 1
+    }
+  },
+  {
+    "networks": [
+      "10.20.20.0/24"
+    ],
+    "placement": {
+      "count_per_host": 1,
+      "label": "rgw"
+    },
+    "service_id": "lab",
+    "service_name": "rgw.lab",
+    "service_type": "rgw",
+    "spec": {
+      "rgw_frontend_port": 8080,
+      "rgw_frontend_type": "beast"
+    },
+    "status": {
+      "created": "2026-09-03T08:27:27.092709Z",
+      "last_refresh": "2026-09-21T07:01:44.594588Z",
+      "ports": [
+        8080
+      ],
+      "running": 3,
+      "size": 3
+    }
+  }
+]

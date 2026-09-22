@@ -9,7 +9,7 @@ import uuid
 from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime
 from functools import partial
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 from botocore.exceptions import ClientError
@@ -224,14 +224,18 @@ def begin_idempotent_mutation(
                 "observed_state": {"state": result.record.state.value},
             },
         )
-    record = idempotency_service.mark_in_progress(
-        scope,
-        idempotency_key,
-        owner_id=request.state.request_id,
-        fencing_generation=result.record.fencing_generation,
-    )
-    result.record = record
     return result, None
+
+
+def mark_idempotent_mutation_started(claim):
+    record = idempotency_service.mark_in_progress(
+        claim.record.scope,
+        claim.record.idempotency_key,
+        owner_id=claim.record.owner_id,
+        fencing_generation=claim.record.fencing_generation,
+    )
+    claim.record = record
+    return claim
 
 
 def finish_idempotent_mutation(claim, body: dict, status: int = 200):
@@ -327,10 +331,26 @@ def browse_corpus(corpus_id: str, path: str = ""):
 
 
 @app.post("/api/uploads/corpus")
-def upload_corpus(selection: CorpusSelection, request: Request):
+def upload_corpus(
+    selection: CorpusSelection,
+    request: Request,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=255)],
+):
     scope_validator.require_bucket(selection.bucket)
     root, _ = resolve_corpus_path(selection.corpus_id)
+    resource = f"rgw://{selection.bucket}/corpus-upload"
+    claim, replay = begin_idempotent_mutation(
+        request,
+        idempotency_key=idempotency_key,
+        scope=resource,
+        method="POST",
+        resource=resource,
+        payload=selection,
+    )
+    if replay:
+        return replay
     results = []
+    mutation_started = False
     for relative in selection.paths:
         decision = None
         try:
@@ -348,6 +368,9 @@ def upload_corpus(selection: CorpusSelection, request: Request):
                 scope_validator.require_key(selection.bucket, key)
                 decision = require_admission("PUT", path.stat().st_size, request_id=request.state.request_id)
                 with reservation_lease(decision):
+                    if not mutation_started:
+                        mark_idempotent_mutation_started(claim)
+                        mutation_started = True
                     uploaded = upload_file(path, selection.bucket, key, selection.client_id, category, "web", request_id=request.state.request_id, capacity_decision_id=decision.id)
                 finish_reservation(decision, "success")
                 results.append(uploaded)
@@ -358,26 +381,49 @@ def upload_corpus(selection: CorpusSelection, request: Request):
                 except Exception:
                     pass
             results.append({"success": False, "path": relative, "error": str(exc)})
-    return {"results": results, "succeeded": sum(item["success"] for item in results), "failed": sum(not item["success"] for item in results)}
+    body = {"results": results, "succeeded": sum(item["success"] for item in results), "failed": sum(not item["success"] for item in results)}
+    finish_idempotent_mutation(claim, body)
+    return body
 
 
 @app.post("/api/uploads/random")
-def upload_random(upload_request: RandomUpload, request: Request):
+def upload_random(
+    upload_request: RandomUpload,
+    request: Request,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=255)],
+):
+    scope_validator.require_bucket(upload_request.bucket)
+    resource = f"rgw://{upload_request.bucket}/random-upload"
+    claim, replay = begin_idempotent_mutation(
+        request,
+        idempotency_key=idempotency_key,
+        scope=resource,
+        method="POST",
+        resource=resource,
+        payload=upload_request,
+    )
+    if replay:
+        return replay
     try:
-        scope_validator.require_bucket(upload_request.bucket)
         corpus_id, root, path = choose_random(upload_request.corpus_ids, upload_request.category, upload_request.extension, upload_request.min_bytes, upload_request.max_bytes)
         category = classify(path)
         key = object_key(upload_request.client_id, "random", category, path.name, upload_request.prefix)
         scope_validator.require_key(upload_request.bucket, key)
         decision = require_admission("PUT", path.stat().st_size, request_id=request.state.request_id)
         with reservation_lease(decision):
+            mark_idempotent_mutation_started(claim)
             result = upload_file(path, upload_request.bucket, key, upload_request.client_id, category, "web", request_id=request.state.request_id, capacity_decision_id=decision.id)
         finish_reservation(decision, "success")
         result.update({"corpus_id": corpus_id, "corpus_path": path.relative_to(root).as_posix()})
+        finish_idempotent_mutation(claim, result)
         return result
     except HTTPException:
         raise
-    except (InvalidScopeError, CapacityRejected):
+    except CapacityRejected as exc:
+        fail_idempotent_mutation(claim, exc, error_code="CAPACITY_RETRYABLE", response_status=exc.status_code)
+        raise
+    except InvalidScopeError as exc:
+        fail_idempotent_mutation(claim, exc, retryable=False, error_code="INVALID_SCOPE", response_status=exc.status_code)
         raise
     except Exception as exc:
         if "decision" in locals():
@@ -385,6 +431,7 @@ def upload_random(upload_request: RandomUpload, request: Request):
                 finish_reservation(decision, "ambiguous")
             except Exception:
                 pass
+        fail_idempotent_mutation(claim, exc, retryable=False, error_code="AMBIGUOUS_EXTERNAL_RESULT")
         raise friendly_error(exc)
 
 
@@ -392,23 +439,59 @@ def upload_random(upload_request: RandomUpload, request: Request):
 def upload_browser(
     request: Request,
     file: Annotated[UploadFile, File()], client_id: Annotated[str, Form()], bucket: Annotated[str, Form()],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=255)],
     prefix: Annotated[str, Form()] = "", mode: Annotated[str, Form()] = "single", relative_path: Annotated[str, Form()] = "",
 ):
     filename = Path(file.filename or "unnamed").name
     category = classify(Path(filename))
-    key = object_key(client_id, mode, category, filename, prefix, str(Path(relative_path).parent) if relative_path else "")
+    relative_parent = PurePosixPath(relative_path).parent.as_posix() if relative_path else ""
+    if relative_parent == ".":
+        relative_parent = ""
+    key = object_key(client_id, mode, category, filename, prefix, relative_parent)
     try:
         scope_validator.require_key(bucket, key)
         file.file.seek(0, 2)
         size = file.file.tell()
         file.file.seek(0)
+        digest = hashlib.sha256()
+        while chunk := file.file.read(1024 * 1024):
+            digest.update(chunk)
+        file.file.seek(0)
+        resource = f"rgw://{bucket}/browser-upload"
+        claim, replay = begin_idempotent_mutation(
+            request,
+            idempotency_key=idempotency_key,
+            scope=resource,
+            method="POST",
+            resource=resource,
+            payload={
+                "client_id": client_id,
+                "prefix": prefix,
+                "mode": mode,
+                "relative_path": relative_path,
+                "filename": filename,
+                "content_type": file.content_type,
+                "size": size,
+            },
+            content_sha256=digest.hexdigest(),
+        )
+        if replay:
+            return replay
         decision = require_admission("PUT", size, request_id=request.state.request_id)
         mime = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         with reservation_lease(decision):
+            mark_idempotent_mutation_started(claim)
             result = upload_stream(file.file, size, filename, bucket, key, client_id, category, "web", mime, request_id=request.state.request_id, capacity_decision_id=decision.id)
         finish_reservation(decision, "success")
+        finish_idempotent_mutation(claim, result)
         return result
-    except (InvalidScopeError, CapacityRejected):
+    except CapacityRejected as exc:
+        if "claim" in locals():
+            fail_idempotent_mutation(claim, exc, error_code="CAPACITY_RETRYABLE", response_status=exc.status_code)
+        raise
+    except InvalidScopeError as exc:
+        if "claim" in locals():
+            fail_idempotent_mutation(claim, exc, retryable=False, error_code="INVALID_SCOPE", response_status=exc.status_code)
         raise
     except Exception as exc:
         if "decision" in locals():
@@ -416,6 +499,8 @@ def upload_browser(
                 finish_reservation(decision, "ambiguous")
             except Exception:
                 pass
+        if "claim" in locals():
+            fail_idempotent_mutation(claim, exc, retryable=False, error_code="AMBIGUOUS_EXTERNAL_RESULT")
         raise friendly_error(exc)
 
 
@@ -443,8 +528,12 @@ def list_objects(
     for item in response.get("Contents", []):
         key = item["Key"]
         parts = key.split("/")
-        parsed_client = parts[1] if len(parts) > 5 and parts[0] == "clients" else None
-        parsed_category = parts[3] if len(parts) > 5 and parts[0] == "clients" else None
+        try:
+            clients_index = parts.index("clients")
+        except ValueError:
+            clients_index = -1
+        parsed_client = parts[clients_index + 1] if clients_index >= 0 and len(parts) > clients_index + 3 else None
+        parsed_category = parts[clients_index + 3] if clients_index >= 0 and len(parts) > clients_index + 3 else None
         if client_id and parsed_client != client_id:
             continue
         if category and parsed_category != CATEGORY_ALIASES.get(category, category):
@@ -461,7 +550,7 @@ def list_objects(
         if end_time and modified > end_time:
             continue
         mime = mimetypes.guess_type(key)[0] or "application/octet-stream"
-        objects.append({"key": key, "client_id": parsed_client, "category": parsed_category, "extension": Path(key).suffix.lower().lstrip("."), "content_type": mime, "size": item["Size"], "last_modified": item["LastModified"], "etag": item["ETag"].strip('"'), "bucket": bucket, "prefix": str(Path(key).parent), "source": "external"})
+        objects.append({"key": key, "client_id": parsed_client, "category": parsed_category, "extension": PurePosixPath(key).suffix.lower().lstrip("."), "content_type": mime, "size": item["Size"], "last_modified": item["LastModified"], "etag": item["ETag"].strip('"'), "bucket": bucket, "prefix": str(PurePosixPath(key).parent), "source": "external"})
     if objects:
         keys = [row["key"] for row in objects]
         with connection() as conn:
@@ -565,21 +654,18 @@ async def put_object_content(
             return replay
         try:
             decision = await asyncio.to_thread(require_admission, "UPDATE", content_length, request_id=request.state.request_id)
-            with reservation_lease(decision):
-                result = await asyncio.to_thread(
-                    partial(
-                        exact_put,
-                        body,
-                        content_length,
-                        bucket,
-                        key,
+            def execute_put():
+                with reservation_lease(decision):
+                    mark_idempotent_mutation_started(claim)
+                    return exact_put(
+                        body, content_length, bucket, key,
                         content_type=content_type,
                         metadata={"sha256": digest.hexdigest(), "source": "web-exact"},
                         request_id=request.state.request_id,
                         capacity_decision_id=decision.id,
                         if_match=if_match,
                     )
-                )
+            result = await asyncio.to_thread(execute_put)
             await asyncio.to_thread(finish_reservation, decision, "success")
             result.update({"request_id": request.state.request_id, "capacity_decision": decision.to_dict()})
             await asyncio.to_thread(finish_idempotent_mutation, claim, result)
@@ -633,6 +719,7 @@ def update_object_metadata(
             request_id=request.state.request_id,
         )
         with reservation_lease(decision):
+            mark_idempotent_mutation_started(claim)
             result = replace_metadata(
                 update.bucket,
                 update.key,
@@ -687,6 +774,7 @@ def delete_object(
         else:
             capacity = require_cleanup_admission(request_id=request.state.request_id)
         with reservation_lease(capacity):
+            mark_idempotent_mutation_started(claim)
             result = delete_exact(bucket, key, version_id=version_id, request_id=request.state.request_id)
         finish_reservation(capacity, "success")
         result["hard_delete"] = bool(version_id) or versioning == "Disabled"
@@ -760,6 +848,7 @@ def bulk_delete_objects(
         with ExitStack() as reservation_stack:
             for decision in capacity_decisions:
                 reservation_stack.enter_context(reservation_lease(decision))
+            mark_idempotent_mutation_started(claim)
             for item in deletion.objects:
                 try:
                     result = delete_exact(deletion.bucket, item.key, version_id=item.version_id, request_id=request.state.request_id)
@@ -834,6 +923,8 @@ def object_versions(
             version_id_marker=version_marker,
             max_keys=max_keys,
         )
+        if key:
+            result["versions"] = [row for row in result["versions"] if row.get("key") == key]
         result["next_token"] = _encode_version_token(result.pop("next_key_marker"), result.pop("next_version_id_marker"))
         result["bucket_versioning"] = s3_client().get_bucket_versioning(Bucket=bucket).get("Status", "Disabled")
         return result

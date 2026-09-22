@@ -1,0 +1,505 @@
+
+[
+  {
+    "container_id": "e010b148f0b1",
+    "container_image_digests": [
+      "docker.io/prom/alertmanager@sha256:7e4e9f7a0954b45736d149c40e9620a6664036bb05f0dce447bef5042b139f5d"
+    ],
+    "container_image_id": "7e4e9f7a0954b45736d149c40e9620a6664036bb05f0dce447bef5042b139f5d",
+    "container_image_name": "docker.io/prom/alertmanager:v0.20.0",
+    "created": "2026-08-26T16:21:42.327133Z",
+    "daemon_id": "ceph-master",
+    "daemon_type": "alertmanager",
+    "hostname": "ceph-master",
+    "is_active": true,
+    "last_refresh": "2026-09-21T07:02:49.985524Z",
+    "memory_usage": 27619491,
+    "ports": [
+      9093,
+      9094
+    ],
+    "service_name": "alertmanager",
+    "started": "2026-09-21T06:41:25.519408Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "0.20.0"
+  },
+  {
+    "container_id": "208daeb38f2b",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:21:43.027128Z",
+    "daemon_id": "ceph-master",
+    "daemon_type": "crash",
+    "hostname": "ceph-master",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.986393Z",
+    "memory_usage": 8158969,
+    "ports": [],
+    "service_name": "crash",
+    "started": "2026-09-21T06:41:25.519011Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "83b4078618db",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:29:56.843117Z",
+    "daemon_id": "ceph-node2",
+    "daemon_type": "crash",
+    "hostname": "ceph-node2",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.806995Z",
+    "memory_usage": 10831790,
+    "ports": [],
+    "service_name": "crash",
+    "started": "2026-09-21T06:40:57.316471Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "537f7012765e",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:30:08.402392Z",
+    "daemon_id": "ceph-node3",
+    "daemon_type": "crash",
+    "hostname": "ceph-node3",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.594510Z",
+    "memory_usage": 12970885,
+    "ports": [],
+    "service_name": "crash",
+    "started": "2026-09-21T06:40:59.184641Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "debd4c697b32",
+    "container_image_digests": [
+      "docker.io/ceph/ceph-grafana@sha256:735418a6482666e19190b4b91c93d5c06e9d8c501166c3f24d5442f238ffacbf"
+    ],
+    "container_image_id": "735418a6482666e19190b4b91c93d5c06e9d8c501166c3f24d5442f238ffacbf",
+    "container_image_name": "docker.io/ceph/ceph-grafana:6.7.4",
+    "created": "2026-08-26T16:22:04.770961Z",
+    "daemon_id": "ceph-master",
+    "daemon_type": "grafana",
+    "hostname": "ceph-master",
+    "is_active": true,
+    "last_refresh": "2026-09-21T07:02:49.985682Z",
+    "memory_usage": 51170508,
+    "ports": [
+      3000
+    ],
+    "service_name": "grafana",
+    "started": "2026-09-21T06:41:25.500288Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "6.7.4"
+  },
+  {
+    "container_id": "b7138f588f50",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:20:52.403517Z",
+    "daemon_id": "ceph-master.ezhuly",
+    "daemon_type": "mgr",
+    "hostname": "ceph-master",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.985327Z",
+    "memory_usage": 415760384,
+    "ports": [
+      9283
+    ],
+    "service_name": "mgr",
+    "started": "2026-09-21T06:41:25.493109Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "5bec90b419c3",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:29:57.563112Z",
+    "daemon_id": "ceph-node2.fpgvro",
+    "daemon_type": "mgr",
+    "hostname": "ceph-node2",
+    "is_active": true,
+    "last_refresh": "2026-09-21T07:01:44.806753Z",
+    "memory_usage": 691535872,
+    "ports": [
+      8443,
+      9283
+    ],
+    "service_name": "mgr",
+    "started": "2026-09-21T06:40:57.316643Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "dfd1a10ae8e3",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:20:49.955536Z",
+    "daemon_id": "ceph-master",
+    "daemon_type": "mon",
+    "hostname": "ceph-master",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.986239Z",
+    "memory_request": 2147483648,
+    "memory_usage": 135266304,
+    "ports": [],
+    "service_name": "mon",
+    "started": "2026-09-21T06:41:25.524474Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "2ced2b195885",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:29:58.547104Z",
+    "daemon_id": "ceph-node2",
+    "daemon_type": "mon",
+    "hostname": "ceph-node2",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.806482Z",
+    "memory_request": 2147483648,
+    "memory_usage": 207198617,
+    "ports": [],
+    "service_name": "mon",
+    "started": "2026-09-21T06:40:57.316415Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "f8e33a917b79",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-26T16:30:09.370385Z",
+    "daemon_id": "ceph-node3",
+    "daemon_type": "mon",
+    "hostname": "ceph-node3",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.594613Z",
+    "memory_request": 2147483648,
+    "memory_usage": 113141350,
+    "ports": [],
+    "service_name": "mon",
+    "started": "2026-09-21T06:40:59.187933Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "e12ab3657213",
+    "container_image_digests": [
+      "docker.io/prom/node-exporter@sha256:a2f29256e53cc3e0b64d7a472512600b2e9410347d53cdc85b49f659c17e02ee"
+    ],
+    "container_image_id": "a2f29256e53cc3e0b64d7a472512600b2e9410347d53cdc85b49f659c17e02ee",
+    "container_image_name": "docker.io/prom/node-exporter:v0.18.1",
+    "created": "2026-08-26T16:22:05.266957Z",
+    "daemon_id": "ceph-master",
+    "daemon_type": "node-exporter",
+    "hostname": "ceph-master",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.986544Z",
+    "memory_usage": 18895339,
+    "ports": [
+      9100
+    ],
+    "service_name": "node-exporter",
+    "started": "2026-09-21T06:41:25.528197Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "0.18.1"
+  },
+  {
+    "container_id": "f9205a2f1fc2",
+    "container_image_digests": [
+      "docker.io/prom/node-exporter@sha256:a2f29256e53cc3e0b64d7a472512600b2e9410347d53cdc85b49f659c17e02ee"
+    ],
+    "container_image_id": "a2f29256e53cc3e0b64d7a472512600b2e9410347d53cdc85b49f659c17e02ee",
+    "container_image_name": "docker.io/prom/node-exporter:v0.18.1",
+    "created": "2026-08-26T16:29:59.071100Z",
+    "daemon_id": "ceph-node2",
+    "daemon_type": "node-exporter",
+    "hostname": "ceph-node2",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.807158Z",
+    "memory_usage": 17270046,
+    "ports": [
+      9100
+    ],
+    "service_name": "node-exporter",
+    "started": "2026-09-21T06:40:57.333078Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "0.18.1"
+  },
+  {
+    "container_id": "9740d0e67fa4",
+    "container_image_digests": [
+      "docker.io/prom/node-exporter@sha256:a2f29256e53cc3e0b64d7a472512600b2e9410347d53cdc85b49f659c17e02ee"
+    ],
+    "container_image_id": "a2f29256e53cc3e0b64d7a472512600b2e9410347d53cdc85b49f659c17e02ee",
+    "container_image_name": "docker.io/prom/node-exporter:v0.18.1",
+    "created": "2026-08-26T16:30:09.854382Z",
+    "daemon_id": "ceph-node3",
+    "daemon_type": "node-exporter",
+    "hostname": "ceph-node3",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.594559Z",
+    "memory_usage": 17144217,
+    "ports": [
+      9100
+    ],
+    "service_name": "node-exporter",
+    "started": "2026-09-21T06:40:59.204561Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "0.18.1"
+  },
+  {
+    "container_id": "9a450ab18194",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-27T03:27:46.268115Z",
+    "daemon_id": "0",
+    "daemon_type": "osd",
+    "hostname": "ceph-master",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.985784Z",
+    "memory_request": 4294967296,
+    "memory_usage": 255747686,
+    "osdspec_affinity": "None",
+    "ports": [],
+    "service_name": "osd",
+    "started": "2026-09-21T06:41:27.969843Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "2bdf2208dced",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-09-21T03:19:58.579230Z",
+    "daemon_id": "4",
+    "daemon_type": "osd",
+    "hostname": "ceph-master",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.986739Z",
+    "memory_request": 4294967296,
+    "memory_usage": 1037146521,
+    "osdspec_affinity": "None",
+    "ports": [],
+    "service_name": "osd",
+    "started": "2026-09-21T06:41:27.968889Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "3607e28cc448",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-27T03:27:58.797380Z",
+    "daemon_id": "1",
+    "daemon_type": "osd",
+    "hostname": "ceph-node2",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.807056Z",
+    "memory_request": 4294967296,
+    "memory_usage": 188429107,
+    "osdspec_affinity": "None",
+    "ports": [],
+    "service_name": "osd",
+    "started": "2026-09-21T06:41:01.458594Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "f9908ba5972e",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-09-21T03:19:30.395061Z",
+    "daemon_id": "3",
+    "daemon_type": "osd",
+    "hostname": "ceph-node2",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.806811Z",
+    "memory_request": 4294967296,
+    "memory_usage": 1107027820,
+    "osdspec_affinity": "None",
+    "ports": [],
+    "service_name": "osd",
+    "started": "2026-09-21T06:41:01.456165Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "d26a9968b0d4",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-08-27T03:28:10.361622Z",
+    "daemon_id": "2",
+    "daemon_type": "osd",
+    "hostname": "ceph-node3",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.594234Z",
+    "memory_request": 4294967296,
+    "memory_usage": 321807974,
+    "osdspec_affinity": "None",
+    "ports": [],
+    "service_name": "osd",
+    "started": "2026-09-21T06:41:02.304622Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "6daf911f8b39",
+    "container_image_digests": [
+      "docker.io/prom/prometheus@sha256:5880ec936055fad18ccee798d2a63f64ed85bd28e8e0af17c6923a090b686c3d"
+    ],
+    "container_image_id": "5880ec936055fad18ccee798d2a63f64ed85bd28e8e0af17c6923a090b686c3d",
+    "container_image_name": "docker.io/prom/prometheus:v2.18.1",
+    "created": "2026-08-26T16:22:15.278880Z",
+    "daemon_id": "ceph-master",
+    "daemon_type": "prometheus",
+    "hostname": "ceph-master",
+    "is_active": true,
+    "last_refresh": "2026-09-21T07:02:49.986642Z",
+    "memory_usage": 81243668,
+    "ports": [
+      9095
+    ],
+    "service_name": "prometheus",
+    "started": "2026-09-21T06:41:25.516413Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "2.18.1"
+  },
+  {
+    "container_id": "21fd66d8001c",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-09-03T08:27:27.836904Z",
+    "daemon_id": "lab.ceph-master.mmsntl",
+    "daemon_type": "rgw",
+    "hostname": "ceph-master",
+    "ip": "10.20.20.11",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:02:49.984989Z",
+    "memory_usage": 55427727,
+    "ports": [
+      8080
+    ],
+    "service_name": "rgw.lab",
+    "started": "2026-09-21T06:41:25.502640Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "5ee279d9627f",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-09-03T08:27:28.799365Z",
+    "daemon_id": "lab.ceph-node2.dphdvf",
+    "daemon_type": "rgw",
+    "hostname": "ceph-node2",
+    "ip": "10.20.20.12",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.806683Z",
+    "memory_usage": 54735667,
+    "ports": [
+      8080
+    ],
+    "service_name": "rgw.lab",
+    "started": "2026-09-21T06:40:57.316572Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  },
+  {
+    "container_id": "06d4eb562c6d",
+    "container_image_digests": [
+      "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59"
+    ],
+    "container_image_id": "3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "container_image_name": "docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59",
+    "created": "2026-09-03T08:27:29.613648Z",
+    "daemon_id": "lab.ceph-node3.jntpop",
+    "daemon_type": "rgw",
+    "hostname": "ceph-node3",
+    "ip": "10.20.20.13",
+    "is_active": false,
+    "last_refresh": "2026-09-21T07:01:44.594588Z",
+    "memory_usage": 56308531,
+    "ports": [
+      8080
+    ],
+    "service_name": "rgw.lab",
+    "started": "2026-09-21T06:40:59.182694Z",
+    "status": 1,
+    "status_desc": "running",
+    "version": "16.2.5"
+  }
+]

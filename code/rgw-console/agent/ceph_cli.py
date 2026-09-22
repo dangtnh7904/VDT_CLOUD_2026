@@ -13,7 +13,8 @@ from uuid import UUID
 from . import AGENT_VERSION
 from .config import AgentConfig
 from .errors import AgentError
-from .protocol import PROTOCOL_VERSION
+from .protocol import PROTOCOL_VERSION, validate_action_params
+from .rbd import RBD_ACTIONS, RBD_ACTION_SCHEMAS, RbdActionRunner
 
 
 INVENTORY_COMMANDS: dict[str, tuple[str, tuple[str, ...], str]] = {
@@ -35,7 +36,14 @@ INVENTORY_COMMANDS: dict[str, tuple[str, tuple[str, ...], str]] = {
 }
 
 CONTROL_ACTIONS = frozenset({"health", "capabilities"})
-ALLOWED_ACTIONS = frozenset(INVENTORY_COMMANDS) | CONTROL_ACTIONS
+ALLOWED_ACTIONS = frozenset(INVENTORY_COMMANDS) | CONTROL_ACTIONS | RBD_ACTIONS
+ACTION_SCHEMAS: dict[str, dict[str, dict[str, str]]] = {
+    **{
+        action: {"required": {}, "optional": {}}
+        for action in frozenset(INVENTORY_COMMANDS) | CONTROL_ACTIONS
+    },
+    **RBD_ACTION_SCHEMAS,
+}
 
 _SENSITIVE_FIELD = re.compile(
     r"^(?:key|secret|secret_key|access_key|password|token|credential|"
@@ -85,29 +93,41 @@ class CephInventoryRunner:
             for name in ("SYSTEMROOT", "WINDIR", "COMSPEC"):
                 if name in os.environ:
                     self._environment[name] = os.environ[name]
+        self._rbd_actions: RbdActionRunner | None = None
 
     @property
     def allowed_actions(self) -> frozenset[str]:
         return ALLOWED_ACTIONS
 
+    @property
+    def action_schemas(self) -> dict[str, dict[str, dict[str, str]]]:
+        return ACTION_SCHEMAS
+
     def dispatch(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         if action not in ALLOWED_ACTIONS:
             raise AgentError("ACTION_NOT_ALLOWED", "The requested action is not allowed")
-        if params:
-            raise AgentError(
-                "INVALID_PARAMS",
-                "Read-only inventory actions do not accept parameters",
-            )
+        validate_action_params(action, params, ACTION_SCHEMAS)
 
         observed_fsid = self._assert_expected_fsid()
         collected_at = datetime.now(timezone.utc).isoformat()
+
+        if action in RBD_ACTIONS:
+            if self._rbd_actions is None:
+                self._rbd_actions = RbdActionRunner(self.config, self._invoke, self._argv)
+            result = self._rbd_actions.dispatch(action, params)
+            return {
+                "fsid": observed_fsid,
+                "action": action,
+                "data": result,
+                "collected_at": collected_at,
+            }
 
         if action == "health":
             return {
                 "status": "ok",
                 "agent_version": AGENT_VERSION,
                 "protocol_version": PROTOCOL_VERSION,
-                "read_only": True,
+                "read_only": False,
                 "fsid": observed_fsid,
                 "collected_at": collected_at,
             }
@@ -116,9 +136,13 @@ class CephInventoryRunner:
             return {
                 "agent_version": AGENT_VERSION,
                 "protocol_version": PROTOCOL_VERSION,
-                "read_only": True,
+                "read_only": False,
                 "fsid": observed_fsid,
                 "actions": sorted(ALLOWED_ACTIONS),
+                "action_schemas": ACTION_SCHEMAS,
+                "rbd_scope": RbdActionRunner(
+                    self.config, self._invoke, self._argv
+                ).capability_scope(),
                 "collected_at": collected_at,
             }
 
@@ -187,13 +211,13 @@ class CephInventoryRunner:
         except FileNotFoundError as exc:
             raise AgentError(
                 "COMMAND_NOT_FOUND",
-                "A required Ceph inventory executable was not found",
+                "A required host-agent executable was not found",
                 details={"action": action},
             ) from exc
         except OSError as exc:
             raise AgentError(
                 "COMMAND_START_FAILED",
-                "Could not start a Ceph inventory command",
+                "Could not start a host-agent command",
                 retryable=True,
                 details={"action": action},
             ) from exc
@@ -254,7 +278,7 @@ class CephInventoryRunner:
             stderr = bytes(buffers["stderr"]).decode("utf-8", errors="replace")
             raise AgentError(
                 "COMMAND_TIMEOUT",
-                "Ceph inventory command timed out",
+                "Host-agent command timed out",
                 retryable=True,
                 details={"action": action, "stderr": self._safe_excerpt(stderr)},
             ) from exc
@@ -264,7 +288,7 @@ class CephInventoryRunner:
         if output_limit_hit.is_set():
             raise AgentError(
                 "COMMAND_OUTPUT_LIMIT",
-                "Ceph inventory command exceeded the configured output limit",
+                "Host-agent command exceeded the configured output limit",
                 details={
                     "action": action,
                     "output_bytes": self.config.max_command_output_bytes + 1,
@@ -274,7 +298,7 @@ class CephInventoryRunner:
         if reader_failed.is_set() or any(reader.is_alive() for reader in readers):
             raise AgentError(
                 "COMMAND_READ_FAILED",
-                "Could not safely read Ceph inventory command output",
+                "Could not safely read host-agent command output",
                 retryable=True,
                 details={"action": action},
             )
@@ -286,7 +310,7 @@ class CephInventoryRunner:
         if returncode != 0:
             raise AgentError(
                 "COMMAND_FAILED",
-                "Ceph inventory command failed",
+                "Host-agent command failed",
                 retryable=True,
                 details={
                     "action": action,

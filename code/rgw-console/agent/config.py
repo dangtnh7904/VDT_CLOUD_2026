@@ -13,6 +13,7 @@ class AgentConfigError(ValueError):
 
 
 _SAFE_ENTITY = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SAFE_SCOPE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _positive_int(name: str, default: str) -> int:
@@ -77,6 +78,36 @@ def _socket_mode() -> int:
     return mode
 
 
+def _csv_allowlist(
+    name: str,
+    default: str,
+    *,
+    allow_default_namespace: bool = False,
+) -> frozenset[str]:
+    """Parse a mandatory, deliberately narrow agent-side allowlist.
+
+    The token ``@default`` represents the empty RBD namespace.  Empty CSV
+    elements are ignored so a typo such as a trailing comma cannot silently
+    enable the default namespace.
+    """
+
+    raw = os.environ.get(name, default)
+    values: set[str] = set()
+    for item in raw.split(","):
+        value = item.strip()
+        if not value:
+            continue
+        if allow_default_namespace and value == "@default":
+            values.add("")
+            continue
+        if not _SAFE_SCOPE.fullmatch(value):
+            raise AgentConfigError(f"{name} contains an unsupported value")
+        values.add(value)
+    if not values:
+        raise AgentConfigError(f"{name} must contain at least one value")
+    return frozenset(values)
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     expected_fsid: str
@@ -90,6 +121,21 @@ class AgentConfig:
     client_entity: str
     ceph_binary: Path
     rbd_binary: Path
+    wipefs_binary: Path
+    blkid_binary: Path
+    mkfs_ext4_binary: Path
+    mount_binary: Path
+    umount_binary: Path
+    sync_binary: Path
+    rbd_allowed_pools: frozenset[str]
+    rbd_allowed_namespaces: frozenset[str]
+    rbd_allowed_image_prefixes: frozenset[str]
+    rbd_mount_root: Path
+    rbd_state_root: Path
+    sysfs_root: Path
+    proc_mountinfo_path: Path
+    rbd_min_size_bytes: int
+    rbd_max_size_bytes: int
     command_timeout_seconds: float
     client_timeout_seconds: float
     max_command_output_bytes: int
@@ -115,6 +161,26 @@ class AgentConfig:
             raise AgentConfigError("CEPH_AGENT_SOCKET is too long for a Unix socket")
 
         socket_group = os.environ.get("CEPH_AGENT_SOCKET_GROUP", "rgw-console").strip()
+        mount_root = _absolute_path("CEPH_RBD_MOUNT_ROOT", "/srv/ceph-lab/rbd")
+        state_root = _absolute_path(
+            "CEPH_RBD_STATE_ROOT", "/var/lib/rgw-console-agent"
+        )
+        if str(mount_root) in {"/", "\\"}:
+            raise AgentConfigError("CEPH_RBD_MOUNT_ROOT must not be a filesystem root")
+        if mount_root == state_root:
+            raise AgentConfigError(
+                "CEPH_RBD_STATE_ROOT must be separate from CEPH_RBD_MOUNT_ROOT"
+            )
+        min_size = _positive_int(
+            "CEPH_RBD_MIN_SIZE_BYTES", str(16 * 1024 * 1024)
+        )
+        max_size = _positive_int(
+            "CEPH_RBD_MAX_SIZE_BYTES", str(1024 * 1024 * 1024 * 1024)
+        )
+        if min_size > max_size:
+            raise AgentConfigError(
+                "CEPH_RBD_MIN_SIZE_BYTES must not exceed CEPH_RBD_MAX_SIZE_BYTES"
+            )
 
         return cls(
             expected_fsid=_expected_fsid(),
@@ -130,6 +196,33 @@ class AgentConfig:
             client_entity=client_entity,
             ceph_binary=_absolute_path("CEPH_BINARY", "/usr/bin/ceph"),
             rbd_binary=_absolute_path("RBD_BINARY", "/usr/bin/rbd"),
+            wipefs_binary=_absolute_path("WIPEFS_BINARY", "/usr/sbin/wipefs"),
+            blkid_binary=_absolute_path("BLKID_BINARY", "/usr/sbin/blkid"),
+            mkfs_ext4_binary=_absolute_path(
+                "MKFS_EXT4_BINARY", "/usr/sbin/mkfs.ext4"
+            ),
+            mount_binary=_absolute_path("MOUNT_BINARY", "/usr/bin/mount"),
+            umount_binary=_absolute_path("UMOUNT_BINARY", "/usr/bin/umount"),
+            sync_binary=_absolute_path("SYNC_BINARY", "/usr/bin/sync"),
+            rbd_allowed_pools=_csv_allowlist(
+                "CEPH_RBD_ALLOWED_POOLS", "rbd-lab"
+            ),
+            rbd_allowed_namespaces=_csv_allowlist(
+                "CEPH_RBD_ALLOWED_NAMESPACES",
+                "@default",
+                allow_default_namespace=True,
+            ),
+            rbd_allowed_image_prefixes=_csv_allowlist(
+                "CEPH_RBD_ALLOWED_IMAGE_PREFIXES", "lab-"
+            ),
+            rbd_mount_root=mount_root,
+            rbd_state_root=state_root,
+            sysfs_root=_absolute_path("CEPH_AGENT_SYSFS_ROOT", "/sys"),
+            proc_mountinfo_path=_absolute_path(
+                "CEPH_AGENT_MOUNTINFO_PATH", "/proc/self/mountinfo"
+            ),
+            rbd_min_size_bytes=min_size,
+            rbd_max_size_bytes=max_size,
             command_timeout_seconds=_positive_float(
                 "CEPH_AGENT_COMMAND_TIMEOUT_SECONDS", "15"
             ),

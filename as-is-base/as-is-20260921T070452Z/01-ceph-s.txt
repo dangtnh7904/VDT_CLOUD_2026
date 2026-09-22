@@ -1,0 +1,16 @@
+  cluster:
+    id:     17c77e12-a16a-11f1-838e-cf68e9c001d8
+    health: HEALTH_OK
+ 
+  services:
+    mon: 3 daemons, quorum ceph-master,ceph-node2,ceph-node3 (age 23m)
+    mgr: ceph-node2.fpgvro(active, since 23m), standbys: ceph-master.ezhuly
+    osd: 5 osds: 5 up (since 23m), 5 in (since 3h)
+    rgw: 3 daemons active (3 hosts, 1 zones)
+ 
+  data:
+    pools:   9 pools, 233 pgs
+    objects: 1.30k objects, 4.0 GiB
+    usage:   12 GiB used, 137 GiB / 150 GiB avail
+    pgs:     233 active+clean
+ 

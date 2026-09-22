@@ -180,7 +180,11 @@ class UnixAgentServer:
 
             request_id: str | None = None
             try:
-                request = decode_request(raw[:-1], self.runner.allowed_actions)
+                request = decode_request(
+                    raw[:-1],
+                    self.runner.allowed_actions,
+                    self.runner.action_schemas,
+                )
                 request_id = request.request_id
                 LOGGER.info("request_id=%s action=%s", request_id, request.action)
                 result = self.runner.dispatch(request.action, request.params)

@@ -1,0 +1,48 @@
+epoch 792
+fsid 17c77e12-a16a-11f1-838e-cf68e9c001d8
+created 2026-08-26T16:20:50.158188+0000
+modified 2026-09-21T06:41:38.739829+0000
+flags sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit
+crush_version 29
+full_ratio 0.95
+backfillfull_ratio 0.9
+nearfull_ratio 0.85
+require_min_compat_client luminous
+min_compat_client jewel
+require_osd_release pacific
+stretch_mode_enabled false
+pool 1 'device_health_metrics' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 1 pgp_num 1 autoscale_mode on last_change 786 flags hashpspool stripe_width 0 pg_num_min 1 application mgr_devicehealth
+pool 2 'volumes_hdd' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 70 flags hashpspool,selfmanaged_snaps stripe_width 0 application rbd
+pool 3 '.rgw.root' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 88 flags hashpspool stripe_width 0 application rgw
+pool 4 'default.rgw.log' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 90 flags hashpspool stripe_width 0 application rgw
+pool 5 'default.rgw.control' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 92 flags hashpspool stripe_width 0 application rgw
+pool 6 'default.rgw.meta' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 8 pgp_num 8 autoscale_mode on last_change 213 lfor 0/213/211 flags hashpspool stripe_width 0 pg_autoscale_bias 4 pg_num_min 8 application rgw
+pool 7 'default.rgw.lab.data' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 228 lfor 0/0/226 flags hashpspool stripe_width 0 application rgw
+pool 8 'default.rgw.lab.index' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 247 lfor 0/0/245 flags hashpspool stripe_width 0 application rgw
+pool 9 'default.rgw.lab.data-extra' replicated size 3 min_size 2 crush_rule 0 object_hash rjenkins pg_num 32 pgp_num 32 autoscale_mode on last_change 247 lfor 0/0/245 flags hashpspool stripe_width 0 application rgw
+max_osd 5
+osd.0 up   in  weight 1 up_from 788 up_thru 788 down_at 782 last_clean_interval [554,778) [v2:10.20.20.11:6800/685446158,v1:10.20.20.11:6801/685446158] [v2:10.20.30.11:6802/685446158,v1:10.20.30.11:6803/685446158] exists,up a88dcc78-41b0-4040-943c-c99611baa717
+osd.1 up   in  weight 1 up_from 782 up_thru 791 down_at 781 last_clean_interval [549,778) [v2:10.20.20.12:6804/3491331589,v1:10.20.20.12:6806/3491331589] [v2:10.20.30.12:6808/3491331589,v1:10.20.30.12:6811/3491331589] exists,up f37bbab4-f016-4238-923e-e86ad32a6c5d
+osd.2 up   in  weight 1 up_from 781 up_thru 791 down_at 780 last_clean_interval [549,778) [v2:10.20.20.13:6800/205861418,v1:10.20.20.13:6801/205861418] [v2:10.20.30.13:6802/205861418,v1:10.20.30.13:6803/205861418] exists,up faf9d257-3671-4a1a-a260-db6d55c30966
+osd.3 up   in  weight 1 up_from 784 up_thru 791 down_at 783 last_clean_interval [608,778) [v2:10.20.20.12:6800/2557797821,v1:10.20.20.12:6801/2557797821] [v2:10.20.30.12:6802/2557797821,v1:10.20.30.12:6803/2557797821] exists,up 3be90b5f-9aa5-488c-8c75-63620518f675
+osd.4 up   in  weight 1 up_from 791 up_thru 791 down_at 782 last_clean_interval [617,778) [v2:10.20.20.11:6808/1538625704,v1:10.20.20.11:6809/1538625704] [v2:10.20.30.11:6810/1538625704,v1:10.20.30.11:6811/1538625704] exists,up 41498034-beac-45e1-8228-0ae29ff712f5
+blocklist 10.20.20.12:6817/4000835319 expires 2026-09-22T06:41:12.543411+0000
+blocklist 10.20.20.12:6816/4000835319 expires 2026-09-22T06:41:12.543411+0000
+blocklist 10.20.20.12:0/3677245848 expires 2026-09-22T06:41:12.543411+0000
+blocklist 10.20.20.12:0/2908222568 expires 2026-09-22T06:41:12.543411+0000
+blocklist 10.20.20.12:0/2284517435 expires 2026-09-22T03:12:37.965081+0000
+blocklist 10.20.20.12:0/651973714 expires 2026-09-22T04:23:26.084495+0000
+blocklist 10.20.20.12:6808/1176600612 expires 2026-09-22T03:12:37.965081+0000
+blocklist 10.20.20.12:0/2060523837 expires 2026-09-22T03:12:30.075999+0000
+blocklist 10.20.20.11:0/2591992189 expires 2026-09-22T03:45:17.435810+0000
+blocklist 10.20.20.12:6809/1176600612 expires 2026-09-22T03:12:37.965081+0000
+blocklist 10.20.20.12:0/3202435147 expires 2026-09-22T03:12:30.075999+0000
+blocklist 10.20.20.11:6808/208799321 expires 2026-09-22T03:45:17.435810+0000
+blocklist 10.20.20.11:6809/208799321 expires 2026-09-22T03:45:17.435810+0000
+blocklist 10.20.20.12:6817/1458360693 expires 2026-09-22T04:23:26.084495+0000
+blocklist 10.20.20.12:6816/1458360693 expires 2026-09-22T04:23:26.084495+0000
+blocklist 10.20.20.12:6808/739348449 expires 2026-09-22T03:12:30.075999+0000
+blocklist 10.20.20.12:0/1312086682 expires 2026-09-22T04:23:26.084495+0000
+blocklist 10.20.20.12:6809/739348449 expires 2026-09-22T03:12:30.075999+0000
+blocklist 10.20.20.11:0/724178341 expires 2026-09-22T03:45:17.435810+0000
+blocklist 10.20.20.12:0/960056779 expires 2026-09-22T03:12:37.965081+0000

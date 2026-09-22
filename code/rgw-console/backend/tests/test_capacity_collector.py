@@ -1,9 +1,14 @@
 import os
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
+
+import psycopg
+from psycopg.rows import dict_row
 
 
 os.environ.setdefault("RGW_ENDPOINT_URL", "http://127.0.0.1:8080")
@@ -15,6 +20,7 @@ from app.services.capacity_collector import (  # noqa: E402
     collect_capacity_once,
     evaluate_settlement_evidence,
     parse_ceph_inventory,
+    store_capacity_inventory,
 )
 
 
@@ -406,6 +412,45 @@ class SettlementEvidenceTests(unittest.TestCase):
             maximum_age_seconds=5,
         )
         self.assertFalse(sufficient)
+
+
+@unittest.skipUnless(
+    os.environ.get("TEST_DATABASE_URL"),
+    "set TEST_DATABASE_URL to run PostgreSQL collector persistence tests",
+)
+class CapacityPersistenceIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = psycopg.connect(os.environ["TEST_DATABASE_URL"], row_factory=dict_row)
+        # Start an outer transaction. store_capacity_inventory uses a nested
+        # transaction/savepoint, and tearDown rolls the complete test fixture back.
+        self.conn.execute("SELECT 1")
+
+    def tearDown(self):
+        self.conn.rollback()
+        self.conn.close()
+
+    def test_inventory_and_per_osd_rows_are_stored_atomically(self):
+        inventory = replace(
+            parse(),
+            fsid=str(uuid4()),
+            captured_at=datetime.now(timezone.utc),
+        )
+
+        result = store_capacity_inventory(inventory, db_conn=self.conn)
+
+        snapshot = self.conn.execute(
+            "SELECT * FROM capacity_snapshots WHERE id=%s",
+            (result["snapshot_id"],),
+        ).fetchone()
+        rows = self.conn.execute(
+            "SELECT * FROM capacity_osds WHERE snapshot_id=%s ORDER BY osd_id",
+            (result["snapshot_id"],),
+        ).fetchall()
+        self.assertEqual(snapshot["fsid"], inventory.fsid)
+        self.assertTrue(snapshot["fresh"])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["scope_metadata"]["pool_ids"], {"rgw.data": 7})
+        self.assertEqual(result["osd_count"], 3)
 
 
 if __name__ == "__main__":

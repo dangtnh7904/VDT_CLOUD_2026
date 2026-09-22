@@ -20,8 +20,24 @@ READ_ONLY_ACTIONS = frozenset(
         "ceph.osd_tree",
         "ceph.pool_ls_detail",
         "ceph.crush_rule_dump",
+        "rbd.pool.list",
+        "rbd.image.list",
+        "rbd.image.info",
+        "rbd.device.list",
     }
 )
+MUTATION_ACTIONS = frozenset(
+    {
+        "rbd.image.create",
+        "rbd.image.map",
+        "rbd.device.format_ext4",
+        "rbd.device.mount",
+        "rbd.device.unmount",
+        "rbd.device.unmap",
+        "rbd.image.remove",
+    }
+)
+ALLOWED_ACTIONS = READ_ONLY_ACTIONS | MUTATION_ACTIONS
 
 
 class RbdAgentClientError(RuntimeError):
@@ -41,7 +57,7 @@ class RbdAgentClientError(RuntimeError):
 
 
 class RbdAgentClient:
-    """Small JSON-lines client for the read-only Unix-socket host agent."""
+    """Bounded JSON-lines client for the allowlisted Unix-socket host agent."""
 
     def __init__(
         self,
@@ -104,20 +120,69 @@ class RbdAgentClient:
     def ceph_crush_rule_dump(self) -> dict[str, Any]:
         return self.request("ceph.crush_rule_dump")
 
-    def request(self, action: str) -> dict[str, Any]:
-        if action not in READ_ONLY_ACTIONS:
+    def rbd_pool_list(self) -> dict[str, Any]:
+        return self.request("rbd.pool.list")
+
+    def rbd_image_list(self, *, pool: str, namespace: str = "") -> dict[str, Any]:
+        return self.request("rbd.image.list", {"pool": pool, "namespace": namespace})
+
+    def rbd_image_info(
+        self, *, pool: str, image_name: str, namespace: str = ""
+    ) -> dict[str, Any]:
+        return self.request(
+            "rbd.image.info",
+            {"pool": pool, "namespace": namespace, "image_name": image_name},
+        )
+
+    def rbd_device_list(self) -> dict[str, Any]:
+        return self.request("rbd.device.list")
+
+    def mutate(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
+        if action not in MUTATION_ACTIONS:
             raise RbdAgentClientError(
                 "ACTION_NOT_ALLOWED",
-                "The client only supports read-only host-agent actions",
+                "The requested host-agent mutation is not allowlisted",
             )
+        try:
+            UUID(str(params.get("volume_id")))
+            UUID(str(params.get("action_id")))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("mutation volume_id and action_id must be UUIDs") from exc
+        fence_token = params.get("fence_token")
+        if isinstance(fence_token, bool) or not isinstance(fence_token, int) or fence_token < 1:
+            raise ValueError("mutation fence_token must be a positive integer")
+        return self.request(action, params)
 
-        request_id = str(uuid4())
+    def request(
+        self,
+        action: str,
+        params: dict[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if action not in ALLOWED_ACTIONS:
+            raise RbdAgentClientError(
+                "ACTION_NOT_ALLOWED",
+                "The requested host-agent action is not allowlisted",
+            )
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            raise TypeError("host-agent params must be a JSON object")
+
+        if request_id is None:
+            request_id = str(uuid4())
+        else:
+            try:
+                request_id = str(UUID(request_id))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("request_id must be a UUID") from exc
         request = json.dumps(
             {
                 "version": PROTOCOL_VERSION,
                 "request_id": request_id,
                 "action": action,
-                "params": {},
+                "params": params,
             },
             separators=(",", ":"),
         ).encode("utf-8") + b"\n"
