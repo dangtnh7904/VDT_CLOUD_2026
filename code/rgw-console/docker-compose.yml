@@ -1,0 +1,94 @@
+x-backend-build: &backend-build
+  context: ./backend
+  network: host
+
+x-backend-environment: &backend-environment
+  DATABASE_URL: ${DOCKER_DATABASE_URL:?Set DOCKER_DATABASE_URL to a PostgreSQL URL reachable from Docker}
+  CORPUS_MIXED_ROOT: /data/mix-file-corpus
+  CORPUS_SIZE_ROOT: /data/size-file-corpus
+
+x-host-database: &host-database
+  - "host.docker.internal:host-gateway"
+
+services:
+  # Disabled by default. The normal stack connects to PostgreSQL on the host.
+  postgres:
+    profiles: ["bundled-db"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${BUNDLED_POSTGRES_USER:-rgw}
+      POSTGRES_PASSWORD: ${BUNDLED_POSTGRES_PASSWORD:-}
+      POSTGRES_DB: ${BUNDLED_POSTGRES_DB:-rgw_console}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: *backend-build
+    command: ["python", "-m", "app.migrate", "--wait-seconds", "60"]
+    env_file: .env
+    environment: *backend-environment
+    extra_hosts: *host-database
+    restart: "no"
+
+  backend:
+    build: *backend-build
+    env_file: .env
+    environment: *backend-environment
+    extra_hosts: *host-database
+    volumes:
+      - ../data:/data:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build: *backend-build
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    environment: *backend-environment
+    extra_hosts: *host-database
+    volumes:
+      - ../data:/data:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+  # Opt in only on a Linux host where the read-only ceph-host-agent socket is
+  # available. The collector never receives a Ceph keyring or Ceph CLI binary.
+  capacity-collector:
+    profiles: ["ceph-collector"]
+    build: *backend-build
+    command: ["python", "-m", "app.capacity_collector"]
+    env_file: .env
+    environment: *backend-environment
+    extra_hosts: *host-database
+    volumes:
+      - ${CEPH_AGENT_SOCKET_DIR:-/run/rgw-console}:/run/rgw-console
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      network: host
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
