@@ -42,6 +42,7 @@ services:
     extra_hosts: *host-database
     volumes:
       - ../data:/data:ro
+      - ${CEPH_AGENT_SOCKET_DIR:-./runtime}:/run/rgw-console
     ports:
       - "8000:8000"
     depends_on:
@@ -64,8 +65,19 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # Opt in only on a Linux host where the read-only ceph-host-agent socket is
-  # available. The collector never receives a Ceph keyring or Ceph CLI binary.
+  performance-collector:
+    build: *backend-build
+    command: ["python", "-m", "app.performance_collector"]
+    env_file: .env
+    environment: *backend-environment
+    extra_hosts: *host-database
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Opt in only on a Linux host where the ceph-host-agent socket is available.
+  # The collector invokes only the read-only inventory subset.
   capacity-collector:
     profiles: ["ceph-collector"]
     build: *backend-build
@@ -74,10 +86,26 @@ services:
     environment: *backend-environment
     extra_hosts: *host-database
     volumes:
-      - ${CEPH_AGENT_SOCKET_DIR:-/run/rgw-console}:/run/rgw-console
+      - ${CEPH_AGENT_SOCKET_DIR:-./runtime}:/run/rgw-console
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  rbd-lifecycle-worker:
+    profiles: ["ceph-rbd"]
+    build: *backend-build
+    command: ["python", "-m", "app.rbd_lifecycle_worker"]
+    env_file: .env
+    environment: *backend-environment
+    extra_hosts: *host-database
+    volumes:
+      - ${CEPH_AGENT_SOCKET_DIR:-./runtime}:/run/rgw-console
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
     restart: unless-stopped
 
   frontend:

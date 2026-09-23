@@ -8,7 +8,7 @@
 
 ## 1. Mục tiêu
 
-Mở rộng console RGW hiện có thành một **Storage Lab Console** có ba nhóm chức năng dùng chung một cơ chế kiểm soát dung lượng:
+Mở rộng console RGW hiện có thành một **Storage Lab Console** có bốn nhóm chức năng dùng chung một cơ chế kiểm soát dung lượng:
 
 1. **RGW Object Console**
    - Xem danh sách bucket và object.
@@ -30,6 +30,12 @@ Mở rộng console RGW hiện có thành một **Storage Lab Console** có ba n
    - Đây không phải invariant vật lý mà polling có thể bảo đảm khi Ceph đang recovery/backfill, OSDMap đổi hoặc có writer ngoài ledger; các trường hợp đó phải pause mutation và báo breach nếu OSD vẫn vượt 70%.
    - Khi gần hoặc vượt ngưỡng, ưu tiên thao tác đọc và cleanup đã được phân loại/đặt maintenance budget.
 
+4. **Performance Monitor**
+   - Hiển thị IOPS đọc/ghi/tổng, throughput đọc/ghi/tổng và latency hiện tại của cluster Ceph.
+   - Cho phép xem lịch sử ngắn theo cluster, participating OSD và pool khi nguồn telemetry thực sự cung cấp đúng scope.
+   - Hiển thị riêng số liệu workload do console tạo; không gắn nhãn số request của ứng dụng là IOPS vật lý của cluster.
+   - Công bố nguồn, cửa sổ lấy mẫu, độ mới và trạng thái reset/mất mẫu trên mọi biểu đồ.
+
 Đây là công cụ **lab-only, quyền cao**. Không triển khai hệ thống login/RBAC trong MVP. Tuy nhiên, vẫn phải giới hạn pool, bucket, image prefix và mount root để một lỗi phần mềm không format hoặc xóa nhầm tài nguyên ngoài phạm vi bài thử.
 
 ## 2. Kết quả cần đạt
@@ -44,6 +50,7 @@ MVP được coi là hoàn thành khi đáp ứng đồng thời các điều ki
 - Khi telemetry thiếu/cũ hoặc dự báo thao tác kế tiếp có thể vượt trần, thao tác tăng dung lượng bị chặn. `GET`, `HEAD`, `LIST`, hard-delete exact version/unversioned cleanup, `unmount` và `remove` được ưu tiên nhưng vẫn phải chừa maintenance metadata budget và tuân theo khả năng thực tế của cluster.
 - Worker/agent restart không làm lặp `rbd create`, format lại filesystem, map trùng hoặc xóa nhầm volume.
 - Dashboard hiển thị được OSD đầy nhất, participating OSD, reservation, trạng thái guard và nguyên nhân job bị pause.
+- Dashboard hiển thị IOPS/throughput đọc-ghi hiện tại, latency và lịch sử ngắn; phân biệt rõ telemetry `application`, `ceph` và `device` (nếu có).
 - Không có secret/keyring/access key bị ghi vào operation log, API response hoặc tài liệu.
 
 ## 3. Phạm vi MVP và ngoài phạm vi
@@ -58,6 +65,7 @@ MVP được coi là hoàn thành khi đáp ứng đồng thời các điều ki
 - Một RBD image chỉ có một client RW tại một thời điểm.
 - Bucket/versioning được phát hiện và hiển thị rõ.
 - Streaming workload do chính console tạo.
+- Theo dõi IOPS, throughput và latency gần thời gian thực; số liệu Ceph lấy từ endpoint metrics read-only hoặc adapter đã được capability-test trên Pacific 16.2.5.
 - PostgreSQL là state store và journal của console.
 - SSE cho telemetry và trạng thái job theo thời gian gần thực.
 
@@ -215,11 +223,12 @@ FastAPI API                                                       │
   ├── RGW router ─── boto3/Admin adapter ─── Ceph RGW             │
   ├── RBD router ─── Unix socket ─── ceph-host-agent ─── RBD/ext4 │
   ├── Capacity API ────────────────────────┐                       │
+  ├── Performance API ── metrics adapter ──┼── Ceph mgr/Prometheus│
   ├── Job API                              │                       │
   └── Metrics/Event API                    │                       │
           │                                │                       │
           ▼                                ▼                       │
-      PostgreSQL ◄── CRUD worker     Capacity collector ── Ceph CLI
+      PostgreSQL ◄── CRUD worker     Collectors ── Ceph CLI/metrics
 ```
 
 ### 6.1. Thành phần backend đề xuất
@@ -233,11 +242,14 @@ backend/app/
     rgw.py
     jobs.py
     capacity.py
+    performance.py
     rbd.py
   services/
     rgw_service.py
     capacity_guard.py
     capacity_collector.py
+    performance_collector.py
+    performance_service.py
     reservation_service.py
     rbd_agent_client.py
     job_service.py
@@ -742,6 +754,14 @@ Thêm các trường:
 - State/reason, participating OSD, projected ratios và decision ADMIT/THROTTLE/BLOCK.
 - Liên kết các reservation tạo ra bởi decision.
 
+#### `performance_samples`
+
+- `fsid`, `source`, `scope_type`, `scope_id`, `captured_at`, `window_seconds` và collector version.
+- Read/write/total IOPS; read/write/total bytes-per-second; latency fields chỉ lưu khi nguồn cung cấp đúng semantics.
+- `fresh`, `reset_detected`, `partial` và metadata/capability để UI không biến mất mẫu thành số 0.
+- Unique theo source/scope/timestamp/window; index theo `(fsid, source, scope_type, scope_id, captured_at)`.
+- Raw sample giữ mặc định 24 giờ; rollup 1 phút giữ mặc định 30 ngày. Retention phải cấu hình được và cleanup theo batch.
+
 #### `idempotency_requests`
 
 - Scope/actor, `Idempotency-Key`, HTTP method/resource và canonical request fingerprint.
@@ -777,7 +797,7 @@ Thêm các trường:
 
 Claim job phải atomic. Worker khác chỉ được takeover khi lease hết hạn và sau bước reconcile. Mọi heartbeat, state/counter update, reservation và pre-operation admission phải kèm đúng `lease_owner + lease_generation`; worker cũ bị fence không được tiếp tục mutation.
 
-## 11. API capacity và response contract
+## 11. API telemetry và response contract
 
 ### 11.1. Capacity snapshot
 
@@ -846,12 +866,52 @@ GET  /api/capacity/decisions/{decision_id}
 - Agent health trả identity/FSID/version/capability, không trả keyring/secret.
 - Reconcile là async action, có fencing và status endpoint; retry phải dùng cùng idempotency key.
 
+### 11.4. API hiệu năng hiện tại
+
+```text
+GET /api/performance/current?source=ceph&scope_type=cluster&scope=<fsid>
+GET /api/performance/history?source=ceph&scope_type=osd&scope=2&from=...&to=...&step=15s
+GET /api/performance/stream?source=ceph&scope_type=cluster&scope=<fsid>
+```
+
+Response tối thiểu:
+
+```json
+{
+  "schema_version": 1,
+  "source": "ceph",
+  "scope_type": "cluster",
+  "scope": "redacted-fsid",
+  "captured_at": "2026-09-21T10:00:00Z",
+  "window_seconds": 15,
+  "fresh": true,
+  "reset_detected": false,
+  "iops": {"read": 120.0, "write": 80.0, "total": 200.0},
+  "throughput_bps": {"read": 10485760.0, "write": 5242880.0, "total": 15728640.0},
+  "latency_ms": {"read_avg": 2.1, "write_avg": 3.4},
+  "context": {"recovery_active": false, "osdmap_epoch": 123},
+  "reasons": []
+}
+```
+
+Contract đo lường:
+
+- `application`: tính từ operation journal/job của console, gồm request/s, payload byte/s, success/error và p50/p95/p99. Đây là tải do console quan sát, không phải tổng IOPS Ceph.
+- `ceph`: lấy counter client read/write từ Ceph mgr/Prometheus hoặc adapter read-only tương đương, rồi tính rate bằng `delta(counter) / delta(time)`. Đây là nguồn mặc định cho thẻ “IOPS/throughput hệ thống”.
+- `device` là tùy chọn từ node exporter/iostat và chỉ bật khi ánh xạ OSD ↔ device ↔ host đã được xác minh; không trộn device I/O với Ceph client I/O.
+- Tách read/write và client/recovery/replication nếu nguồn có counter tương ứng. Không cộng recovery/backfill vào client throughput rồi gắn nhãn là workload.
+- Scope pool/RBD image chỉ xuất hiện khi metric có label/counter đáng tin cậy. Không suy ra per-pool bằng cách chia cluster total hoặc cộng các OSD dùng chung nhiều pool.
+- “Hiện tại” là rate của cửa sổ hoàn chỉnh gần nhất, mặc định 15 giây; API luôn trả `window_seconds`, unit và timestamp. Có thêm cửa sổ 1 phút/5 phút để làm mượt.
+- Counter giảm do daemon restart/wrap hoặc đổi identity phải tạo `reset_detected=true` và sample `UNKNOWN/PARTIAL`; không phát spike âm/dương giả. Mất mẫu hoặc quá `stale_after` phải trả `fresh=false`, không điền 0.
+- Performance Monitor chỉ dùng quan sát/cảnh báo. Không được dùng sample IOPS/throughput để cấp phép Capacity Guard nếu chưa có một contract admission riêng được kiểm chứng.
+
 ## 12. Frontend
 
 ### 12.1. Navigation mới
 
 ```text
 Live dashboard
+Performance
 Upload objects
 Random object
 RGW CRUD stream
@@ -899,6 +959,14 @@ Danh sách volume hiển thị:
 
 Volume detail gồm file browser, event timeline và nút mount/unmount/delete. Destructive action vẫn cần modal xác nhận tên volume; đây là guard chống thao tác nhầm, không phải RBAC.
 
+### 12.5. Performance
+
+- Thẻ hiện tại: read/write/total IOPS, read/write/total throughput theo MiB/s và latency có sẵn.
+- Biểu đồ time-series có range 5 phút, 1 giờ, 24 giờ; chọn source/scope và cửa sổ 15 giây, 1 phút, 5 phút.
+- Mỗi thẻ/biểu đồ phải hiện `source`, scope, thời điểm mẫu, tuổi mẫu và cửa sổ tính rate; stale/reset/partial dùng trạng thái trực quan riêng, không vẽ về 0.
+- Có overlay OSD down, recovery/backfill, job start/stop và upgrade event để đối chiếu nguyên nhân biến động.
+- Khi xem `application`, UI ghi rõ “console workload”; khi xem `ceph`, ghi rõ “Ceph client counters”; `device` ghi rõ “physical device I/O”.
+
 ## 13. Cấu hình
 
 Không ghi giá trị secret vào file plan. Các biến dự kiến:
@@ -940,6 +1008,17 @@ CAPACITY_FAIL_CLOSED_ON_OSDMAP_CHANGE
 CAPACITY_PAUSE_ON_DEGRADED_OR_REMAPPED
 CAPACITY_REQUIRE_CLEAN_FOR_RBD_FORMAT
 CAPACITY_FAILURE_RESERVE_MODE
+
+PERFORMANCE_ENABLED
+PERFORMANCE_SOURCE
+PERFORMANCE_PROMETHEUS_URL
+PERFORMANCE_PROMETHEUS_BEARER_TOKEN
+PERFORMANCE_COLLECTOR_INTERVAL_SECONDS
+PERFORMANCE_CURRENT_WINDOW_SECONDS
+PERFORMANCE_STALE_AFTER_SECONDS
+PERFORMANCE_RAW_RETENTION_HOURS
+PERFORMANCE_ROLLUP_RETENTION_DAYS
+PERFORMANCE_ALLOWED_SCOPES
 ```
 
 Host-agent-only env/file config:
@@ -959,6 +1038,8 @@ RBD_IMAGE_PREFIX
 
 MVP có thể dùng CephX `client.admin` cho Ceph CLI/RBD host agent vì yêu cầu lab quyền cao. RGW không dùng CephX key này; RGW dùng access/secret của một RGW system/admin identity riêng. Production hóa sau này phải thay bằng caps tối thiểu; việc đó không nằm trong MVP này.
 
+Thông tin xác thực của Prometheus (nếu endpoint có auth) chỉ nằm ở backend secret store/env, không trả ra frontend. Không tự bật/thay cấu hình module Ceph trong runtime; P0 phải inventory endpoint, metric names, labels và scrape interval trước.
+
 ## 14. Kế hoạch triển khai theo pha
 
 ### P0 — Inventory chỉ đọc
@@ -973,6 +1054,7 @@ Việc cần làm:
 - Inventory `rgw_enable_ops_log`, usage logging, notification log và RGW GC settings/backlog có thể làm read/delete phát sinh hoặc giữ thêm dữ liệu.
 - Xác nhận bucket versioning và scope của access key hiện tại.
 - Xác nhận endpoint thực tế là direct RGW hay VIP.
+- Inventory endpoint Ceph mgr/Prometheus, scrape interval, metric names/types/labels và phạm vi counter có thật; bước này chỉ đọc, không tự bật module.
 - Inventory kernel version, krbd feature support và package trên host agent.
 - Chốt dedicated `rbd-lab` pool, RGW bucket/prefix lab và mount root.
 
@@ -1050,6 +1132,22 @@ Việc cần làm:
 - So sánh kết quả UI với `ceph osd df` thủ công khớp.
 - Metrics stale/CLI error được báo UNKNOWN, không biến thành 0%.
 - OSD ngoài scope không xuất hiện trong max của pool đó.
+
+### P2A — Performance telemetry observe-only
+
+Việc cần làm:
+
+- Xác minh inventory endpoint Ceph mgr/Prometheus trên Pacific 16.2.5 và lưu capability matrix theo FSID; nếu thiếu endpoint thì đánh dấu `PERFORMANCE_SOURCE_UNAVAILABLE` cho tới khi có change bật nguồn telemetry được duyệt.
+- Xây adapter `application` và `ceph`; chỉ thêm `device` khi ánh xạ OSD/device đã được xác minh.
+- Tính counter rate, phát hiện reset/gap/stale và tách client I/O khỏi recovery/replication khi metric cho phép.
+- Lưu raw sample/rollup, expose current/history/SSE và thêm Performance dashboard.
+- Chạy observe-only; không dùng throughput/IOPS làm capacity admission input.
+
+Điều kiện hoàn thành:
+
+- Current API/UI hiển thị đúng unit, source, scope, cửa sổ và freshness; counter reset không tạo spike giả.
+- Với workload có kích thước/số request biết trước, chuỗi `application` khớp journal trong sai số làm tròn theo cửa sổ; chuỗi `ceph` tăng đúng hướng và đồng bộ thời gian nhưng không bắt buộc bằng request count vì có amplification/cache/replication.
+- Scope không được nguồn hỗ trợ trả `UNAVAILABLE` kèm lý do, không tạo số per-pool giả.
 
 ### P3 — Capacity enforcement và reservation
 
@@ -1138,6 +1236,7 @@ Việc cần làm:
 Việc cần làm:
 
 - Chạy RGW + RBD đồng thời trong lab.
+- Ghi IOPS/throughput/latency baseline, trong workload và trong recovery theo cùng source/window.
 - Thử collector/guard khi PG remap, recovery/backfill và OSD down.
 - Ghi baseline/latency/error/capacity theo run.
 - Viết runbook cài agent, cấu hình console, emergency stop và cleanup.
@@ -1149,7 +1248,7 @@ Việc cần làm:
 - Không dùng cap 70% thay cho kiểm tra failure headroom/spare của bài upgrade.
 - Có cleanup checklist chứng minh không còn job, mount, mapped image và reservation mồ côi.
 
-Ước lượng ban đầu cho một kỹ sư khi lab luôn sẵn sàng: khoảng **13–17 ngày công**. Sau P0 phải ước lượng lại theo topology, versioning, kernel và cách cấp RGW admin access thực tế.
+Ước lượng ban đầu cho một kỹ sư khi lab luôn sẵn sàng: khoảng **15–20 ngày công**, trong đó Performance Monitor chiếm khoảng 2–3 ngày tùy endpoint/metric Pacific hiện có. Sau P0 phải ước lượng lại theo topology, versioning, kernel, telemetry và cách cấp RGW admin access thực tế.
 
 ## 15. Test matrix bắt buộc
 
@@ -1205,7 +1304,20 @@ Việc cần làm:
 | R11 | Xóa file trong ext4 rồi trim | Xác minh discard được hỗ trợ và `notrim` không bật; ghi telemetry quan sát được nhưng không yêu cầu exact raw decrease và không credit trước fresh OSD evidence |
 | R12 | OSDMap đổi khi volume active | Không tạo volume mới; existing reserved volume được reconcile |
 
-### 15.4. Upgrade/fault
+### 15.4. Performance
+
+| ID | Tình huống | Kết quả mong đợi |
+| --- | --- | --- |
+| P01 | Không có job console trong một cửa sổ hoàn chỉnh | `application` IOPS/throughput bằng 0; `ceph` vẫn có thể khác 0 do client/background khác |
+| P02 | Console hoàn thành số request và payload biết trước trong 60 giây | `application` count/bytes khớp journal; rate khớp theo đúng window/step |
+| P03 | RGW và RBD chạy đồng thời | Tách được series ứng dụng theo job/type; cluster series không bị cộng lặp ở API |
+| P04 | OSD/mgr restart làm counter giảm | Sample đánh dấu reset/unknown; không có IOPS hoặc throughput âm/spike giả |
+| P05 | Bỏ lỡ scrape hoặc endpoint timeout | Giữ last-known có age nhưng `fresh=false`; UI không vẽ thành 0 |
+| P06 | Recovery/backfill chạy cùng client workload | UI có context/overlay và không gắn recovery traffic thành client throughput |
+| P07 | Yêu cầu pool/image scope không có metric phù hợp | Trả `UNAVAILABLE` có lý do; không nội suy từ cluster/OSD total |
+| P08 | So sánh API với counter delta gốc trong cùng timestamp/window | Read/write/total và bytes/s đúng công thức, unit và sai số làm tròn đã công bố |
+
+### 15.5. Upgrade/fault
 
 - RGW/RBD workload đang chạy khi recovery/backfill bắt đầu.
 - Collector mất kết nối với MON/MGR.
@@ -1225,7 +1337,11 @@ Mỗi fault test phải ghi thời gian phát hiện, action bị chặn, operat
 
 Metrics tối thiểu:
 
-- Per operation count/error/latency/bytes.
+- Per operation count/error/latency/bytes và application request/s, byte/s, p50/p95/p99.
+- Ceph client read/write/total IOPS và throughput byte/s theo cluster/OSD; pool/image chỉ khi source hỗ trợ đúng scope.
+- Ceph read/write latency từ sum/count hoặc counter tương đương khi có; không gán percentile nếu nguồn chỉ cung cấp average.
+- Source, scope, sample window, timestamp, freshness, reset/gap và collector error cho từng series.
+- Recovery/backfill/client traffic tách riêng nếu metric có sẵn; physical device I/O nằm trong namespace/source riêng.
 - RGW live object count/logical bytes.
 - RBD logical size/actual allocation/reserved raw.
 - OSD used ratio từng participating OSD và max.
@@ -1244,6 +1360,8 @@ Mỗi mutation lưu:
 - Result/error đã redact.
 
 Không lưu secret, raw keyring hoặc payload người dùng vào log thông thường.
+
+Giá trị IOPS/throughput phải được tính từ counter monotonic ở backend hoặc Prometheus query đã version hóa. Không lấy hai lần tốc độ, không cộng series trùng label, không dùng timestamp trình duyệt làm sample time. Dashboard mặc định hiển thị cửa sổ hoàn chỉnh 15 giây gần nhất và đánh dấu stale thay vì giữ số cũ như thể còn hiện tại.
 
 ## 17. Emergency stop và cleanup
 
@@ -1275,13 +1393,14 @@ Cleanup không tự xóa volume/object không có ownership evidence.
 Rollout theo capability flag:
 
 1. `capacity.observe_only=true`.
-2. Bật capacity enforcement cho upload hiện tại.
-3. Bật manual RGW delete/update.
-4. Bật RGW CRUD streaming.
-5. Nâng host agent read-only đã cài từ P1 lên capability RBD inventory/mutation theo từng flag.
-6. Bật manual RBD create/map/format/mount.
-7. Bật RBD file access.
-8. Bật RBD lifecycle streaming.
+2. Bật `performance.enabled=true` ở observe-only, xác minh source/window/freshness.
+3. Bật capacity enforcement cho upload hiện tại.
+4. Bật manual RGW delete/update.
+5. Bật RGW CRUD streaming.
+6. Nâng host agent read-only đã cài từ P1 lên capability RBD inventory/mutation theo từng flag.
+7. Bật manual RBD create/map/format/mount.
+8. Bật RBD file access.
+9. Bật RBD lifecycle streaming.
 
 Rollback feature không được đồng nghĩa xóa dữ liệu:
 
@@ -1310,13 +1429,14 @@ Không dùng câu “mọi OSD dưới 70%” để kết luận đủ headroom 
 
 1. **PR1 — Backend refactor + migrations + job lease**
 2. **PR2 — Read-only host agent + capacity collector observe-only + dashboard**
-3. **PR3 — Capacity reservation/enforcement cho upload hiện tại**
-4. **PR4 — RGW manual CRUD/version-aware delete**
-5. **PR5 — RGW CRUD streaming + catalog**
-6. **PR6 — Mở capability RBD trên host agent + inventory/reconcile**
-7. **PR7 — RBD create/map/ext4/mount/delete**
-8. **PR8 — RBD file browser + lifecycle streaming**
-9. **PR9 — Integrated fault tests, runbook và upgrade-plan references**
+3. **PR2A — Performance collector + current/history/SSE + dashboard**
+4. **PR3 — Capacity reservation/enforcement cho upload hiện tại**
+5. **PR4 — RGW manual CRUD/version-aware delete**
+6. **PR5 — RGW CRUD streaming + catalog**
+7. **PR6 — Mở capability RBD trên host agent + inventory/reconcile**
+8. **PR7 — RBD create/map/ext4/mount/delete**
+9. **PR8 — RBD file browser + lifecycle streaming**
+10. **PR9 — Integrated fault tests, runbook và upgrade-plan references**
 
 Mỗi PR phải giữ console build/chạy được và có migration/test tương ứng. Không gộp capacity enforcement, privileged agent và UI RBD vào một thay đổi duy nhất khó rollback.
 
@@ -1327,6 +1447,8 @@ Mỗi PR phải giữ console build/chạy được và có migration/test tươ
 - [ ] Migration chạy được từ schema console hiện tại.
 - [ ] Existing feature không regression.
 - [ ] Capacity collector khớp số liệu Ceph CLI.
+- [ ] IOPS/throughput dashboard có source/scope/window/freshness rõ ràng; application series khớp journal và Ceph series được đối chiếu bằng counter delta cùng cửa sổ.
+- [ ] Reset, missing sample và unsupported scope không tạo số 0/spike/per-pool estimate giả.
 - [ ] Reservation/concurrency/stale-metrics tests đạt.
 - [ ] RGW CRUD manual và streaming tests đạt.
 - [ ] RBD lifecycle và restart/reconcile tests đạt.
@@ -1342,11 +1464,182 @@ Mỗi PR phải giữ console build/chạy được và có migration/test tươ
 - [Ceph Pacific — RBD commands](https://docs.ceph.com/en/pacific/rbd/rados-rbd-cmds/): thin provisioning, remove và trash.
 - [Ceph Pacific — RBD exclusive locks](https://docs.ceph.com/en/pacific/rbd/rbd-exclusive-locks/): exclusive lock và `--exclusive` map.
 - [Ceph Pacific — Troubleshooting OSD fullness](https://docs.ceph.com/en/pacific/rados/troubleshooting/troubleshooting-osd/): per-OSD fullness, nearfull/backfillfull/full.
+- [Ceph Pacific — Prometheus manager module](https://docs.ceph.com/en/pacific/mgr/prometheus/): endpoint metrics, metric/label semantics, scrape interval và RBD I/O statistics.
+- [Ceph Pacific — Influx manager module counters](https://docs.ceph.com/en/pacific/mgr/influx/): ý nghĩa counter pool/OSD như client read/write operation, byte và latency.
 - [Ceph Pacific — RGW S3 object operations](https://docs.ceph.com/en/pacific/radosgw/s3/objectops/): GET/HEAD/DELETE semantics.
 - [Ceph Pacific — RGW bucket index/versioning](https://docs.ceph.com/en/pacific/dev/radosgw/bucket_index/): object version và delete marker/index behavior.
 - [Ceph Pacific — RGW notifications](https://docs.ceph.com/en/pacific/radosgw/notifications/): lựa chọn mở rộng nếu sau này cần event từ client ngoài console.
 - [`features/ceph-v2-qos-controller.md`](../features/ceph-v2-qos-controller.md): policy/gate/QoS controller của dự án.
 - [`comparison/ceph-osd-upgrade-lab-production-plan(1)(1).md`](../comparison/ceph-osd-upgrade-lab-production-plan%281%29%281%29.md): topology, workload, metrics và gate upgrade hiện tại.
+
+
+## 23. RBD Test Console (web → SSH → Linux host)
+
+### 23.1. Mục tiêu
+
+Web app nhỏ chạy trên **Windows** (hoặc bất kỳ máy nào có Node.js), mở browser bấm nút tạo/map/mount RBD image **trên Linux Ceph host**, rồi dùng **web terminal SSH** vào host đó để test đọc/ghi. Mục tiêu duy nhất: **xác nhận RBD còn hoạt động bình thường sau upgrade**.
+
+Không cần cài `rbd-wnbd` trên Windows, không cần agent riêng — chỉ cần SSH vào node Linux đã có `ceph-common` + keyring.
+
+### 23.2. Kiến trúc
+
+```text
+Windows 11 (hoặc bất kỳ máy nào)
+┌──────────────────────────────────────────────┐
+│  Browser  http://localhost:3000              │
+│  ┌────────────────────────────────────────┐  │
+│  │  RBD Test Console                      │  │
+│  │                                        │  │
+│  │  Cluster: HEALTH_OK  FSID: 17c77e12   │  │
+│  │                                        │  │
+│  │  Images:                               │  │
+│  │  test01  1 GiB  mounted /mnt/rbd/test01│  │
+│  │  test02  5 GiB  unmapped               │  │
+│  │  [+ Create]                            │  │
+│  │                                        │  │
+│  │  Terminal (SSH vào Linux host) ──────── │  │
+│  │  root@ceph-node:~# ls /mnt/rbd/test01 │  │
+│  │  root@ceph-node:~# dd if=/dev/zero ... │  │
+│  └────────────────────────────────────────┘  │
+│                                              │
+│  Node.js backend (localhost:3000)             │
+│   ├── REST API ──── ssh2: rbd create/map/... │
+│   └── WebSocket ─── ssh2: interactive shell  │
+└──────────────┼───────────────────────────────┘
+               │ SSH (port 22)
+               ▼
+┌──────────────────────────┐
+│  Linux Ceph host         │
+│  (10.20.20.12 hoặc node  │
+│   có ceph-common + rbd)  │
+│                          │
+│  rbd map → /dev/rbd0     │
+│  mount → /mnt/rbd/test01 │
+│                          │
+│  Ceph cluster            │
+│  OSD.0  OSD.1  OSD.2    │
+└──────────────────────────┘
+```
+
+### 23.3. Yêu cầu
+
+**Trên Windows (hoặc máy chạy web):**
+- Node.js >= 18 LTS
+- Không cần Ceph, không cần admin, không cần driver
+
+**Trên Linux Ceph host:**
+- `ceph-common`, `rbd` CLI, keyring — đã có sẵn trên các node Ceph
+- SSH server (đã có)
+- Mount root: `/mnt/rbd/` (tạo trước)
+
+### 23.4. Stack kỹ thuật
+
+```text
+Frontend:  React + xterm.js + xterm-addon-fit
+Backend:   Node.js + Express + ws (WebSocket)
+SSH:       ssh2 (npm) — kết nối SSH tới Linux host
+RBD:       ssh2.exec("rbd create/map/mount/...") trên host
+Terminal:  ssh2.shell() ↔ WebSocket ↔ xterm.js
+```
+
+### 23.5. API đề xuất
+
+```text
+GET    /api/health             ← ssh: ceph -s --format=json
+GET    /api/images             ← ssh: rbd ls <pool> --format=json
+POST   /api/images             ← ssh: rbd create + rbd map + mkfs + mount
+GET    /api/images/:name       ← ssh: rbd info <pool>/<name> --format=json
+POST   /api/images/:name/mount ← ssh: rbd map + mount /mnt/rbd/<name>
+POST   /api/images/:name/unmount ← ssh: umount + rbd unmap
+DELETE /api/images/:name       ← ssh: umount + unmap + rbd rm
+GET    /api/devices            ← ssh: rbd device list --format=json
+WS     /ws/terminal            ← ssh2.shell() → interactive bash/shell
+```
+
+### 23.6. Luồng tạo + mount (trên Linux host qua SSH)
+
+```bash
+# 1. Tạo image
+rbd create rbd-lab/test01 --size 1024   # 1 GiB
+
+# 2. Map
+rbd device map rbd-lab/test01           # → /dev/rbd0
+
+# 3. Format (lần đầu)
+mkfs.ext4 /dev/rbd0
+
+# 4. Mount
+mkdir -p /mnt/rbd/test01
+mount /dev/rbd0 /mnt/rbd/test01
+
+# Xong → vào terminal: cd /mnt/rbd/test01, ghi file, đọc file
+```
+
+### 23.7. Luồng unmount + xóa
+
+```bash
+umount /mnt/rbd/test01
+rbd device unmap /dev/rbd0
+rbd rm rbd-lab/test01    # chỉ khi muốn xóa hẳn
+```
+
+### 23.8. Web Terminal
+
+- Khi bấm **Connect terminal**, backend mở SSH connection tới Linux host bằng `ssh2` module.
+- `ssh2.shell()` trả stream tương tác — pipe qua WebSocket tới `xterm.js` trong browser.
+- Người dùng có **full bash shell** trên host — gõ `ls /mnt/rbd/test01`, `dd`, `cat`, v.v.
+- Đóng tab → đóng SSH session.
+- Hỗ trợ resize terminal (`ssh2.setWindow()`).
+
+### 23.9. Cấu hình (.env)
+
+```env
+# Linux host để SSH vào
+RBD_HOST=10.20.20.12
+RBD_SSH_PORT=22
+RBD_SSH_USER=root
+RBD_SSH_KEY_PATH=~/.ssh/id_rsa
+# hoặc RBD_SSH_PASSWORD=... (không khuyến khích)
+
+# Ceph
+RBD_POOL=rbd-lab
+RBD_MOUNT_ROOT=/mnt/rbd
+
+# Web server
+PORT=3000
+```
+
+### 23.10. Giao diện dự kiến
+
+| Khu vực | Nội dung |
+|---|---|
+| **Header** | Cluster status, FSID, host IP, connection status |
+| **Image list** | Tên, size, trạng thái (mapped/unmapped/mounted), device, mount path, nút Mount/Unmount/Delete |
+| **Create form** | Tên image, size (GiB), nút Create |
+| **Terminal** | xterm.js — SSH shell vào Linux host, có thể resize |
+| **Command log** | Lệnh đã chạy + output (để debug) |
+
+### 23.11. Test checklist sau upgrade
+
+| # | Kiểm tra | Kết quả mong đợi |
+|---|---|---|
+| W01 | `ceph -s` qua API | HEALTH_OK, FSID đúng |
+| W02 | Tạo RBD image 1 GiB | `rbd info` trả đúng size |
+| W03 | Map + mount | `/mnt/rbd/test01` accessible |
+| W04 | Ghi file (terminal) | `echo test > /mnt/rbd/test01/hello.txt` thành công |
+| W05 | Đọc file (terminal) | `cat /mnt/rbd/test01/hello.txt` → "test" |
+| W06 | Ghi file lớn | `dd if=/dev/zero of=/mnt/rbd/test01/big bs=1M count=100` OK |
+| W07 | Unmount + unmap | Device biến mất |
+| W08 | Re-map image cũ | Dữ liệu còn nguyên |
+| W09 | Delete image | `rbd ls` không còn image |
+| W10 | Nhiều image đồng thời | 3 mount riêng, đọc/ghi OK |
+
+### 23.12. Ước lượng
+
+Khoảng **2–3 ngày công**:
+- Ngày 1: Scaffold Node.js, SSH connection, API create/list/mount/unmount/delete.
+- Ngày 2: Web terminal (xterm.js + ssh2.shell + WebSocket), giao diện React.
+- Ngày 3: Test checklist W01–W10, sửa lỗi, viết hướng dẫn.
 
 ---
 

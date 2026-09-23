@@ -1,0 +1,18 @@
+{
+    "mon": {
+        "ceph version 16.2.5 (0883bdea7337b95e4b611c768c0279868462204a) pacific (stable)": 3
+    },
+    "mgr": {
+        "ceph version 16.2.5 (0883bdea7337b95e4b611c768c0279868462204a) pacific (stable)": 2
+    },
+    "osd": {
+        "ceph version 16.2.5 (0883bdea7337b95e4b611c768c0279868462204a) pacific (stable)": 4
+    },
+    "mds": {},
+    "rgw": {
+        "ceph version 16.2.5 (0883bdea7337b95e4b611c768c0279868462204a) pacific (stable)": 3
+    },
+    "overall": {
+        "ceph version 16.2.5 (0883bdea7337b95e4b611c768c0279868462204a) pacific (stable)": 12
+    }
+}

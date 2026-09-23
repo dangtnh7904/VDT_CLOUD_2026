@@ -1,9 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -75,6 +76,19 @@ class Settings(BaseSettings):
     capacity_require_clean_for_rbd_format: bool = True
     capacity_failure_reserve_mode: Literal["none", "one_osd", "one_host"] = "none"
 
+    # Performance telemetry always includes console-observed application I/O.
+    # Cluster-wide Ceph counters are opt-in because their identity and metric
+    # surface must be verified against the target Pacific cluster first.
+    performance_enabled: bool = True
+    performance_source: Literal["application_only", "prometheus"] = "application_only"
+    performance_prometheus_url: str | None = None
+    performance_prometheus_bearer_token: SecretStr | None = None
+    performance_collector_interval_seconds: float = Field(default=15.0, ge=10, le=300)
+    performance_current_window_seconds: int = Field(default=15, ge=10, le=3600)
+    performance_stale_after_seconds: float = Field(default=45.0, ge=10, le=3600)
+    performance_raw_retention_hours: int = Field(default=24, ge=1, le=24 * 31)
+    performance_rollup_retention_days: int = Field(default=30, ge=1, le=366)
+
     @field_validator("rgw_allowed_buckets", "rgw_affected_pools", "rbd_allowed_pools", "rbd_allowed_namespaces")
     @classmethod
     def validate_csv_allowlist(cls, value: str) -> str:
@@ -141,7 +155,41 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CAPACITY_METRICS_MAX_AGE_SECONDS must be at least the collector interval"
             )
+        if self.performance_stale_after_seconds < self.performance_collector_interval_seconds:
+            raise ValueError(
+                "PERFORMANCE_STALE_AFTER_SECONDS must be at least the collector interval"
+            )
+        if self.performance_current_window_seconds < self.performance_collector_interval_seconds:
+            raise ValueError(
+                "PERFORMANCE_CURRENT_WINDOW_SECONDS must be at least the collector interval"
+            )
+        if self.performance_source == "prometheus":
+            if not self.performance_prometheus_url:
+                raise ValueError(
+                    "PERFORMANCE_PROMETHEUS_URL is required when PERFORMANCE_SOURCE=prometheus"
+                )
+            if not self.ceph_expected_fsid:
+                raise ValueError(
+                    "CEPH_EXPECTED_FSID is required when PERFORMANCE_SOURCE=prometheus"
+                )
         return self
+
+    @field_validator("performance_prometheus_url")
+    @classmethod
+    def validate_prometheus_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("PERFORMANCE_PROMETHEUS_URL must use http or https")
+        parsed = urlsplit(value)
+        if not parsed.hostname:
+            raise ValueError("PERFORMANCE_PROMETHEUS_URL must include a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError(
+                "Prometheus credentials must not be embedded in PERFORMANCE_PROMETHEUS_URL"
+            )
+        return value
 
     @property
     def origins(self) -> list[str]:

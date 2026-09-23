@@ -1,5 +1,5 @@
 [Unit]
-Description=RGW Console read-only Ceph host agent
+Description=RGW Console fenced Ceph/RBD host agent
 After=network-online.target
 Wants=network-online.target
 
@@ -16,8 +16,9 @@ RuntimeDirectory=rgw-console
 RuntimeDirectoryMode=0750
 UMask=0007
 
-# P1 is inventory-only. These restrictions must be reviewed explicitly before
-# any later RBD map/format/mount capability is introduced.
+# RBD map/mount requires CAP_SYS_ADMIN. The agent still exposes only a closed
+# action schema, verifies FSID/scope/image/device identity, and never accepts
+# arbitrary argv or filesystem paths.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -30,13 +31,12 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-CapabilityBoundingSet=
-AmbientCapabilities=
-ReadWritePaths=/run/rgw-console
+CapabilityBoundingSet=CAP_SYS_ADMIN
+AmbientCapabilities=CAP_SYS_ADMIN
+ReadWritePaths=/run/rgw-console /var/lib/rgw-console-agent /srv/ceph-lab/rbd
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 TimeoutStopSec=25s
 
 [Install]
 WantedBy=multi-user.target
-

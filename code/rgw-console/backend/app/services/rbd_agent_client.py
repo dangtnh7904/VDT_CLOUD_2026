@@ -121,21 +121,27 @@ class RbdAgentClient:
         return self.request("ceph.crush_rule_dump")
 
     def rbd_pool_list(self) -> dict[str, Any]:
-        return self.request("rbd.pool.list")
+        return self._rbd_data(self.request("rbd.pool.list"), "rbd.pool.list")
 
     def rbd_image_list(self, *, pool: str, namespace: str = "") -> dict[str, Any]:
-        return self.request("rbd.image.list", {"pool": pool, "namespace": namespace})
+        return self._rbd_data(
+            self.request("rbd.image.list", {"pool": pool, "namespace": namespace}),
+            "rbd.image.list",
+        )
 
     def rbd_image_info(
         self, *, pool: str, image_name: str, namespace: str = ""
     ) -> dict[str, Any]:
-        return self.request(
+        return self._rbd_data(
+            self.request(
+                "rbd.image.info",
+                {"pool": pool, "namespace": namespace, "image_name": image_name},
+            ),
             "rbd.image.info",
-            {"pool": pool, "namespace": namespace, "image_name": image_name},
         )
 
     def rbd_device_list(self) -> dict[str, Any]:
-        return self.request("rbd.device.list")
+        return self._rbd_data(self.request("rbd.device.list"), "rbd.device.list")
 
     def mutate(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         if action not in MUTATION_ACTIONS:
@@ -151,7 +157,22 @@ class RbdAgentClient:
         fence_token = params.get("fence_token")
         if isinstance(fence_token, bool) or not isinstance(fence_token, int) or fence_token < 1:
             raise ValueError("mutation fence_token must be a positive integer")
-        return self.request(action, params)
+        return self._rbd_data(self.request(action, params), action)
+
+    @staticmethod
+    def _rbd_data(result: dict[str, Any], action: str) -> dict[str, Any]:
+        """Unwrap the agent envelope while retaining strict action binding."""
+
+        if result.get("action") != action or not isinstance(result.get("data"), dict):
+            raise RbdAgentClientError(
+                "AGENT_PROTOCOL_ERROR",
+                "Host-agent result did not contain the expected RBD action payload",
+            )
+        payload = dict(result["data"])
+        payload.setdefault("fsid", result.get("fsid"))
+        if "collected_at" in result:
+            payload.setdefault("collected_at", result["collected_at"])
+        return payload
 
     def request(
         self,

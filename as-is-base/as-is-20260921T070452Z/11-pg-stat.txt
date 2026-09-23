@@ -1,1 +1,0 @@
-233 pgs: 233 active+clean; 4.0 GiB data, 12 GiB used, 137 GiB / 150 GiB avail

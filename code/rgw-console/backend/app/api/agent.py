@@ -17,10 +17,13 @@ def _public_health(result: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "status",
         "fsid",
+        "agent_version",
         "version",
         "protocol_version",
+        "collected_at",
         "capabilities",
         "actions",
+        "rbd_scope",
         "read_only",
     }
     return {key: value for key, value in result.items() if key in allowed}
@@ -50,4 +53,3 @@ def agent_health():
     response = _public_health(health)
     response["capabilities"] = _public_health(capabilities)
     return response
-

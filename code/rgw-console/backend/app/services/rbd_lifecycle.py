@@ -11,6 +11,12 @@ from uuid import UUID, uuid5
 
 from ..config import get_settings
 from ..db import connection, record_operation
+from .capacity_guard import (
+    CapacityRejected,
+    finish_reservation,
+    require_admission,
+    reservation_lease,
+)
 from .rbd_agent_client import RbdAgentClient, RbdAgentClientError
 
 
@@ -33,8 +39,38 @@ AMBIGUOUS_AGENT_CODES = {
     "STALE_FENCE",
     "STATE_CONFLICT",
 }
-BUSY_CODES = {"BUSY", "VOLUME_BUSY", "DEVICE_BUSY", "MOUNT_BUSY"}
-DEPENDENCY_CODES = {"DEPENDENCY_EXISTS", "SNAPSHOT_EXISTS", "CLONE_EXISTS"}
+BUSY_CODES = {
+    "BUSY",
+    "VOLUME_BUSY",
+    "DEVICE_BUSY",
+    "MOUNT_BUSY",
+    "IMAGE_IN_USE",
+    "IMAGE_ALREADY_MAPPED",
+}
+DEPENDENCY_CODES = {
+    "DEPENDENCY_EXISTS",
+    "SNAPSHOT_EXISTS",
+    "CLONE_EXISTS",
+    "DELETE_BLOCKED_DEPENDENCY",
+}
+FINAL_AGENT_CODES = {
+    "INVALID_PARAMS",
+    "ACTION_NOT_ALLOWED",
+    "INVALID_SIZE",
+    "SCOPE_NOT_ALLOWED",
+    "IMAGE_ALREADY_EXISTS",
+    "VOLUME_ID_CONFLICT",
+    "FEATURE_MISMATCH",
+    "FORMAT_NOT_ALLOWED",
+    "CREATION_IDENTITY_MISMATCH",
+    "FILESYSTEM_SIGNATURE_PRESENT",
+    "UNMANAGED_VOLUME",
+    "IMAGE_IDENTITY_MISMATCH",
+    "DEVICE_IDENTITY_MISMATCH",
+    "FILESYSTEM_IDENTITY_MISMATCH",
+    "MOUNTPOINT_NOT_EMPTY",
+    "MOUNT_IDENTITY_CONFLICT",
+}
 
 
 class RbdActionFenceLost(RuntimeError):
@@ -230,11 +266,16 @@ class RbdLifecycleWorker:
             thread.join(timeout=2)
 
     @staticmethod
-    def _common_params(action: dict[str, Any], volume: dict[str, Any], step: str) -> dict[str, Any]:
+    def _common_params(
+        action: dict[str, Any],
+        volume: dict[str, Any],
+        step: str,
+        fence_token: int,
+    ) -> dict[str, Any]:
         return {
             "volume_id": str(volume["id"]),
             "action_id": granular_action_id(action["id"], step),
-            "fence_token": int(action["volume_generation"]),
+            "fence_token": fence_token,
             "pool": volume["pool"],
             "namespace": volume.get("namespace") or "",
             "image_name": volume["image_name"],
@@ -261,31 +302,68 @@ class RbdLifecycleWorker:
                 retryable=False,
             )
 
-    def _set_current_step(self, claimed: ClaimedAction, step: str) -> None:
+    def _set_current_step(self, claimed: ClaimedAction, step: str) -> int:
         action = claimed.action
         with connection() as conn:
-            row = conn.execute(
-                """
-                UPDATE rbd_actions
-                   SET current_step=%s,heartbeat_at=now(),
-                       lease_expires_at=now() + (%s * interval '1 second')
-                 WHERE id=%s AND state='RUNNING' AND lease_owner=%s
-                   AND lease_generation=%s AND volume_generation=%s
-                RETURNING id
-                """,
-                (
-                    step,
-                    self.lease_seconds,
-                    action["id"],
-                    self.worker_id,
-                    action["lease_generation"],
-                    action["volume_generation"],
-                ),
-            ).fetchone()
-            conn.commit()
+            with conn.transaction():
+                owned = conn.execute(
+                    """
+                    SELECT action.current_step,action.current_fence_token
+                      FROM rbd_actions action
+                      JOIN rbd_volumes volume ON volume.id=action.volume_id
+                     WHERE action.id=%s AND action.state='RUNNING'
+                       AND action.lease_owner=%s AND action.lease_generation=%s
+                       AND action.volume_generation=%s
+                       AND volume.transition_generation=action.volume_generation
+                     FOR UPDATE OF action,volume
+                    """,
+                    (
+                        action["id"],
+                        self.worker_id,
+                        action["lease_generation"],
+                        action["volume_generation"],
+                    ),
+                ).fetchone()
+                if owned is None:
+                    raise RbdActionFenceLost("RBD action lost its fence before an agent call")
+                fence_token = owned["current_fence_token"]
+                if owned["current_step"] != step or fence_token is None:
+                    fenced = conn.execute(
+                        """
+                        UPDATE rbd_volumes
+                           SET agent_fence_token=agent_fence_token+1,updated_at=now()
+                         WHERE id=%s AND transition_generation=%s
+                        RETURNING agent_fence_token
+                        """,
+                        (claimed.volume["id"], action["volume_generation"]),
+                    ).fetchone()
+                    if fenced is None:
+                        raise RbdActionFenceLost("RBD volume fence could not be advanced")
+                    fence_token = int(fenced["agent_fence_token"])
+                row = conn.execute(
+                    """
+                    UPDATE rbd_actions
+                       SET current_step=%s,current_fence_token=%s,heartbeat_at=now(),
+                           lease_expires_at=now() + (%s * interval '1 second')
+                     WHERE id=%s AND state='RUNNING' AND lease_owner=%s
+                       AND lease_generation=%s AND volume_generation=%s
+                    RETURNING id
+                    """,
+                    (
+                        step,
+                        fence_token,
+                        self.lease_seconds,
+                        action["id"],
+                        self.worker_id,
+                        action["lease_generation"],
+                        action["volume_generation"],
+                    ),
+                ).fetchone()
         if row is None:
             raise RbdActionFenceLost("RBD action lost its fence before an agent call")
         action["current_step"] = step
+        action["current_fence_token"] = fence_token
+        return int(fence_token)
 
     def _audit(
         self,
@@ -324,8 +402,8 @@ class RbdLifecycleWorker:
         step: str,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
-        self._set_current_step(claimed, step)
-        params = self._common_params(claimed.action, claimed.volume, step)
+        fence_token = self._set_current_step(claimed, step)
+        params = self._common_params(claimed.action, claimed.volume, step, fence_token)
         params.update(extra)
         started = time.monotonic()
         try:
@@ -486,6 +564,12 @@ class RbdLifecycleWorker:
         required = ("image_id", "device_major", "device_minor", "creation_action_id")
         if any(volume.get(field) is None for field in required):
             raise RbdActionStateError("Volume identity is incomplete before format")
+        require_admission(
+            "RBD_FORMAT",
+            0,
+            request_id=claimed.request_id,
+            affected_pools=[volume["pool"]],
+        )
         result = self._invoke(
             claimed,
             "rbd.device.format_ext4",
@@ -577,11 +661,23 @@ class RbdLifecycleWorker:
         volume = claimed.volume
         if not volume.get("image_id"):
             raise RbdActionStateError("Cannot remove a volume without an immutable image_id")
-        result = self._invoke(
-            claimed,
-            "rbd.image.remove",
-            {"image_id": volume["image_id"]},
+        decision = require_admission(
+            "RBD_DELETE_CLEANUP",
+            1,
+            request_id=claimed.request_id,
+            affected_pools=[volume["pool"]],
         )
+        try:
+            with reservation_lease(decision):
+                result = self._invoke(
+                    claimed,
+                    "rbd.image.remove",
+                    {"image_id": volume["image_id"]},
+                )
+        except Exception:
+            finish_reservation(decision, "ambiguous")
+            raise
+        finish_reservation(decision, "success")
         if result.get("state") not in {"deleted", "DELETED", "removed", "REMOVED"}:
             raise RbdAgentClientError(
                 "AGENT_PROTOCOL_ERROR", "Remove result did not confirm image deletion"
@@ -724,6 +820,54 @@ class RbdLifecycleWorker:
                             action["volume_generation"],
                         ),
                     )
+                    if (
+                        action.get("action_type") == "CREATE"
+                        and not claimed.volume.get("image_id")
+                        and claimed.volume.get("capacity_reservation_id")
+                    ):
+                        conn.execute(
+                            """
+                            UPDATE capacity_reservations
+                               SET state='SETTLING',remaining_commitment_bytes=0,
+                                   settled_at=now(),updated_at=now()
+                             WHERE id=%s AND state='PERSISTENT_COMMITMENT'
+                            """,
+                            (claimed.volume["capacity_reservation_id"],),
+                        )
+
+    def _fail_retryable(self, claimed: ClaimedAction, code: str, message: str) -> None:
+        action = claimed.action
+        observed = claimed.volume["observed_state"]
+        with connection() as conn:
+            with conn.transaction():
+                row = conn.execute(
+                    """
+                    UPDATE rbd_actions
+                       SET state='FAILED_RETRYABLE',observed_state=%s,error_code=%s,error=%s,
+                           finished_at=now(),lease_owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL
+                     WHERE id=%s AND state='RUNNING' AND lease_owner=%s
+                       AND lease_generation=%s AND volume_generation=%s
+                    RETURNING id
+                    """,
+                    (
+                        observed,
+                        code,
+                        message[:2000],
+                        action["id"],
+                        self.worker_id,
+                        action["lease_generation"],
+                        action["volume_generation"],
+                    ),
+                ).fetchone()
+                if row:
+                    conn.execute(
+                        """
+                        UPDATE rbd_volumes
+                           SET last_error=%s,updated_at=now()
+                         WHERE id=%s AND transition_generation=%s
+                        """,
+                        (message[:2000], claimed.volume["id"], action["volume_generation"]),
+                    )
 
     def process(self, claimed: ClaimedAction) -> None:
         action_type = claimed.action["action_type"]
@@ -768,6 +912,9 @@ class RbdLifecycleWorker:
                     if state != "UNMOUNTED":
                         raise RbdActionStateError(f"Unexpected unmount state {state}")
                 elif action_type == "DELETE":
+                    if state in {"REQUESTED", "CAPACITY_RESERVED"} and not claimed.volume.get("image_id"):
+                        self._checkpoint(claimed, "DELETED")
+                        state = claimed.volume["observed_state"]
                     if state in {"READY", "MOUNTED"}:
                         self._unmount(claimed)
                         state = claimed.volume["observed_state"]
@@ -803,7 +950,7 @@ class RbdLifecycleWorker:
                     exc.message,
                     "DELETE_BLOCKED_DEPENDENCY",
                 )
-            elif exc.code in {"INVALID_PARAMS", "ACTION_NOT_ALLOWED"}:
+            elif exc.code in FINAL_AGENT_CODES:
                 self._fail_final(claimed, exc.code, exc.message)
             else:
                 # Includes every timeout/transport/protocol ambiguity and unknown
@@ -811,6 +958,8 @@ class RbdLifecycleWorker:
                 self._mark_reconciling(claimed, exc.code, exc.message)
         except RbdActionStateError as exc:
             self._fail_final(claimed, "STATE_CONFLICT", str(exc))
+        except CapacityRejected as exc:
+            self._fail_retryable(claimed, exc.code, str(exc))
         except Exception as exc:
             self._mark_reconciling(claimed, "RBD_ACTION_AMBIGUOUS", str(exc))
 
@@ -975,6 +1124,32 @@ class RbdLifecycleWorker:
             )
             return
 
+        if action["action_type"] == "CREATE" and action.get("current_step") == "rbd.image.create":
+            # The image may exist while the host-agent's durable registry still
+            # contains an IN_PROGRESS create record. Re-enter the same create
+            # step so the agent can observe and finalize that exact action ID;
+            # skipping directly to map would leave the identity registry
+            # permanently incomplete.
+            prior = action.get("observed_state") or (
+                "CAPACITY_RESERVED" if volume.get("capacity_reservation_id") else "REQUESTED"
+            )
+            if prior == "RECONCILING":
+                prior = (
+                    "CAPACITY_RESERVED"
+                    if volume.get("capacity_reservation_id")
+                    else "REQUESTED"
+                )
+            self._finish_reconcile_claim(
+                claimed,
+                prior,
+                complete=False,
+                changes={
+                    "image_id": image_id,
+                    "feature_set": image.get("features") or [],
+                },
+            )
+            return
+
         try:
             devices_result = self.client.rbd_device_list()
         except RbdAgentClientError as exc:
@@ -1036,4 +1211,3 @@ class RbdLifecycleWorker:
             return False
         self.process(pending)
         return True
-

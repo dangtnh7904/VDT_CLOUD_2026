@@ -20,6 +20,9 @@ from pydantic import BaseModel, Field
 
 from .api.capacity import router as capacity_router
 from .api.control import router as control_router
+from .api.agent import router as agent_router
+from .api.rbd import RbdControlError, router as rbd_router
+from .api.performance import router as performance_router
 from .config import get_settings
 from .corpus import CATEGORY_ALIASES, choose_random, classify, describe, resolve_corpus_path
 from .db import connection, initialize, json_ready, pool, record_operation
@@ -104,10 +107,13 @@ async def lifespan(_: FastAPI):
     pool.close()
 
 
-app = FastAPI(title="RGW Object Lab API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Ceph Storage Lab API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(capacity_router)
 app.include_router(control_router)
+app.include_router(agent_router)
+app.include_router(rbd_router)
+app.include_router(performance_router)
 scope_validator = ScopeValidator()
 idempotency_service = IdempotencyService()
 
@@ -167,6 +173,22 @@ async def capacity_rejected_handler(request: Request, exc: CapacityRejected):
                 "message": str(exc),
                 "retryable": exc.decision.retryable,
                 "observed_state": exc.decision.to_dict(),
+            }
+        },
+    )
+
+
+@app.exception_handler(RbdControlError)
+async def rbd_control_error_handler(request: Request, exc: RbdControlError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": {
+                "request_id": request.state.request_id,
+                "code": exc.code,
+                "message": exc.message,
+                "retryable": exc.retryable,
+                "observed_state": exc.observed_state,
             }
         },
     )
@@ -417,7 +439,14 @@ def upload_random(
         result.update({"corpus_id": corpus_id, "corpus_path": path.relative_to(root).as_posix()})
         finish_idempotent_mutation(claim, result)
         return result
-    except HTTPException:
+    except HTTPException as exc:
+        fail_idempotent_mutation(
+            claim,
+            exc,
+            retryable=exc.status_code >= 500,
+            error_code="UPLOAD_PREFLIGHT_FAILED",
+            response_status=exc.status_code,
+        )
         raise
     except CapacityRejected as exc:
         fail_idempotent_mutation(claim, exc, error_code="CAPACITY_RETRYABLE", response_status=exc.status_code)

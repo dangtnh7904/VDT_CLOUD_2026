@@ -1,6 +1,11 @@
-# RGW Object Lab
+# Ceph Storage Lab Console
 
-Web console để PUT/GET object qua Ceph RGW. React không nhận AWS/RGW credential; mọi thao tác S3 nằm trong FastAPI hoặc worker.
+Web console để tạo workload, quản lý dữ liệu thử nghiệm RGW/RBD và quan sát
+capacity/performance của Ceph. React không nhận AWS/RGW credential; mọi thao
+tác S3 hoặc đặc quyền Ceph nằm trong FastAPI, worker hoặc host-agent.
+
+Kết quả đã chạy và các mục Ceph/RBD chưa thể chạy trên máy hiện tại được ghi
+tách bạch trong [`VALIDATION.md`](VALIDATION.md).
 
 ## Nguồn file Ubuntu
 
@@ -54,10 +59,25 @@ docker compose up --build -d
 docker compose ps
 ```
 
-Compose chạy `python -m app.migrate` một lần. `backend` và `worker` chỉ
+Compose chạy `python -m app.migrate` một lần. `backend`, `worker` và
+`performance-collector` chỉ
 khởi động sau khi migration thành công. `extra_hosts` dùng
 `host-gateway` để cùng cấu hình hoạt động với Docker Desktop và Docker
 Engine hiện đại.
+
+Hai profile Ceph không được bật mặc định. Sau khi cài host-agent theo
+[`agent/README.md`](agent/README.md), đặt `CEPH_AGENT_SOCKET_DIR` thành thư mục
+socket thật trên Linux (thường là `/run/rgw-console`), khai báo chính xác FSID,
+pool/namespace allowlist, rồi mới bật collector và RBD worker:
+
+```bash
+docker compose --profile ceph-collector --profile ceph-rbd up --build -d
+docker compose ps
+```
+
+Nếu thiếu FSID, allowlist hoặc socket, API/UI RBD fail closed. Không bật
+`CAPACITY_OBSERVE_ONLY=false` cho tới khi inventory mọi affected pool, tham số
+metadata/safety margin và chuỗi fresh stable samples đã được kiểm chứng.
 
 Nếu cần database container tách biệt cho lab, profile `bundled-db` là tùy
 chọn và không được bật bởi `docker compose up` thông thường. Khởi
@@ -98,6 +118,21 @@ Chạy `python -m app.worker` trong terminal thứ hai với cùng virtualenv,
 `PYTHONPATH` và working directory. Frontend native chạy bằng `npm ci` rồi
 `npm run dev` trong thư mục `frontend`.
 
+Trên Linux đã provision host-agent, chạy thêm `python -m
+app.capacity_collector` và `python -m app.rbd_lifecycle_worker`. Không chạy
+RBD lifecycle worker trên Windows: kernel RBD, block-device validation và mount
+chỉ được hỗ trợ trên host Linux.
+
+Chạy `python -m app.performance_collector` trong một terminal khác trên mọi
+nền tảng. Collector này luôn ghi request IOPS/throughput của console. Để thêm
+toàn cluster Ceph, đặt `PERFORMANCE_SOURCE=prometheus`,
+`PERFORMANCE_PROMETHEUS_URL` và `CEPH_EXPECTED_FSID` sau khi đã kiểm tra endpoint
+mgr/Prometheus đúng cluster. Sample đầu tiên chỉ dùng làm baseline và được báo
+`PARTIAL/WARMING_UP`; collector không biến nó thành 0 IOPS.
+Nếu endpoint dùng bearer auth, đặt token ở
+`PERFORMANCE_PROMETHEUS_BEARER_TOKEN`; không nhúng credential vào URL và không
+đưa biến này sang frontend.
+
 Mở `http://localhost:5173`. Frontend được publish trên mọi interface; API là `http://localhost:8000` và Swagger là `http://localhost:8000/docs`.
 
 Kiểm tra:
@@ -105,6 +140,8 @@ Kiểm tra:
 ```bash
 curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/corpora
+curl "http://127.0.0.1:8000/api/performance/current?source=application"
+curl "http://127.0.0.1:8000/api/performance/history?source=application&step=15"
 ```
 
 ## Forward port về máy host
@@ -122,15 +159,19 @@ Không publish PostgreSQL bundled và không đặt credential trong biến
 sau đó:
 
 ```bash
-docker compose restart backend worker
+docker compose restart backend worker performance-collector
 ```
 
 ## Thành phần
 
-- `frontend`: React/Vite, modal corpus picker, upload progress riêng cho file local, dashboard SSE.
-- `backend`: FastAPI + boto3, allowlist, ListObjectsV2 pagination, streamed/range GET.
+- `frontend`: React/Vite, capacity banner, Performance dashboard, Object Explorer và manual RBD lifecycle UI.
+- `backend`: FastAPI + boto3, RGW/RBD allowlist, idempotency, capacity admission và telemetry APIs.
 - `worker`: process Python riêng, lấy streaming job từ PostgreSQL, hỗ trợ pause/resume/stop.
-- PostgreSQL host: lưu operations, live metrics và trạng thái job.
+- `performance-collector`: ghi application I/O, tùy chọn tính Ceph client IOPS/throughput từ counter mgr/Prometheus, tạo rollup 1 phút và dọn retention.
+- `capacity-collector` (profile `ceph-collector`): lấy telemetry chỉ đọc qua Unix socket.
+- `rbd-lifecycle-worker` (profile `ceph-rbd`): state machine create/map/format/mount/unmount/unmap/delete có fence và reconcile.
+- `ceph-host-agent`: systemd service Linux giữ CephX/keyring và thực thi action allowlist; FastAPI không nhận keyring.
+- PostgreSQL host: lưu operations, capacity ledger, idempotency, volume/action và trạng thái job.
 - `postgres` (profile `bundled-db`, tùy chọn): database container riêng cho lab.
 
 Object tạo bởi hệ thống dùng key:

@@ -50,7 +50,7 @@ class RbdControlError(RuntimeError):
 class VolumeCreateRequest(BaseModel):
     pool: str = Field(min_length=1, max_length=255)
     namespace: str | None = Field(default=None, max_length=255)
-    logical_size_bytes: int = Field(gt=0, le=1 << 50)
+    logical_size_bytes: int = Field(ge=16 * MIB, le=1 << 40)
     capacity_mode: Literal["reserved-logical"] = "reserved-logical"
     filesystem: Literal["ext4"] = "ext4"
     auto_mount: bool
@@ -540,6 +540,8 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
         "MOUNT_FAILED",
         "BUSY",
         "DELETE_BLOCKED_DEPENDENCY",
+        "REQUESTED",
+        "CAPACITY_RESERVED",
     },
 }
 _INTENDED_STATE = {"MOUNT": "READY", "UNMOUNT": "UNMOUNTED", "DELETE": "DELETED"}
@@ -588,7 +590,12 @@ def _enqueue_volume_action(
                         observed_state={"action_id": str(active["id"]), "state": active["state"]},
                     )
                 observed = volume["observed_state"]
-                if observed in {"RECONCILING", "UNKNOWN", "REQUESTED", "CAPACITY_RESERVED"}:
+                precreate_cleanup = (
+                    action_type == "DELETE"
+                    and observed in {"REQUESTED", "CAPACITY_RESERVED"}
+                    and not volume.get("image_id")
+                )
+                if observed in {"RECONCILING", "UNKNOWN", "REQUESTED", "CAPACITY_RESERVED"} and not precreate_cleanup:
                     raise RbdControlError(
                         423,
                         "RECONCILING",
@@ -702,4 +709,3 @@ def get_action(action_id: UUID):
     result = _action_result(row)
     result["volume"] = _volume_result(volume)
     return result
-

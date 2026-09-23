@@ -15,6 +15,7 @@ from ..db import connection
 INCREASING_OPERATIONS = {"PUT", "UPDATE", "RBD_CREATE", "RBD_FILE_WRITE"}
 CLEANUP_OPERATIONS = {"DELETE_CLEANUP", "RBD_DELETE_CLEANUP"}
 CAPACITY_CHARGED_OPERATIONS = INCREASING_OPERATIONS | CLEANUP_OPERATIONS
+HEALTH_GATED_OPERATIONS = CAPACITY_CHARGED_OPERATIONS | {"RBD_FORMAT"}
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,9 @@ def decide(
     expected_bytes = max(0, int(expected_bytes))
     object_count = max(1, int(object_count))
     observe_only = bool(_setting("capacity_observe_only", True))
+    strict_health = operation == "RBD_FORMAT" and bool(
+        _setting("capacity_require_clean_for_rbd_format", True)
+    )
     control, snapshot, osds = _load_control_and_snapshot(_db_conn)
     decision_id = str(uuid.uuid4())
 
@@ -200,10 +204,10 @@ def decide(
         snapshot_fresh = bool(snapshot.get("fresh")) and 0 <= age_seconds <= max_age
 
     expected_fsid = get_settings().ceph_expected_fsid
-    if operation in CAPACITY_CHARGED_OPERATIONS and (
+    if operation in HEALTH_GATED_OPERATIONS and (
         not expected_fsid or (snapshot and snapshot.get("fsid") != expected_fsid)
     ):
-        allow = observe_only
+        allow = observe_only and not strict_health
         result = CapacityDecision(
             decision_id,
             "ADMIT" if allow else "BLOCK",
@@ -227,7 +231,7 @@ def decide(
         return result
 
     if not snapshot_fresh or not osds:
-        allow = observe_only or operation not in CAPACITY_CHARGED_OPERATIONS
+        allow = (observe_only and not strict_health) or operation not in HEALTH_GATED_OPERATIONS
         result = CapacityDecision(
             decision_id,
             "ADMIT" if allow else "BLOCK",
@@ -247,7 +251,7 @@ def decide(
         return result
 
     requested_pools = {pool for pool in (affected_pools or []) if pool}
-    if operation in CAPACITY_CHARGED_OPERATIONS:
+    if operation in HEALTH_GATED_OPERATIONS:
         scoped_osds: list[dict[str, Any]] = []
         covered_pools: set[str] = set()
         scope_complete = bool(requested_pools)
@@ -265,7 +269,7 @@ def decide(
                 )
         scope_complete = scope_complete and covered_pools == requested_pools and bool(scoped_osds)
         if not scope_complete:
-            allow = observe_only
+            allow = observe_only and not strict_health
             result = CapacityDecision(
                 decision_id,
                 "ADMIT" if allow else "BLOCK",
@@ -320,7 +324,7 @@ def decide(
             forced_state = "RECONCILING"
             forced_reason = "OSDMap epoch changed between the two newest capacity samples"
         if forced_state:
-            allow = observe_only
+            allow = observe_only and not strict_health
             result = CapacityDecision(
                 decision_id,
                 "ADMIT" if allow else "BLOCK",

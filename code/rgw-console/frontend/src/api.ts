@@ -63,12 +63,14 @@ export const uploadWithProgress = (
   file: File,
   fields: Record<string, string>,
   onProgress: (progress: number) => void,
+  idempotencyKey: string = crypto.randomUUID(),
 ): Promise<any> => new Promise((resolve, reject) => {
   const body = new FormData();
   body.append("file", file, file.name);
   Object.entries(fields).forEach(([key, value]) => body.append(key, value));
   const request = new XMLHttpRequest();
   request.open("POST", "/api/uploads/browser");
+  request.setRequestHeader("Idempotency-Key", idempotencyKey);
   request.upload.onprogress = event => event.lengthComputable && onProgress(Math.round(event.loaded / event.total * 100));
   request.onload = () => {
     const payload = JSON.parse(request.responseText || "{}");

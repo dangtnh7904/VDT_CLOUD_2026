@@ -1,0 +1,1 @@
+flags sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit

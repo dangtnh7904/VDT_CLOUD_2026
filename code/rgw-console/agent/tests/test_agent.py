@@ -9,10 +9,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
-from agent.ceph_cli import ALLOWED_ACTIONS, CephInventoryRunner
+from agent.ceph_cli import ACTION_SCHEMAS, ALLOWED_ACTIONS, CephInventoryRunner
 from agent.config import AgentConfigError, _positive_float
 from agent.errors import AgentError
 from agent.protocol import decode_request
+from agent.rbd import RbdActionRunner
 from backend.app.services.rbd_agent_client import RbdAgentClient, RbdAgentClientError
 
 
@@ -38,6 +39,31 @@ class ProtocolTests(unittest.TestCase):
 
     def test_unscoped_rbd_inventory_is_not_exposed(self) -> None:
         self.assertNotIn("rbd.device_list", ALLOWED_ACTIONS)
+
+    def test_rbd_mutation_rejects_unknown_parameters(self) -> None:
+        request_id = str(uuid4())
+        volume_id = str(uuid4())
+        action_id = str(uuid4())
+        raw = json.dumps(
+            {
+                "version": 1,
+                "request_id": request_id,
+                "action": "rbd.image.create",
+                "params": {
+                    "volume_id": volume_id,
+                    "action_id": action_id,
+                    "fence_token": 1,
+                    "pool": "rbd-lab",
+                    "namespace": "",
+                    "image_name": "lab-volume",
+                    "size_bytes": 16 * 1024 * 1024,
+                    "force": True,
+                },
+            }
+        ).encode()
+        with self.assertRaises(AgentError) as caught:
+            decode_request(raw, ALLOWED_ACTIONS, ACTION_SCHEMAS)
+        self.assertEqual(caught.exception.code, "INVALID_PARAMS")
 
 
 class BoundedCommandTests(unittest.TestCase):
@@ -74,7 +100,61 @@ class BoundedCommandTests(unittest.TestCase):
         self.assertTrue(caught.exception.retryable)
 
 
+class RbdFenceTests(unittest.TestCase):
+    def test_same_in_progress_action_may_reenter_observation_checks(self) -> None:
+        runner = RbdActionRunner.__new__(RbdActionRunner)
+        params = {
+            "volume_id": str(uuid4()),
+            "action_id": str(uuid4()),
+            "fence_token": 7,
+        }
+        record = {
+            "last_fence_token": 7,
+            "actions": {
+                params["action_id"]: {
+                    "action": "rbd.image.map",
+                    "fingerprint": runner._fingerprint(params),
+                    "state": "IN_PROGRESS",
+                }
+            },
+        }
+        self.assertIsNone(runner._replay_or_fence(record, "rbd.image.map", params))
+
+    def test_distinct_action_requires_a_newer_fence(self) -> None:
+        runner = RbdActionRunner.__new__(RbdActionRunner)
+        params = {
+            "volume_id": str(uuid4()),
+            "action_id": str(uuid4()),
+            "fence_token": 7,
+        }
+        with self.assertRaises(AgentError) as caught:
+            runner._replay_or_fence(
+                {"last_fence_token": 7, "actions": {}},
+                "rbd.image.map",
+                params,
+            )
+        self.assertEqual(caught.exception.code, "FENCE_REJECTED")
+
+
 class ClientProtocolTests(unittest.TestCase):
+    def test_rbd_payload_is_unwrapped_and_action_bound(self) -> None:
+        payload = RbdAgentClient._rbd_data(
+            {
+                "fsid": str(uuid4()),
+                "action": "rbd.image.info",
+                "data": {"image_id": "abc"},
+            },
+            "rbd.image.info",
+        )
+        self.assertEqual(payload["image_id"], "abc")
+        self.assertIn("fsid", payload)
+
+        with self.assertRaises(RbdAgentClientError):
+            RbdAgentClient._rbd_data(
+                {"action": "rbd.image.list", "data": {}},
+                "rbd.image.info",
+            )
+
     def test_pre_request_error_may_have_null_request_id(self) -> None:
         request_id = str(uuid4())
         raw = json.dumps(

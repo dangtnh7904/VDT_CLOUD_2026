@@ -1,0 +1,17 @@
+WHO                                    MASK  LEVEL     OPTION                                 VALUE                                                                                               RO
+global                                       advanced  cluster_network                        10.20.30.0/24                                                                                       * 
+global                                       basic     container_image                        docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59  * 
+  mon                                        advanced  auth_allow_insecure_global_id_reclaim  false                                                                                                 
+  mon                                        advanced  public_network                         10.20.20.0/24                                                                                       * 
+  mgr                                        advanced  mgr/cephadm/container_image_base       docker.io/trangtran97/ceph@sha256:3694ab472a483b17b920e04fd8f924dd5c072096a3f0c46ca2dd00f84d094d59    
+  mgr                                        advanced  mgr/cephadm/container_init             True                                                                                                * 
+  mgr                                        advanced  mgr/cephadm/migration_current          2                                                                                                   * 
+  mgr                                        advanced  mgr/dashboard/ALERTMANAGER_API_HOST    http://10.20.20.11:9093                                                                             * 
+  mgr                                        advanced  mgr/dashboard/GRAFANA_API_SSL_VERIFY   false                                                                                               * 
+  mgr                                        advanced  mgr/dashboard/GRAFANA_API_URL          https://10.20.20.11:3000                                                                            * 
+  mgr                                        advanced  mgr/dashboard/PROMETHEUS_API_HOST      http://10.20.20.11:9095                                                                             * 
+  mgr                                        advanced  mgr/dashboard/ssl_server_port          8443                                                                                                * 
+  mgr                                        advanced  mgr/orchestrator/orchestrator          cephadm                                                                                               
+    client.rgw.lab.ceph-master.mmsntl        basic     rgw_frontends                          beast endpoint=10.20.20.11:8080                                                                     * 
+    client.rgw.lab.ceph-node2.dphdvf         basic     rgw_frontends                          beast endpoint=10.20.20.12:8080                                                                     * 
+    client.rgw.lab.ceph-node3.jntpop         basic     rgw_frontends                          beast endpoint=10.20.20.13:8080                                                                     * 

@@ -1,0 +1,11 @@
+ID  CLASS  WEIGHT   REWEIGHT  SIZE     RAW USE  DATA     OMAP     META     AVAIL    %USE   VAR   PGS  STATUS  TYPE NAME           
+-1         0.11719         -  120 GiB   13 GiB   12 GiB  364 KiB  487 MiB  107 GiB  10.44  1.00    -          root default        
+-3         0.05859         -   60 GiB  4.3 GiB  4.0 GiB   18 KiB  293 MiB   56 GiB   7.18  0.69    -              host ceph-master
+ 0    hdd  0.02930   1.00000   30 GiB  1.9 GiB  1.8 GiB    9 KiB  163 MiB   28 GiB   6.43  0.62  125      up          osd.0       
+ 4    hdd  0.02930   1.00000   30 GiB  2.4 GiB  2.3 GiB    9 KiB  130 MiB   28 GiB   7.93  0.76  108      up          osd.4       
+-5         0.02930         -   30 GiB  4.1 GiB  4.0 GiB   13 KiB  103 MiB   26 GiB  13.71  1.31    -              host ceph-node2 
+ 1    hdd  0.02930   1.00000   30 GiB  4.1 GiB  4.0 GiB   13 KiB  103 MiB   26 GiB  13.71  1.31  233      up          osd.1       
+-7         0.02930         -   30 GiB  4.1 GiB  4.0 GiB  333 KiB   90 MiB   26 GiB  13.67  1.31    -              host ceph-node3 
+ 2    hdd  0.02930   1.00000   30 GiB  4.1 GiB  4.0 GiB  333 KiB   90 MiB   26 GiB  13.67  1.31  233      up          osd.2       
+                       TOTAL  120 GiB   13 GiB   12 GiB  367 KiB  487 MiB  107 GiB  10.44                                         
+MIN/MAX VAR: 0.62/1.31  STDDEV: 3.30

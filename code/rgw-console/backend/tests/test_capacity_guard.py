@@ -135,6 +135,33 @@ class CapacityDecisionTests(unittest.TestCase):
         self.assertEqual(result.decision, "BLOCK")
         self.assertEqual(result.state, "BLOCKED_UNKNOWN_CAPACITY")
 
+    def test_rbd_format_requires_fresh_health_even_in_observe_only_mode(self):
+        fsid = str(uuid4())
+        control, snapshot, osds = telemetry(fsid)
+        snapshot["fresh"] = False
+        with (
+            patch.object(
+                capacity_guard,
+                "get_settings",
+                return_value=policy(fsid=fsid, observe_only=True),
+            ),
+            patch.object(
+                capacity_guard,
+                "_load_control_and_snapshot",
+                return_value=(control, snapshot, osds),
+            ),
+        ):
+            result = decide(
+                "RBD_FORMAT",
+                0,
+                persist=False,
+                affected_pools=["rgw.data"],
+                _db_conn=_EpochConnection(),
+            )
+
+        self.assertEqual(result.decision, "BLOCK")
+        self.assertEqual(result.state, "BLOCKED_TELEMETRY")
+
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 

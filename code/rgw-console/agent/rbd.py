@@ -200,7 +200,43 @@ class RbdActionRunner:
         return info
 
     def _device_list_action(self, _params: dict[str, Any]) -> dict[str, Any]:
-        return {"devices": self._device_list()}
+        devices: list[dict[str, Any]] = []
+        mounts = self._mount_entries()
+        for mapping in self._device_list():
+            info = self._read_info(
+                mapping["pool"],
+                mapping["namespace"],
+                mapping["image_name"],
+                required=True,
+            )
+            assert info is not None
+            identity = {
+                "pool": mapping["pool"],
+                "namespace": mapping["namespace"],
+                "image_name": mapping["image_name"],
+                "image_id": info["image_id"],
+            }
+            observed = self._observe_mapping_identity(mapping, identity)
+            matching_mounts = [
+                entry
+                for entry in mounts
+                if entry["major"] == observed["device_major"]
+                and entry["minor"] == observed["device_minor"]
+            ]
+            if len(matching_mounts) > 1:
+                raise AgentError(
+                    "MOUNT_IDENTITY_CONFLICT",
+                    "A managed RBD device has multiple mount entries",
+                )
+            signature = self._blkid(observed["device"], blank_allowed=True)
+            device = {**identity, **observed, "mounted": bool(matching_mounts)}
+            if matching_mounts:
+                device["mountpoint"] = matching_mounts[0]["target"]
+            if signature.get("TYPE") == "ext4" and isinstance(signature.get("UUID"), str):
+                device["filesystem"] = "ext4"
+                device["fs_uuid"] = signature["UUID"]
+            devices.append(device)
+        return {"devices": devices}
 
     # -- mutations ----------------------------------------------------------
 
@@ -218,30 +254,56 @@ class RbdActionRunner:
             replay = self._replay_or_fence(record, "rbd.image.create", params)
             if replay is not None:
                 return replay
-            raise AgentError(
-                "VOLUME_ID_CONFLICT",
-                "The volume ID is already bound to an agent record",
-            )
-        if self._read_info(pool, namespace, image_name, required=False) is not None:
+            previous = record.get("actions", {}).get(params["action_id"])
+            if previous is None or any(
+                record.get(field) != expected
+                for field, expected in {
+                    "pool": pool,
+                    "namespace": namespace,
+                    "image_name": image_name,
+                    "size_bytes": size_bytes,
+                    "creation_action_id": params["action_id"],
+                }.items()
+            ):
+                raise AgentError(
+                    "VOLUME_ID_CONFLICT",
+                    "The volume ID is already bound to a different agent record",
+                )
+            observed = self._read_info(pool, namespace, image_name, required=False)
+            if observed is not None:
+                self._assert_created_info(observed, size_bytes)
+                record.update(
+                    image_id=observed["image_id"],
+                    created_confirmed=True,
+                    features=observed["features"],
+                )
+                result = {
+                    **observed,
+                    "volume_id": params["volume_id"],
+                    "state": "CREATED",
+                    "replayed": True,
+                }
+                return self._finish_action(record, params["action_id"], result)
+        elif self._read_info(pool, namespace, image_name, required=False) is not None:
             raise AgentError(
                 "IMAGE_ALREADY_EXISTS",
                 "Refusing to adopt or overwrite an existing RBD image",
             )
-
-        record = {
-            "version": 1,
-            "volume_id": params["volume_id"],
-            "pool": pool,
-            "namespace": namespace,
-            "image_name": image_name,
-            "size_bytes": size_bytes,
-            "creation_action_id": params["action_id"],
-            "created_confirmed": False,
-            "formatted": False,
-            "deleted": False,
-            "last_fence_token": 0,
-            "actions": {},
-        }
+        if record is None:
+            record = {
+                "version": 1,
+                "volume_id": params["volume_id"],
+                "pool": pool,
+                "namespace": namespace,
+                "image_name": image_name,
+                "size_bytes": size_bytes,
+                "creation_action_id": params["action_id"],
+                "created_confirmed": False,
+                "formatted": False,
+                "deleted": False,
+                "last_fence_token": 0,
+                "actions": {},
+            }
         self._begin_action(record, "rbd.image.create", params)
         self._invoke(
             self._argv(
@@ -307,7 +369,12 @@ class RbdActionRunner:
             device_minor=observed["device_minor"],
             mapping_id=observed["mapping_id"],
         )
-        result = {**observed, "volume_id": params["volume_id"], "state": "MAPPED"}
+        result = {
+            **self._result_identity(params),
+            **observed,
+            "volume_id": params["volume_id"],
+            "state": "MAPPED",
+        }
         return self._finish_action(record, params["action_id"], result)
 
     def _format_ext4(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -351,6 +418,7 @@ class RbdActionRunner:
             raise AgentError("FORMAT_VERIFY_FAILED", "Filesystem UUID is invalid") from exc
         record.update(formatted=True, filesystem="ext4", fs_uuid=fs_uuid)
         result = {
+            **self._result_identity(params),
             "volume_id": params["volume_id"],
             "state": "FORMATTED",
             "filesystem": "ext4",
@@ -436,6 +504,7 @@ class RbdActionRunner:
                 raise AgentError("UNMOUNT_VERIFY_FAILED", "Mount is still present", retryable=True)
         record["mounted"] = False
         result = {
+            **self._result_identity(params),
             "volume_id": params["volume_id"],
             "state": "UNMOUNTED",
             "mountpoint": str(mountpoint),
@@ -473,7 +542,12 @@ class RbdActionRunner:
                 "device_minor": params["device_minor"],
             }
         record["mapped"] = False
-        result = {"volume_id": params["volume_id"], "state": "UNMAPPED", **observed}
+        result = {
+            **self._result_identity(params),
+            "volume_id": params["volume_id"],
+            "state": "UNMAPPED",
+            **observed,
+        }
         return self._finish_action(record, params["action_id"], result)
 
     def _remove(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -517,7 +591,11 @@ class RbdActionRunner:
         return self._finish_action(
             record,
             params["action_id"],
-            {"volume_id": params["volume_id"], "state": "DELETED", "image_id": params["image_id"]},
+            {
+                **self._result_identity(params),
+                "volume_id": params["volume_id"],
+                "state": "DELETED",
+            },
         )
 
     # -- Ceph observations --------------------------------------------------
@@ -1002,10 +1080,13 @@ class RbdActionRunner:
                 raise AgentError("IDEMPOTENCY_CONFLICT", "action_id was reused with different input")
             if previous.get("state") == "SUCCEEDED" and isinstance(previous.get("result"), dict):
                 return {**previous["result"], "replayed": True}
-            raise AgentError(
-                "ACTION_RECONCILIATION_REQUIRED",
-                "Previous action outcome is uncertain; observe state before retry",
-            )
+            if previous.get("state") == "IN_PROGRESS":
+                # The handler must re-run all of its read-only identity and
+                # state checks before it reaches _begin_action again. This
+                # permits recovery after an ambiguous transport failure
+                # without blindly repeating a privileged mutation.
+                return None
+            raise AgentError("ACTION_STATE_INVALID", "Stored action state is invalid")
         if params["fence_token"] <= int(record.get("last_fence_token", 0)):
             raise AgentError("FENCE_REJECTED", "Action fence token is stale")
         return None
@@ -1074,10 +1155,20 @@ class RbdActionRunner:
             raise AgentError("FILESYSTEM_IDENTITY_MISMATCH", "Observed filesystem identity changed")
 
     @staticmethod
+    def _result_identity(params: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "pool": params["pool"],
+            "namespace": params["namespace"],
+            "image_name": params["image_name"],
+            "image_id": params["image_id"],
+        }
+
+    @staticmethod
     def _mount_result(
         params: dict[str, Any], observed: dict[str, Any], mountpoint: Path, state: str
     ) -> dict[str, Any]:
         return {
+            **RbdActionRunner._result_identity(params),
             "volume_id": params["volume_id"],
             "state": state,
             "mountpoint": str(mountpoint),
@@ -1109,4 +1200,3 @@ class RbdActionRunner:
             return False
         stderr = str(error.details.get("stderr", "")).lower()
         return any(marker in stderr for marker in _NOT_FOUND_MARKERS)
-

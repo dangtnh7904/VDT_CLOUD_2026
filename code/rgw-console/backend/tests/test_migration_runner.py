@@ -37,16 +37,16 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         first = migrate(self.conn)
         second = migrate(self.conn)
 
-        self.assertEqual(first.applied_versions, (1, 2, 3))
+        self.assertEqual(first.applied_versions, (1, 2, 3, 4, 5, 6))
         self.assertEqual(first.stamped_versions, ())
         self.assertEqual(second.applied_versions, ())
-        self.assertEqual(second.current_version, 3)
-        self.assertEqual(assert_schema_current(self.conn), 3)
+        self.assertEqual(second.current_version, 6)
+        self.assertEqual(assert_schema_current(self.conn), 6)
         self.assertEqual(
             self.conn.execute("SELECT count(*) AS count FROM schema_migrations").fetchone()[
                 "count"
             ],
-            3,
+            6,
         )
         self.assertEqual(
             self.conn.execute(
@@ -85,7 +85,7 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         result = migrate(self.conn)
 
         self.assertEqual(result.stamped_versions, (1,))
-        self.assertEqual(result.applied_versions, (2, 3))
+        self.assertEqual(result.applied_versions, (2, 3, 4, 5, 6))
         job = self.conn.execute(
             "SELECT * FROM stream_jobs WHERE id = %s",
             ("11111111-1111-1111-1111-111111111111",),

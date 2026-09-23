@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import {
   Activity, AlertTriangle, Archive, ArrowDownToLine, Boxes, Check, ChevronLeft, ChevronRight,
   Clock3, Database, File, FileJson, Folder, FolderOpen, Gauge, HardDrive, History, Image,
-  Layers3, LoaderCircle, Menu, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Server,
+  Layers3, LineChart, LoaderCircle, Menu, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Server,
   ShieldAlert, Shuffle, Square, Trash2, Upload, Video, X, Zap,
 } from "lucide-react";
 import { api, formatBytes, uploadWithProgress } from "./api";
 
-type View = "dashboard" | "upload" | "random" | "stream" | "objects";
+type View = "dashboard" | "performance" | "upload" | "random" | "stream" | "objects" | "volumes";
 type CorpusItem = { name: string; path: string; kind: "file" | "directory"; size?: number; category?: string; content_type?: string };
 type Pick = { corpusId: string; paths: string[] };
-type UploadRow = { id: string; name: string; size?: number; progress: number; state: "queued" | "uploading" | "success" | "error"; result?: any; retry?: () => void };
+type UploadRow = { id: string; name: string; size?: number; progress: number; state: "queued" | "uploading" | "success" | "error"; result?: any; idempotencyKey?: string };
 type CapacitySnapshot = {
   state: string;
   fresh: boolean;
@@ -23,13 +23,34 @@ type CapacitySnapshot = {
   policy?: { hard_ceiling_ratio?: number; admission_stop_ratio?: number; resume_ratio?: number };
 };
 type ActionNotice = { kind: "success" | "error"; text: string };
+type PerformanceSample = {
+  state: "FRESH" | "STALE" | "PARTIAL" | "UNAVAILABLE";
+  source: "application" | "ceph" | "device";
+  sample_kind?: "raw" | "rollup_1m";
+  scope_type: string;
+  scope: string;
+  captured_at: string | null;
+  age_seconds: number | null;
+  window_seconds: number | null;
+  fresh: boolean;
+  reset_detected: boolean;
+  partial: boolean;
+  iops: { read: number | null; write: number | null; total: number | null };
+  throughput_bps: { read: number | null; write: number | null; total: number | null };
+  latency_ms: { read_avg: number | null; write_avg: number | null; average: number | null; p50: number | null; p95: number | null; p99: number | null };
+  counts: { success: number | null; error: number | null };
+  context: Record<string, unknown>;
+  reasons: string[];
+};
 
 const nav: { id: View; label: string; icon: any }[] = [
   { id: "dashboard", label: "Live dashboard", icon: Gauge },
+  { id: "performance", label: "Performance", icon: LineChart },
   { id: "upload", label: "Upload objects", icon: Upload },
   { id: "random", label: "Random object", icon: Shuffle },
   { id: "stream", label: "Streaming PUT", icon: Zap },
   { id: "objects", label: "Object explorer", icon: Boxes },
+  { id: "volumes", label: "RBD volumes", icon: HardDrive },
 ];
 
 const categoryIcons: Record<string, any> = { images: Image, data: FileJson, documents: File, media: Video, archives: Archive, binary: Database, other: File };
@@ -88,7 +109,7 @@ function CorpusPicker({ open, multiple = true, folders = false, onClose, onChoos
 }
 
 function Header({ view, endpoint }: { view: View; endpoint: string }) {
-  return <header className="topbar"><div><p className="eyebrow">CEPH OBJECT GATEWAY</p><h1>{nav.find(x => x.id === view)?.label}</h1></div><div className="endpoint"><span className="status-dot" /><div><small>RGW endpoint</small><strong>{endpoint || "Connecting…"}</strong></div></div></header>;
+  return <header className="topbar"><div><p className="eyebrow">CEPH STORAGE LAB</p><h1>{nav.find(x => x.id === view)?.label}</h1></div><div className="endpoint"><span className="status-dot" /><div><small>RGW endpoint</small><strong>{endpoint || "Connecting…"}</strong></div></div></header>;
 }
 
 function CapacityBanner() {
@@ -151,6 +172,116 @@ function Dashboard() {
   </div>;
 }
 
+const metricValue = (value: number | null | undefined, suffix = "") => value == null ? "—" : `${value.toFixed(value >= 100 ? 0 : 2)}${suffix}`;
+const mibPerSecond = (value: number | null | undefined) => value == null ? "—" : `${(value / 1048576).toFixed(value >= 104857600 ? 0 : 2)} MiB/s`;
+
+function PerformanceChart({ samples, metric }: { samples: PerformanceSample[]; metric: "iops" | "throughput" }) {
+  const width = 900; const height = 250; const inset = 28;
+  const values = samples.flatMap(sample => {
+    const point = metric === "iops" ? sample.iops : sample.throughput_bps;
+    return [point.read, point.write].filter((value): value is number => value != null && Number.isFinite(value));
+  });
+  const maximum = Math.max(...values, 1);
+  const points = (key: "read" | "write") => samples.map((sample, index) => {
+    const value = (metric === "iops" ? sample.iops : sample.throughput_bps)[key];
+    if (value == null) return null;
+    const x = samples.length <= 1 ? width / 2 : inset + index * (width - inset * 2) / (samples.length - 1);
+    const y = height - inset - value / maximum * (height - inset * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).filter(Boolean).join(" ");
+  return <div className="performance-chart">
+    <div className="chart-scale"><span>{metric === "iops" ? metricValue(maximum) : mibPerSecond(maximum)}</span><span>0</span></div>
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${metric} read and write history`}>
+      <line x1={inset} y1={inset} x2={inset} y2={height - inset} />
+      <line x1={inset} y1={height - inset} x2={width - inset} y2={height - inset} />
+      {points("read") && <polyline className="read-line" points={points("read")} />}
+      {points("write") && <polyline className="write-line" points={points("write")} />}
+    </svg>
+    {!samples.length && <div className="chart-empty">Chưa có sample trong khoảng thời gian này.</div>}
+  </div>;
+}
+
+function PerformanceView() {
+  const [source, setSource] = useState<"application" | "ceph">("application");
+  const [scopeType, setScopeType] = useState<"cluster" | "osd">("cluster");
+  const [scope, setScope] = useState("0");
+  const [range, setRange] = useState<"5m" | "1h" | "24h">("5m");
+  const [metric, setMetric] = useState<"iops" | "throughput">("iops");
+  const [current, setCurrent] = useState<PerformanceSample | null>(null);
+  const [history, setHistory] = useState<PerformanceSample[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const query = () => {
+    const params = new URLSearchParams({ source, scope_type: scopeType });
+    if (scopeType !== "cluster") params.set("scope", scope);
+    return params;
+  };
+  const loadHistory = async () => {
+    const settings = range === "5m" ? { seconds: 300, step: 15 } : range === "1h" ? { seconds: 3600, step: 60 } : { seconds: 86400, step: 60 };
+    const params = query();
+    const to = new Date(); const from = new Date(to.getTime() - settings.seconds * 1000);
+    params.set("from", from.toISOString()); params.set("to", to.toISOString()); params.set("step", String(settings.step));
+    const result = await api(`/performance/history?${params}`);
+    setHistory(result.items || []);
+  };
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [next] = await Promise.all([api<PerformanceSample>(`/performance/current?${query()}`), loadHistory()]);
+      setCurrent(next); setError("");
+    } catch (reason: any) { setError(reason?.message || "Không thể đọc performance telemetry."); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => {
+    load();
+    const events = new EventSource(`/api/performance/stream?${query()}`);
+    events.onmessage = event => {
+      setCurrent(JSON.parse(event.data));
+      setError("");
+      loadHistory().catch(() => {});
+    };
+    events.onerror = () => setError("Performance stream đang reconnect…");
+    return () => events.close();
+  }, [source, scopeType, scope, range]);
+
+  const status = error ? "UNAVAILABLE" : current?.state || "CONNECTING";
+  const stateClass = status === "FRESH" ? "fresh" : status === "PARTIAL" ? "partial" : "stale";
+  const latency = current?.latency_ms.p95 ?? current?.latency_ms.average;
+  const sourceText = source === "application"
+    ? "Console workload — request và payload do ứng dụng ghi nhận, không phải physical cluster I/O."
+    : "Ceph client counters — tổng client I/O từ các OSD; recovery/device traffic không được gắn nhãn vào số này.";
+  const cards = [
+    ["Total IOPS", metricValue(current?.iops.total), `R ${metricValue(current?.iops.read)} · W ${metricValue(current?.iops.write)}`, Activity],
+    ["Total throughput", mibPerSecond(current?.throughput_bps.total), `R ${mibPerSecond(current?.throughput_bps.read)} · W ${mibPerSecond(current?.throughput_bps.write)}`, Zap],
+    ["Read", `${metricValue(current?.iops.read)} IOPS`, mibPerSecond(current?.throughput_bps.read), ArrowDownToLine],
+    ["Write", `${metricValue(current?.iops.write)} IOPS`, mibPerSecond(current?.throughput_bps.write), Upload],
+    ["Latency", metricValue(latency, " ms"), current?.latency_ms.p95 != null ? "p95 application latency" : "average when available", Clock3],
+    ["Sample age", current?.age_seconds == null ? "—" : `${current.age_seconds.toFixed(0)} s`, `${current?.window_seconds || "—"} s window`, RefreshCw],
+  ];
+  return <div className="stack performance-view">
+    <section className="panel performance-head">
+      <div><span className="eyebrow">CURRENT SYSTEM I/O</span><h2>IOPS, throughput and latency</h2><p>{sourceText}</p></div>
+      <div className="performance-status"><span className={`fresh-pill ${stateClass}`}><i />{status}</span><small>{current?.captured_at ? new Date(current.captured_at).toLocaleString() : "No sample"}</small></div>
+    </section>
+    <section className="panel performance-controls">
+      <div className="segmented">{(["application", "ceph"] as const).map(item => <button className={source === item ? "active" : ""} onClick={() => { setSource(item); if (item === "application") setScopeType("cluster"); }} key={item}>{item === "application" ? "Console workload" : "Ceph cluster"}</button>)}</div>
+      <label><span>Scope</span><select value={scopeType} onChange={event => setScopeType(event.target.value as "cluster" | "osd")} disabled={source === "application"}><option value="cluster">Cluster</option><option value="osd">OSD</option></select></label>
+      {scopeType === "osd" && <label><span>OSD ID</span><input value={scope} onChange={event => setScope(event.target.value.replace(/\D/g, ""))} /></label>}
+      <button className="button ghost" onClick={load}><RefreshCw className={loading ? "spin" : ""} />Refresh</button>
+    </section>
+    {(error || current?.reasons?.length) && <div className={`performance-notice ${status === "PARTIAL" ? "warning" : ""}`}><AlertTriangle /><span>{error || current?.reasons.join(" · ")}</span></div>}
+    <div className="metric-grid">{cards.map(([label, value, sub, Icon]: any) => <article className="metric panel" key={label}><div className="metric-icon"><Icon size={19} /></div><small>{label}</small><strong>{value}</strong><span>{sub}</span></article>)}</div>
+    <section className="panel performance-history">
+      <div className="section-head"><div><h2>Performance history</h2><p>Read/write series · stale và reset không bị biến thành zero</p></div><div className="chart-legend"><span className="read">Read</span><span className="write">Write</span></div></div>
+      <div className="performance-toolbar"><div className="segmented">{(["iops", "throughput"] as const).map(item => <button className={metric === item ? "active" : ""} onClick={() => setMetric(item)} key={item}>{item === "iops" ? "IOPS" : "Throughput"}</button>)}</div><div className="segmented">{(["5m", "1h", "24h"] as const).map(item => <button className={range === item ? "active" : ""} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div>
+      <PerformanceChart samples={history.filter(sample => !sample.reset_detected && sample.state !== "STALE")} metric={metric} />
+      <footer className="performance-meta"><span>source <strong>{source}</strong></span><span>scope <strong>{current?.scope_type || scopeType}:{current?.scope || scope}</strong></span><span>samples <strong>{history.length}</strong></span><span>resolution <strong>{history[0]?.sample_kind === "rollup_1m" ? "1 minute rollup" : "raw"}</strong></span></footer>
+    </section>
+  </div>;
+}
+
 function UploadView({ defaultBucket }: { defaultBucket: string }) {
   const [source, setSource] = useState<"ubuntu" | "browser">("ubuntu");
   const [mode, setMode] = useState<"single" | "batch" | "folder">("single");
@@ -164,11 +295,11 @@ function UploadView({ defaultBucket }: { defaultBucket: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => setBucket(defaultBucket), [defaultBucket]);
-  const uploadCorpusPath = async (path: string, index: number) => {
+  const uploadCorpusPath = async (path: string, index: number, idempotencyKey: string = crypto.randomUUID()) => {
     if (!pick) return;
     setRows(current => current.map((row, i) => i === index ? { ...row, state: "uploading", progress: 20 } : row));
     try {
-      const data = await api("/uploads/corpus", { method: "POST", body: JSON.stringify({ corpus_id: pick.corpusId, paths: [path], client_id: clientId, bucket, prefix, mode }) });
+      const data = await api("/uploads/corpus", { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ corpus_id: pick.corpusId, paths: [path], client_id: clientId, bucket, prefix, mode }) });
       const first = data.results[0] || {};
       const result = data.results.length === 1 ? first : { ...first, filename: path, size: data.results.reduce((sum: number, x: any) => sum + (x.size || 0), 0), error: data.failed ? `${data.failed}/${data.results.length} files failed` : undefined };
       setRows(current => current.map((row, i) => i === index ? { ...row, name: result.filename || path, size: result.size, progress: 100, state: data.failed ? "error" : "success", result } : row));
@@ -176,19 +307,21 @@ function UploadView({ defaultBucket }: { defaultBucket: string }) {
   };
   const runCorpus = async () => {
     if (!pick) return;
-    setRows(pick.paths.map((name, i) => ({ id: `${i}`, name, progress: 0, state: "queued" })));
-    await Promise.allSettled(pick.paths.map((path, index) => uploadCorpusPath(path, index)));
+    const keys = pick.paths.map(() => crypto.randomUUID());
+    setRows(pick.paths.map((name, i) => ({ id: `${i}`, name, progress: 0, state: "queued", idempotencyKey: keys[i] })));
+    await Promise.allSettled(pick.paths.map((path, index) => uploadCorpusPath(path, index, keys[index])));
   };
-  const uploadOne = async (file: File, index: number) => {
+  const uploadOne = async (file: File, index: number, idempotencyKey: string = crypto.randomUUID()) => {
     setRows(current => current.map((row, i) => i === index ? { ...row, state: "uploading", progress: 0 } : row));
     try {
-      const result = await uploadWithProgress(file, { client_id: clientId, bucket, prefix, mode, relative_path: (file as any).webkitRelativePath || "" }, progress => setRows(current => current.map((row, i) => i === index ? { ...row, progress } : row)));
+      const result = await uploadWithProgress(file, { client_id: clientId, bucket, prefix, mode, relative_path: (file as any).webkitRelativePath || "" }, progress => setRows(current => current.map((row, i) => i === index ? { ...row, progress } : row)), idempotencyKey);
       setRows(current => current.map((row, i) => i === index ? { ...row, state: "success", progress: 100, result } : row));
     } catch (error: any) { setRows(current => current.map((row, i) => i === index ? { ...row, state: "error", result: { error: error.message } } : row)); }
   };
   const runBrowser = async () => {
-    setRows(browserFiles.map((file, i) => ({ id: `${i}-${file.name}`, name: (file as any).webkitRelativePath || file.name, size: file.size, progress: 0, state: "queued" })));
-    await Promise.allSettled(browserFiles.map((file, index) => uploadOne(file, index)));
+    const keys = browserFiles.map(() => crypto.randomUUID());
+    setRows(browserFiles.map((file, i) => ({ id: `${i}-${file.name}`, name: (file as any).webkitRelativePath || file.name, size: file.size, progress: 0, state: "queued", idempotencyKey: keys[i] })));
+    await Promise.allSettled(browserFiles.map((file, index) => uploadOne(file, index, keys[index])));
   };
   return <div className="stack"><section className="panel form-panel">
     <div className="section-head"><div><span className="eyebrow">FEATURES 1–3</span><h2>Upload objects</h2><p>Một file, mixed batch, hoặc toàn bộ folder.</p></div></div>
@@ -200,7 +333,7 @@ function UploadView({ defaultBucket }: { defaultBucket: string }) {
       <button className="dropzone" onClick={() => fileInput.current?.click()}><div className="drop-icon"><Upload /></div><strong>{browserFiles.length ? `${browserFiles.length} file đã chọn` : "Mở file picker của browser"}</strong><span>{browserFiles.length ? formatBytes(browserFiles.reduce((a, f) => a + f.size, 0)) : "Filename, extension và Content-Type được giữ nguyên"}</span></button></>}
     <div className="action-row"><span>Object key sẽ theo chuẩn <code>clients/{clientId || "client"}/{mode}/…</code></span><button className="button primary large" disabled={!clientId || !bucket || (source === "ubuntu" ? !pick : !browserFiles.length)} onClick={source === "ubuntu" ? runCorpus : runBrowser}><Upload size={17} /> Upload</button></div>
   </section>
-  {!!rows.length && <section className="panel queue"><div className="section-head"><div><h2>Upload queue</h2><p>Mỗi object có trạng thái độc lập.</p></div></div>{rows.map((row, index) => <div className="queue-row" key={row.id}><span className={`state-icon ${row.state}`}>{row.state === "uploading" ? <LoaderCircle className="spin" /> : row.state === "success" ? <Check /> : row.state === "error" ? <X /> : <File />}</span><div className="queue-info"><div><strong>{row.name}</strong><span>{formatBytes(row.size)} {row.result?.latency_ms ? `· ${row.result.latency_ms} ms` : ""}</span></div><div className="progress"><i style={{ width: `${row.progress}%` }} /></div>{row.result?.error && <small className="error-text">{row.result.error}</small>}</div>{row.state === "error" && <button className="button ghost" onClick={() => source === "browser" ? uploadOne(browserFiles[index], index) : pick && uploadCorpusPath(pick.paths[index], index)}><RefreshCw size={15} /> Retry</button>}</div>)}</section>}
+  {!!rows.length && <section className="panel queue"><div className="section-head"><div><h2>Upload queue</h2><p>Mỗi object có trạng thái độc lập.</p></div></div>{rows.map((row, index) => <div className="queue-row" key={row.id}><span className={`state-icon ${row.state}`}>{row.state === "uploading" ? <LoaderCircle className="spin" /> : row.state === "success" ? <Check /> : row.state === "error" ? <X /> : <File />}</span><div className="queue-info"><div><strong>{row.name}</strong><span>{formatBytes(row.size)} {row.result?.latency_ms ? `· ${row.result.latency_ms} ms` : ""}</span></div><div className="progress"><i style={{ width: `${row.progress}%` }} /></div>{row.result?.error && <small className="error-text">{row.result.error}</small>}</div>{row.state === "error" && <button className="button ghost" onClick={() => source === "browser" ? uploadOne(browserFiles[index], index, row.idempotencyKey) : pick && uploadCorpusPath(pick.paths[index], index, row.idempotencyKey)}><RefreshCw size={15} /> Retry</button>}</div>)}</section>}
   <CorpusPicker open={picker} folders={mode === "folder"} multiple={mode !== "single"} onClose={() => setPicker(false)} onChoose={setPick} /></div>;
 }
 
@@ -208,7 +341,7 @@ function RandomView({ defaultBucket }: { defaultBucket: string }) {
   const [form, setForm] = useState<any>({ client_id: "host-01", bucket: defaultBucket, prefix: "", corpus_ids: ["mixed", "size"], category: "", extension: "", min_mib: "", max_mib: "" });
   const [result, setResult] = useState<any>(null); const [loading, setLoading] = useState(false);
   useEffect(() => setForm((x: any) => ({ ...x, bucket: defaultBucket })), [defaultBucket]);
-  const run = async () => { setLoading(true); setResult(null); try { const body = { ...form, category: form.category || null, extension: form.extension || null, min_bytes: form.min_mib ? Number(form.min_mib) * 1048576 : null, max_bytes: form.max_mib ? Number(form.max_mib) * 1048576 : null }; delete body.min_mib; delete body.max_mib; setResult(await api("/uploads/random", { method: "POST", body: JSON.stringify(body) })); } catch (e: any) { setResult({ success: false, error: e.message }); } finally { setLoading(false); } };
+  const run = async () => { setLoading(true); setResult(null); try { const body = { ...form, category: form.category || null, extension: form.extension || null, min_bytes: form.min_mib ? Number(form.min_mib) * 1048576 : null, max_bytes: form.max_mib ? Number(form.max_mib) * 1048576 : null }; delete body.min_mib; delete body.max_mib; setResult(await api("/uploads/random", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify(body) })); } catch (e: any) { setResult({ success: false, error: e.message }); } finally { setLoading(false); } };
   return <section className="panel form-panel"><div className="section-head"><div><span className="eyebrow">FEATURE 4</span><h2>Random object</h2><p>Chọn ngẫu nhiên từ corpus theo loại, extension hoặc kích thước.</p></div><div className="shuffle-art"><Shuffle /></div></div>
     <div className="form-grid"><label><span>Client ID</span><input value={form.client_id} onChange={e => setForm({ ...form, client_id: e.target.value })} /></label><label><span>Bucket</span><input value={form.bucket} onChange={e => setForm({ ...form, bucket: e.target.value })} /></label><label><span>Category</span><select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option value="">Tất cả loại</option>{["images","data","documents","media","archives","binary","other"].map(x => <option key={x}>{x}</option>)}</select></label><label><span>Extension</span><input placeholder="pdf, jpg, bin…" value={form.extension} onChange={e => setForm({ ...form, extension: e.target.value })} /></label><label><span>Min size (MiB)</span><input type="number" min="0" value={form.min_mib} onChange={e => setForm({ ...form, min_mib: e.target.value })} /></label><label><span>Max size (MiB)</span><input type="number" min="0" value={form.max_mib} onChange={e => setForm({ ...form, max_mib: e.target.value })} /></label><label className="wide"><span>Prefix <em>optional</em></span><input value={form.prefix} onChange={e => setForm({ ...form, prefix: e.target.value })} /></label></div>
     <div className="action-row"><span>Nguồn: Mixed-file corpus + Size corpus</span><button className="button primary large" onClick={run} disabled={loading}>{loading ? <LoaderCircle className="spin" /> : <Shuffle size={17} />} Pick & upload</button></div>
@@ -273,7 +406,6 @@ function ObjectExplorer({ defaultBucket }: { defaultBucket: string }) {
         headers: {
           "Idempotency-Key": crypto.randomUUID(),
           "Content-Type": overwriteFile.type || "application/octet-stream",
-          "Content-Length": String(overwriteFile.size),
         },
       });
       await Promise.all([refreshHead(selected), refreshVersions(selected), load(page, tokens[page] || null)]);
@@ -336,9 +468,111 @@ function ObjectExplorer({ defaultBucket }: { defaultBucket: string }) {
   </aside></div>}</div>;
 }
 
+function RbdVolumes() {
+  const [poolState, setPoolState] = useState<any>({ enabled: false, pools: [] });
+  const [volumes, setVolumes] = useState<any[]>([]);
+  const [form, setForm] = useState({ pool: "", namespace: "", sizeGiB: "10", displayName: "", autoMount: true });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState<ActionNotice | null>(null);
+  const [lastAction, setLastAction] = useState<any>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [pools, volumePage] = await Promise.all([
+        api("/rbd/pools"),
+        api("/rbd/volumes?limit=100"),
+      ]);
+      setPoolState(pools);
+      setVolumes(volumePage.items || []);
+      if (!form.pool && pools.pools?.length) setForm(current => ({ ...current, pool: pools.pools[0].name }));
+    } catch (error: any) {
+      setNotice({ kind: "error", text: error?.message || "Không thể đọc RBD inventory." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(() => {
+      api("/rbd/volumes?limit=100").then(page => setVolumes(page.items || [])).catch(() => {});
+      if (lastAction?.action_id && !["SUCCEEDED", "FAILED_FINAL"].includes(lastAction.state)) {
+        api(`/rbd/actions/${lastAction.action_id}`).then(setLastAction).catch(() => {});
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [lastAction?.action_id, lastAction?.state]);
+
+  const submit = async () => {
+    const size = Number(form.sizeGiB);
+    if (!Number.isFinite(size) || size <= 0) return setNotice({ kind: "error", text: "Logical size phải lớn hơn 0 GiB." });
+    setBusy("create"); setNotice(null);
+    try {
+      const action = await api("/rbd/volumes", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          pool: form.pool,
+          namespace: form.namespace.trim() || null,
+          logical_size_bytes: Math.round(size * 1024) * 1024 * 1024,
+          capacity_mode: "reserved-logical",
+          filesystem: "ext4",
+          auto_mount: form.autoMount,
+          display_name: form.displayName.trim() || null,
+        }),
+      });
+      setLastAction(action);
+      setNotice({ kind: "success", text: `Đã queue create action ${action.action_id}. UI chỉ báo READY sau khi host-agent xác nhận.` });
+      await load();
+    } catch (error: any) {
+      setNotice({ kind: "error", text: error?.message || "Không thể queue RBD create." });
+    } finally { setBusy(""); }
+  };
+
+  const transition = async (volume: any, action: "mount" | "unmount" | "delete") => {
+    if (action === "delete" && !window.confirm(`Xóa volume “${volume.display_name || volume.image_name}”?\n\nAgent sẽ unmount/unmap trước và từ chối nếu còn watcher, snapshot hoặc clone.`)) return;
+    setBusy(`${volume.id}:${action}`); setNotice(null);
+    try {
+      const result = await api(`/rbd/volumes/${volume.id}${action === "delete" ? "" : `/${action}`}`, {
+        method: action === "delete" ? "DELETE" : "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+      setLastAction(result);
+      setNotice({ kind: "success", text: `Đã queue ${action} action ${result.action_id}.` });
+      await load();
+    } catch (error: any) {
+      setNotice({ kind: "error", text: error?.message || `Không thể queue ${action}.` });
+    } finally { setBusy(""); }
+  };
+
+  const mountable = new Set(["CREATED", "MAPPED", "FORMATTED", "UNMOUNTED", "UNMAPPED"]);
+  const unmountable = new Set(["READY", "MOUNTED"]);
+  return <div className="stack rbd-console">
+    <section className="panel form-panel">
+      <div className="section-head"><div><span className="eyebrow">MANUAL RBD LIFECYCLE</span><h2>Create an isolated ext4 volume</h2><p>Format 2 · exclusive-lock · fenced host-agent · reserved-logical capacity.</p></div><span className={`worker-badge ${poolState.enabled ? "" : "disabled"}`}><i />{poolState.enabled ? "AGENT SCOPE ENABLED" : "FAIL CLOSED"}</span></div>
+      {notice && <div className={`rbd-notice ${notice.kind}`}>{notice.kind === "success" ? <Check /> : <AlertTriangle />}<span>{notice.text}</span></div>}
+      {!poolState.enabled && <div className="rbd-disabled"><ShieldAlert /><div><strong>RBD mutation chưa được bật</strong><span>{poolState.reason || "Cần CEPH_EXPECTED_FSID cùng allowlist pool/namespace và Unix socket host-agent."}</span></div></div>}
+      <div className="form-grid three">
+        <label><span>Pool</span><select value={form.pool} disabled={!poolState.enabled} onChange={event => setForm({ ...form, pool: event.target.value })}><option value="">Select allowlisted pool</option>{poolState.pools?.map((pool: any) => <option key={pool.name} value={pool.name}>{pool.name}</option>)}</select></label>
+        <label><span>Namespace <em>blank = default</em></span><input value={form.namespace} disabled={!poolState.enabled} onChange={event => setForm({ ...form, namespace: event.target.value })} /></label>
+        <label><span>Logical size (GiB)</span><input type="number" min="0.001" step="0.001" value={form.sizeGiB} disabled={!poolState.enabled} onChange={event => setForm({ ...form, sizeGiB: event.target.value })} /></label>
+        <label><span>Display name <em>optional</em></span><input value={form.displayName} disabled={!poolState.enabled} onChange={event => setForm({ ...form, displayName: event.target.value })} /></label>
+        <label className="rbd-check"><span>Mount policy</span><button type="button" className={form.autoMount ? "active" : ""} disabled={!poolState.enabled} onClick={() => setForm({ ...form, autoMount: !form.autoMount })}><span className="check">{form.autoMount && <Check />}</span>Auto-map, format and mount</button></label>
+      </div>
+      <div className="action-row"><span>Create trả về <code>202 Accepted</code>; mọi bước đặc quyền chạy ngoài FastAPI.</span><button className="button primary large" disabled={!poolState.enabled || !form.pool || Boolean(busy)} onClick={submit}>{busy === "create" ? <LoaderCircle className="spin" /> : <HardDrive />}Create volume</button></div>
+    </section>
+    {lastAction && <section className="panel rbd-action"><div><small>LATEST ACTION</small><strong>{lastAction.action_id}</strong><span>{lastAction.current_step || lastAction.action_type || "Queued"}</span></div><span className={`job-state ${String(lastAction.state).toLowerCase()}`}>{lastAction.state}</span></section>}
+    <section className="panel table-panel"><div className="section-head"><div><h2>Managed volumes</h2><p>Only database records inside the configured pool, namespace and image-prefix scope.</p></div><button className="button ghost" onClick={load}><RefreshCw className={loading ? "spin" : ""} />Refresh</button></div>
+      <div className="object-table"><table><thead><tr><th>Volume</th><th>Scope</th><th>Logical / reserved</th><th>Desired</th><th>Observed</th><th>Device / mount</th><th></th></tr></thead><tbody>{volumes.map(volume => <tr key={volume.id}><td><div className="object-name"><span><HardDrive /></span><div><strong>{volume.display_name || volume.image_name}</strong><small>{volume.image_name} · {volume.image_id || "image ID pending"}</small></div></div></td><td>{volume.pool}<small className="block">{volume.namespace || "default"}</small></td><td>{formatBytes(volume.logical_size_bytes)}<small className="block">reserved {formatBytes(volume.reserved_raw_bytes)}</small></td><td><span className="source-pill">{volume.desired_state}</span></td><td><span className={`job-state ${String(volume.observed_state).toLowerCase()}`}>{volume.observed_state}</span>{volume.last_error && <small className="block error-text">{volume.last_error}</small>}</td><td>{volume.device || "—"}<small className="block">{volume.mountpoint || "not mounted"}</small></td><td><div className="row-actions">{mountable.has(volume.observed_state) && <button title="Mount" disabled={Boolean(busy)} onClick={() => transition(volume, "mount")}>{busy === `${volume.id}:mount` ? <LoaderCircle className="spin" /> : <Play />}</button>}{unmountable.has(volume.observed_state) && <button title="Unmount" disabled={Boolean(busy)} onClick={() => transition(volume, "unmount")}>{busy === `${volume.id}:unmount` ? <LoaderCircle className="spin" /> : <Square />}</button>}{volume.observed_state !== "DELETED" && <button className="danger" title="Delete" disabled={Boolean(busy)} onClick={() => transition(volume, "delete")}>{busy === `${volume.id}:delete` ? <LoaderCircle className="spin" /> : <Trash2 />}</button>}</div></td></tr>)}</tbody></table>{loading && <div className="empty"><LoaderCircle className="spin" />Reading managed RBD state…</div>}{!loading && !volumes.length && <div className="empty">Chưa có managed RBD volume.</div>}</div>
+    </section>
+  </div>;
+}
+
 export default function App() {
   const [view, setView] = useState<View>("dashboard"); const [menu, setMenu] = useState(false); const [health, setHealth] = useState<any>({}); const [defaultBucket, setDefaultBucket] = useState("test-data");
   useEffect(() => { api("/health").then(setHealth).catch(e => setHealth({ status: "degraded", error: e.message })); api("/buckets").then(rows => rows[0]?.name && setDefaultBucket(rows[0].name)).catch(() => {}); }, []);
-  return <div className="shell"><aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div><Database /></div><span><strong>RGW</strong><small>OBJECT LAB</small></span></div><nav>{nav.map(item => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMenu(false); }}><item.icon /><span>{item.label}</span>{view === item.id && <i />}</button>)}</nav><div className="sidebar-foot"><div className="cluster"><span className={health.status === "ok" ? "online" : "offline"}><i /></span><div><strong>{health.status === "ok" ? "Cluster connected" : "RGW unavailable"}</strong><small>{health.buckets ?? 0} buckets discovered</small></div></div><p>Credentials stay server-side</p></div></aside>
-    <main><button className="mobile-menu" onClick={() => setMenu(!menu)}><Menu /></button><Header view={view} endpoint={health.endpoint} /><CapacityBanner /><div className="content">{view === "dashboard" && <Dashboard />}{view === "upload" && <UploadView defaultBucket={defaultBucket} />}{view === "random" && <RandomView defaultBucket={defaultBucket} />}{view === "stream" && <StreamView defaultBucket={defaultBucket} />}{view === "objects" && <ObjectExplorer defaultBucket={defaultBucket} />}</div></main></div>;
+  return <div className="shell"><aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div><Database /></div><span><strong>CEPH</strong><small>STORAGE LAB</small></span></div><nav>{nav.map(item => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMenu(false); }}><item.icon /><span>{item.label}</span>{view === item.id && <i />}</button>)}</nav><div className="sidebar-foot"><div className="cluster"><span className={health.status === "ok" ? "online" : "offline"}><i /></span><div><strong>{health.status === "ok" ? "Cluster connected" : "RGW unavailable"}</strong><small>{health.buckets ?? 0} buckets discovered</small></div></div><p>Credentials stay server-side</p></div></aside>
+    <main><button className="mobile-menu" onClick={() => setMenu(!menu)}><Menu /></button><Header view={view} endpoint={health.endpoint} /><CapacityBanner /><div className="content">{view === "dashboard" && <Dashboard />}{view === "performance" && <PerformanceView />}{view === "upload" && <UploadView defaultBucket={defaultBucket} />}{view === "random" && <RandomView defaultBucket={defaultBucket} />}{view === "stream" && <StreamView defaultBucket={defaultBucket} />}{view === "objects" && <ObjectExplorer defaultBucket={defaultBucket} />}{view === "volumes" && <RbdVolumes />}</div></main></div>;
 }
