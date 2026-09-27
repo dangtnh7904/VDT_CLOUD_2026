@@ -20,8 +20,7 @@ from pydantic import BaseModel, Field
 
 from .api.capacity import router as capacity_router
 from .api.control import router as control_router
-from .api.agent import router as agent_router
-from .api.rbd import RbdControlError, router as rbd_router
+from .api.rbd import RbdControlError, router as rbd_router, terminal_router
 from .api.performance import router as performance_router
 from .config import get_settings
 from .corpus import CATEGORY_ALIASES, choose_random, classify, describe, resolve_corpus_path
@@ -111,8 +110,8 @@ app = FastAPI(title="Ceph Storage Lab API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(capacity_router)
 app.include_router(control_router)
-app.include_router(agent_router)
 app.include_router(rbd_router)
+app.include_router(terminal_router)
 app.include_router(performance_router)
 scope_validator = ScopeValidator()
 idempotency_service = IdempotencyService()

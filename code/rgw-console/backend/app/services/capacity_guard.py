@@ -59,7 +59,10 @@ def _load_control_and_snapshot(db_conn=None) -> tuple[dict[str, Any], dict[str, 
         ).fetchone()
         snapshot = conn.execute(
             """
-            SELECT id, fsid, osdmap_epoch, captured_at, fresh, cluster_health_summary
+            SELECT id, fsid, osdmap_epoch, captured_at, fresh, cluster_health_summary,
+                   (SELECT max(success.captured_at)
+                      FROM capacity_snapshots success
+                     WHERE success.fresh=true) AS last_success_at
               FROM capacity_snapshots
              ORDER BY captured_at DESC, id DESC
              LIMIT 1
@@ -309,7 +312,9 @@ def decide(
         manager = connection() if _db_conn is None else nullcontext(_db_conn)
         with manager as epoch_conn:
             epoch_rows = epoch_conn.execute(
-                "SELECT osdmap_epoch FROM capacity_snapshots ORDER BY captured_at DESC,id DESC LIMIT 2"
+                "SELECT osdmap_epoch FROM capacity_snapshots "
+                "WHERE fsid=%s ORDER BY captured_at DESC,id DESC LIMIT 2",
+                (snapshot["fsid"],),
             ).fetchall()
         epoch_changed = len(epoch_rows) > 1 and len({row["osdmap_epoch"] for row in epoch_rows}) > 1
         forced_state = None
@@ -712,6 +717,12 @@ def snapshot_response(*, scope_type: str | None = None, scope: str | None = None
             if scope in {str(pool) for pool in (row.get("scope_metadata") or {}).get("eligible_pools", [])}
         ]
     if not snapshot:
+        configured = bool(
+            _setting("ceph_expected_fsid", None)
+            and _setting("rbd_executor_url", None)
+            and _setting("rbd_executor_token", None)
+        )
+        telemetry_status = "NO_SNAPSHOT" if configured else "NOT_CONFIGURED"
         return {
             "fsid": None,
             "osdmap_epoch": None,
@@ -730,6 +741,18 @@ def snapshot_response(*, scope_type: str | None = None, scope: str | None = None
             "remaining_persistent_commitment_raw_bytes": 0,
             "contract": "OBSERVE_ONLY" if _setting("capacity_observe_only", True) else "NO_FRESH_EVIDENCE",
             "reasons": [control.get("reason") or "No capacity snapshot has been collected"],
+            "telemetry": {
+                "status": telemetry_status,
+                "source": "node-ssh",
+                "age_seconds": None,
+                "last_success_at": None,
+                "error_code": None if configured else "EXECUTOR_NOT_CONFIGURED",
+                "osd_scope": [],
+                "pool_scope": sorted(
+                    _setting("rgw_affected_pool_set", frozenset())
+                    | _setting("rbd_allowed_pool_set", frozenset())
+                ),
+            },
             "scope_type": scope_type,
             "scope": scope,
         }
@@ -740,6 +763,24 @@ def snapshot_response(*, scope_type: str | None = None, scope: str | None = None
         captured = captured.replace(tzinfo=timezone.utc)
     age_seconds = (now - captured).total_seconds()
     fresh = bool(snapshot.get("fresh")) and 0 <= age_seconds <= float(_setting("capacity_metrics_max_age_seconds", 5))
+    summary = snapshot.get("cluster_health_summary") or {}
+    error_code = summary.get("collector_error_code")
+    if fresh:
+        telemetry_status = "FRESH"
+    elif error_code and str(error_code).startswith("EXECUTOR_"):
+        telemetry_status = "EXECUTOR_UNAVAILABLE"
+    elif error_code:
+        telemetry_status = "COLLECTOR_ERROR"
+    else:
+        telemetry_status = "STALE"
+    last_success_at = snapshot.get("last_success_at")
+    if last_success_at is not None and last_success_at.tzinfo is None:
+        last_success_at = last_success_at.replace(tzinfo=timezone.utc)
+    telemetry_age = (
+        max(0.0, (now - last_success_at).total_seconds())
+        if last_success_at is not None
+        else age_seconds
+    )
     ratios = [(int(row["osd_id"]), float(row["used_ratio"])) for row in osds if row.get("used_ratio") is not None]
     most_full_osd, most_full_ratio = max(ratios, key=lambda item: item[1]) if ratios else (None, None)
     state = _physical_state(most_full_ratio) if fresh else "BLOCKED_TELEMETRY"
@@ -814,6 +855,21 @@ def snapshot_response(*, scope_type: str | None = None, scope: str | None = None
                 else ([] if fresh else ["Capacity telemetry is stale"])
             )
         ),
+        "telemetry": {
+            "status": telemetry_status,
+            "source": "node-ssh",
+            "age_seconds": telemetry_age,
+            "last_success_at": last_success_at.isoformat() if last_success_at else None,
+            "error_code": error_code,
+            "osd_scope": [int(row["osd_id"]) for row in osds],
+            "pool_scope": sorted(
+                {
+                    str(pool)
+                    for row in osds
+                    for pool in (row.get("scope_metadata") or {}).get("eligible_pools", [])
+                }
+            ),
+        },
         "scope_type": scope_type,
         "scope": scope,
     }

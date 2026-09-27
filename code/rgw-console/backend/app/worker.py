@@ -146,9 +146,9 @@ def add_result(job_id: str, generation: int, result: dict[str, Any]) -> None:
                SET sent_count=sent_count+%s, failed_count=failed_count+%s,
                    bytes_sent=bytes_sent+%s, last_error=coalesce(%s,last_error),
                    operation_counts=operation_counts || jsonb_build_object(
-                       %s, coalesce((operation_counts->>%s)::bigint,0)+1),
+                       CAST(%s AS text), coalesce((operation_counts->>CAST(%s AS text))::bigint,0)+1),
                    operation_bytes=operation_bytes || jsonb_build_object(
-                       %s, coalesce((operation_bytes->>%s)::bigint,0)+%s),
+                       CAST(%s AS text), coalesce((operation_bytes->>CAST(%s AS text))::bigint,0)+%s),
                    updated_at=now()
              WHERE id=%s AND lease_owner=%s AND lease_generation=%s
                AND lease_expires_at > now()

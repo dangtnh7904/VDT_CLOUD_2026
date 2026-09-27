@@ -15,7 +15,7 @@ LOGGER = logging.getLogger("rgw-console-capacity-collector")
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Collect read-only Ceph per-OSD capacity telemetry through the host agent."
+        description="Collect read-only Ceph per-OSD capacity telemetry through the Node SSH executor."
     )
     parser.add_argument(
         "--once",
@@ -54,8 +54,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     len(result["released_reservation_ids"]),
                 )
         except Exception as exc:
-            # Do not log raw agent details: command errors may include text that
-            # should remain on the host. The exception class is enough here.
+            # Do not log raw executor details: command errors may include text
+            # that should remain on the SSH host. The exception class is enough.
             LOGGER.error("capacity collection failed error_type=%s", type(exc).__name__)
             if args.once:
                 return 1

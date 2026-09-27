@@ -94,9 +94,9 @@ class RbdFenceIntegrationTests(unittest.TestCase):
         self.assertEqual(create_fence, replay_fence)
         self.assertGreater(map_fence, create_fence)
         row = self.conn.execute(
-            "SELECT agent_fence_token FROM rbd_volumes WHERE id=%s", (volume_id,)
+            "SELECT executor_fence_token FROM rbd_volumes WHERE id=%s", (volume_id,)
         ).fetchone()
-        self.assertEqual(row["agent_fence_token"], map_fence)
+        self.assertEqual(row["executor_fence_token"], map_fence)
 
 
 if __name__ == "__main__":

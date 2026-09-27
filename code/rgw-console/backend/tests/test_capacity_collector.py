@@ -101,7 +101,7 @@ def osd_tree():
 def pools():
     return [
         {
-            "pool": 7,
+            "pool_id": 7,
             "pool_name": "rgw.data",
             "type": 1,
             "type_name": "replicated",
@@ -310,16 +310,11 @@ class CollectorOrchestrationTests(unittest.TestCase):
             )
 
         self.assertEqual(result, {"snapshot_id": 9})
-        self.assertEqual(
-            agent.calls,
-            [
-                "ceph.status",
-                "ceph.osd_df",
-                "ceph.osd_tree",
-                "ceph.pool_ls_detail",
-                "ceph.crush_rule_dump",
-                "ceph.status",
-            ],
+        self.assertEqual(agent.calls[0], "ceph.status")
+        self.assertEqual(agent.calls[-1], "ceph.status")
+        self.assertCountEqual(
+            agent.calls[1:-1],
+            ["ceph.osd_df", "ceph.osd_tree", "ceph.pool_ls_detail", "ceph.crush_rule_dump"],
         )
         self.assertEqual(len(stored), 1)
         self.assertTrue(stored[0].fresh)
@@ -344,7 +339,7 @@ class CollectorOrchestrationTests(unittest.TestCase):
             )
 
         self.assertFalse(stored[0].fresh)
-        self.assertEqual(stored[0].cluster_health_summary["collector_error_code"], "STALE_OR_FUTURE_AGENT_TELEMETRY")
+        self.assertEqual(stored[0].cluster_health_summary["collector_error_code"], "STALE_OR_FUTURE_EXECUTOR_TELEMETRY")
         self.assertEqual(len(stored[0].osds), 3)
 
 

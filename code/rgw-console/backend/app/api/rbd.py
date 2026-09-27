@@ -1,29 +1,36 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import time
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid5
 
-from fastapi import APIRouter, Header, Query, Request
-from fastapi.responses import JSONResponse
+import httpx
+from fastapi import APIRouter, Header, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from websockets.asyncio.client import connect as websocket_connect
+from websockets.exceptions import ConnectionClosed
 
 from ..config import get_settings
-from ..db import connection
+from ..db import connection, record_operation
 from ..models.domain import (
     IdempotencyClaimRequest,
     IdempotencyDisposition,
     IdempotencyState,
 )
-from ..services.capacity_guard import CapacityRejected, finish_reservation, require_admission
+from ..services.capacity_guard import CapacityRejected, decide, finish_reservation, require_admission
 from ..services.idempotency import IdempotencyService, canonical_request_fingerprint
-from ..services.rbd_agent_client import RbdAgentClient, RbdAgentClientError
+from ..services.executor_client import ExecutorClient, ExecutorClientError
 
 
 router = APIRouter(prefix="/api/rbd", tags=["rbd"])
+terminal_router = APIRouter(tags=["rbd-terminal"])
 idempotency_service = IdempotencyService()
 MIB = 1024 * 1024
 ACTION_NAMESPACE = UUID("816aa426-1a42-4a60-9d67-d5179c99cb94")
@@ -55,8 +62,14 @@ class VolumeCreateRequest(BaseModel):
     filesystem: Literal["ext4"] = "ext4"
     auto_mount: bool
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    image_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
 
-    @field_validator("pool", "namespace", "display_name")
+    @field_validator("pool", "namespace", "display_name", "image_name")
     @classmethod
     def normalize_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -72,6 +85,33 @@ class VolumeCreateRequest(BaseModel):
         return value
 
 
+class FilePathRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ValidationBaselineRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    baseline_label: str = Field(default="pre-upgrade", min_length=1, max_length=255)
+    paths: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("name", "baseline_label")
+    @classmethod
+    def normalize_label(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("paths")
+    @classmethod
+    def unique_paths(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("paths must not contain duplicates")
+        if any(not path or len(path) > 4096 for path in value):
+            raise ValueError("each validation path must contain 1 to 4096 characters")
+        return value
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, (UUID, datetime)):
         return str(value) if isinstance(value, UUID) else value.isoformat()
@@ -84,10 +124,6 @@ def _json_value(value: Any) -> Any:
 
 def _default_namespace_allowed(namespace: str | None) -> str:
     return namespace or "default"
-
-
-def _agent_namespace(namespace: str | None) -> str:
-    return namespace or ""
 
 
 def _assert_scope(
@@ -295,14 +331,14 @@ def list_pools():
     if not configured:
         return {"enabled": False, "pools": [], "reason": "RBD_ALLOWED_POOLS is empty"}
     try:
-        result = RbdAgentClient.from_settings().rbd_pool_list()
-    except (RbdAgentClientError, ValueError) as exc:
-        code = exc.code if isinstance(exc, RbdAgentClientError) else "AGENT_NOT_CONFIGURED"
+        result = ExecutorClient.from_settings().rbd_pool_list()
+    except (ExecutorClientError, ValueError) as exc:
+        code = exc.code if isinstance(exc, ExecutorClientError) else "EXECUTOR_NOT_CONFIGURED"
         raise RbdControlError(
             503,
             code,
             str(exc),
-            retryable=isinstance(exc, RbdAgentClientError) and exc.retryable,
+            retryable=isinstance(exc, ExecutorClientError) and exc.retryable,
         ) from exc
     candidates = result.get("pools", result.get("items", []))
     pools: list[dict[str, Any]] = []
@@ -311,6 +347,46 @@ def list_pools():
         if name in configured:
             pools.append({"name": name} if isinstance(item, str) else _json_value(item))
     return {"enabled": True, "pools": pools, "fsid": result.get("fsid")}
+
+
+def _executor_status(call: str) -> dict[str, Any]:
+    try:
+        client = ExecutorClient.from_settings()
+        result = getattr(client, call)()
+    except (ExecutorClientError, ValueError) as exc:
+        code = exc.code if isinstance(exc, ExecutorClientError) else "EXECUTOR_NOT_CONFIGURED"
+        raise RbdControlError(
+            503,
+            code,
+            str(exc),
+            retryable=isinstance(exc, ExecutorClientError) and exc.retryable,
+        ) from exc
+    nested_data = result.get("data")
+    if isinstance(nested_data, dict):
+        public_data = dict(nested_data)
+    else:
+        public_data = {
+            key: value
+            for key, value in result.items()
+            if key not in {"fsid", "collected_at", "status"}
+        }
+    return {
+        "status": result.get("status", "ok"),
+        "executor": "node-ssh",
+        "fsid": result.get("fsid"),
+        "collected_at": result.get("collected_at"),
+        "data": public_data,
+    }
+
+
+@router.get("/ssh/health")
+def ssh_health():
+    return _executor_status("health")
+
+
+@router.get("/ssh/capabilities")
+def ssh_capabilities():
+    return _executor_status("capabilities")
 
 
 @router.get("/volumes")
@@ -363,7 +439,7 @@ def create_volume(
         str, Header(alias="Idempotency-Key", min_length=8, max_length=255)
     ],
 ):
-    _assert_scope(payload.pool, payload.namespace)
+    _assert_scope(payload.pool, payload.namespace, payload.image_name)
     proposed_action_id = uuid.uuid4()
     claim, replay = _claim_action(
         request,
@@ -378,7 +454,7 @@ def create_volume(
         return replay
     action_id = claim.record.action_id or proposed_action_id
     volume_id = uuid5(action_id, "volume")
-    image_name = f"{get_settings().rbd_image_prefix}{volume_id.hex}"
+    image_name = payload.image_name or f"{get_settings().rbd_image_prefix}{volume_id.hex}"
     decision = None
     try:
         decision = require_admission(
@@ -544,7 +620,7 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
         "CAPACITY_RESERVED",
     },
 }
-_INTENDED_STATE = {"MOUNT": "READY", "UNMOUNT": "UNMOUNTED", "DELETE": "DELETED"}
+_INTENDED_STATE = {"MOUNT": "READY", "UNMOUNT": "UNMAPPED", "DELETE": "DELETED"}
 
 
 def _enqueue_volume_action(
@@ -709,3 +785,689 @@ def get_action(action_id: UUID):
     result = _action_result(row)
     result["volume"] = _volume_result(volume)
     return result
+
+
+def _mounted_volume(volume_id: UUID | str) -> dict[str, Any]:
+    volume = _load_volume(volume_id)
+    if volume.get("observed_state") not in {"MOUNTED", "READY"}:
+        raise RbdControlError(
+            409,
+            "VOLUME_NOT_MOUNTED",
+            "The volume must be mounted before using files or terminal",
+            observed_state={"observed_state": volume.get("observed_state")},
+        )
+    required = ("image_id", "device_major", "device_minor", "fs_uuid", "mountpoint")
+    if any(volume.get(field) is None for field in required):
+        raise RbdControlError(
+            423,
+            "RECONCILING",
+            "Mounted volume identity is incomplete and must be reconciled",
+            retryable=True,
+        )
+    if volume.get("capacity_mode") != "reserved-logical":
+        raise RbdControlError(
+            409,
+            "CAPACITY_MODE_UNSUPPORTED",
+            "File and terminal access requires reserved-logical capacity mode",
+        )
+    return volume
+
+
+def _volume_executor_params(
+    volume: dict[str, Any],
+    *,
+    path: str | None = None,
+    paths: list[str] | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "volume_id": str(volume["id"]),
+        "pool": volume["pool"],
+        "namespace": volume.get("namespace") or "",
+        "image_name": volume["image_name"],
+        "image_id": volume["image_id"],
+        "device_major": int(volume["device_major"]),
+        "device_minor": int(volume["device_minor"]),
+        "fs_uuid": str(volume["fs_uuid"]),
+    }
+    if path is not None:
+        params["path"] = path
+    if paths is not None:
+        params["paths"] = paths
+    return params
+
+
+def _executor_error(exc: Exception) -> RbdControlError:
+    if isinstance(exc, ExecutorClientError):
+        status_by_code = {
+            "FILE_NOT_FOUND": 404,
+            "FILE_EXISTS": 409,
+            "DIRECTORY_NOT_EMPTY": 409,
+            "VOLUME_NOT_MOUNTED": 409,
+            "VOLUME_BUSY": 409,
+            "IS_A_DIRECTORY": 409,
+            "NOT_A_DIRECTORY": 409,
+            "NOT_A_FILE": 409,
+            "INVALID_PATH": 422,
+            "PATH_ESCAPE": 422,
+            "SYMLINK_NOT_ALLOWED": 422,
+            "SCOPE_NOT_ALLOWED": 422,
+            "FILE_TOO_LARGE": 413,
+            "INVALID_LENGTH": 400,
+        }
+        status = status_by_code.get(exc.code, 503 if exc.retryable else 502)
+        return RbdControlError(
+            status,
+            exc.code,
+            exc.message,
+            retryable=exc.retryable,
+            observed_state=exc.details,
+        )
+    return RbdControlError(503, "EXECUTOR_NOT_CONFIGURED", str(exc), retryable=True)
+
+
+def _call_file_executor(
+    action: str,
+    volume: dict[str, Any],
+    *,
+    path: str | None = None,
+    paths: list[str] | None = None,
+) -> dict[str, Any]:
+    try:
+        return ExecutorClient.from_settings().rbd_file_action(
+            action,
+            _volume_executor_params(volume, path=path, paths=paths),
+            timeout_seconds=(
+                get_settings().rbd_validation_timeout_seconds
+                if action == "rbd.files.manifest"
+                else None
+            ),
+        )
+    except (ExecutorClientError, ValueError) as exc:
+        raise _executor_error(exc) from exc
+
+
+def _require_reserved_volume_gate(
+    operation: Literal["RBD_FILE_WRITE", "RBD_DELETE_CLEANUP"],
+    volume: dict[str, Any],
+    request_id: str,
+) -> dict[str, Any]:
+    decision = decide(
+        operation,
+        0,
+        request_id=request_id,
+        affected_pools=[volume["pool"]],
+    )
+    if decision.decision == "BLOCK":
+        code = "TELEMETRY_STALE" if decision.state == "BLOCKED_TELEMETRY" else "CAPACITY_LIMIT"
+        raise CapacityRejected(decision, code, 503 if code == "TELEMETRY_STALE" else 409)
+    return decision.to_dict()
+
+
+def _audit_file_operation(
+    kind: Literal["RBD_FILE_READ", "RBD_FILE_WRITE", "RBD_FILE_DELETE"],
+    volume: dict[str, Any],
+    path: str,
+    *,
+    request_id: str,
+    started: float,
+    success: bool,
+    bytes_count: int = 0,
+    content_type: str | None = None,
+    capacity_decision_id: str | None = None,
+    osdmap_epoch: int | None = None,
+    error: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    try:
+        record_operation(
+            kind=kind,
+            success=success,
+            bytes_count=max(0, int(bytes_count)),
+            latency_ms=(time.monotonic() - started) * 1000,
+            volume_id=volume["id"],
+            request_id=request_id,
+            target_type="RBD_FILE",
+            target_id=f"rbd-file:{volume['id']}:{path}",
+            source="web-rbd-files",
+            content_type=content_type,
+            capacity_decision_id=capacity_decision_id,
+            osdmap_epoch=osdmap_epoch,
+            error=error[:1000] if error else None,
+            error_code=error_code,
+        )
+    except Exception:
+        # The file result is authoritative; an audit sink failure must not invent
+        # a second SFTP mutation or turn a completed stream into a retry.
+        pass
+
+
+def _file_context_header(params: dict[str, Any]) -> str:
+    raw = json.dumps(params, separators=(",", ":"), sort_keys=True).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _executor_file_url() -> str:
+    return f"{get_settings().rbd_executor_url.rstrip('/')}/internal/v1/files/content"
+
+
+def _executor_auth_headers(params: dict[str, Any]) -> dict[str, str]:
+    settings = get_settings()
+    token = settings.rbd_executor_token.get_secret_value() if settings.rbd_executor_token else ""
+    if len(token) < 32:
+        raise RbdControlError(503, "EXECUTOR_NOT_CONFIGURED", "RBD executor token is not configured")
+    return {
+        "X-Executor-Token": token,
+        "X-RBD-Context": _file_context_header(params),
+    }
+
+
+def _executor_http_error(response: httpx.Response) -> RbdControlError:
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    nested = body.get("error") if isinstance(body.get("error"), dict) else body
+    code = nested.get("code", "EXECUTOR_PROTOCOL_ERROR") if isinstance(nested, dict) else "EXECUTOR_PROTOCOL_ERROR"
+    message = (nested.get("message") or nested.get("error")) if isinstance(nested, dict) else None
+    error = ExecutorClientError(
+        str(code),
+        str(message or "RBD executor rejected the file request"),
+        retryable=response.status_code >= 500,
+    )
+    mapped = _executor_error(error)
+    if response.status_code in {400, 401, 404, 409, 411, 413, 422, 423, 503}:
+        mapped.status_code = response.status_code
+    return mapped
+
+
+@router.get("/volumes/{volume_id}/files")
+def list_volume_files(volume_id: UUID, path: str = Query(default="/", min_length=1, max_length=4096)):
+    volume = _mounted_volume(volume_id)
+    result = _call_file_executor("rbd.files.list", volume, path=path)
+    result["volume_id"] = str(volume_id)
+    return result
+
+
+@router.get("/volumes/{volume_id}/files/metadata")
+def volume_file_metadata(
+    volume_id: UUID,
+    path: str = Query(min_length=1, max_length=4096),
+):
+    return _call_file_executor("rbd.files.stat", _mounted_volume(volume_id), path=path)
+
+
+@router.post("/volumes/{volume_id}/directories", status_code=201)
+def create_volume_directory(volume_id: UUID, payload: FilePathRequest, request: Request):
+    started = time.monotonic()
+    volume = _mounted_volume(volume_id)
+    capacity = _require_reserved_volume_gate("RBD_FILE_WRITE", volume, request.state.request_id)
+    try:
+        result = _call_file_executor("rbd.files.mkdir", volume, path=payload.path)
+        result["capacity_decision"] = capacity
+        _audit_file_operation(
+            "RBD_FILE_WRITE",
+            volume,
+            payload.path,
+            request_id=request.state.request_id,
+            started=started,
+            success=True,
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        return result
+    except Exception as exc:
+        _audit_file_operation(
+            "RBD_FILE_WRITE",
+            volume,
+            payload.path,
+            request_id=request.state.request_id,
+            started=started,
+            success=False,
+            error=str(exc),
+            error_code=getattr(exc, "code", "RBD_MKDIR_FAILED"),
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        raise
+
+
+@router.delete("/volumes/{volume_id}/files")
+def delete_volume_file(
+    volume_id: UUID,
+    request: Request,
+    path: str = Query(min_length=1, max_length=4096),
+):
+    started = time.monotonic()
+    volume = _mounted_volume(volume_id)
+    capacity = _require_reserved_volume_gate("RBD_DELETE_CLEANUP", volume, request.state.request_id)
+    try:
+        result = _call_file_executor("rbd.files.delete", volume, path=path)
+        _audit_file_operation(
+            "RBD_FILE_DELETE",
+            volume,
+            path,
+            request_id=request.state.request_id,
+            started=started,
+            success=True,
+            bytes_count=int(result.get("size") or 0),
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        return result
+    except Exception as exc:
+        _audit_file_operation(
+            "RBD_FILE_DELETE",
+            volume,
+            path,
+            request_id=request.state.request_id,
+            started=started,
+            success=False,
+            error=str(exc),
+            error_code=getattr(exc, "code", "RBD_FILE_DELETE_FAILED"),
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        raise
+
+
+@router.put("/volumes/{volume_id}/files/content")
+async def upload_volume_file(
+    volume_id: UUID,
+    request: Request,
+    content_length: Annotated[int, Header(alias="Content-Length", ge=0)],
+    path: str = Query(min_length=1, max_length=4096),
+):
+    started = time.monotonic()
+    volume = await asyncio.to_thread(_mounted_volume, volume_id)
+    settings = get_settings()
+    if content_length > settings.rbd_file_upload_max_bytes or content_length > int(volume["logical_size_bytes"]):
+        raise RbdControlError(413, "FILE_TOO_LARGE", "Upload exceeds the configured or logical volume limit")
+    capacity = await asyncio.to_thread(
+        _require_reserved_volume_gate,
+        "RBD_FILE_WRITE",
+        volume,
+        request.state.request_id,
+    )
+    params = _volume_executor_params(volume, path=path)
+    headers = _executor_auth_headers(params)
+    headers["Content-Length"] = str(content_length)
+    try:
+        timeout = httpx.Timeout(get_settings().rbd_executor_timeout_seconds, read=None)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            response = await client.put(
+                _executor_file_url(),
+                headers=headers,
+                content=request.stream(),
+            )
+        if not response.is_success:
+            raise _executor_http_error(response)
+        body = response.json()
+        if body.get("version") != 1 or body.get("ok") is not True or not isinstance(body.get("result"), dict):
+            raise RbdControlError(502, "EXECUTOR_PROTOCOL_ERROR", "Executor upload response is invalid")
+        result = body["result"]
+        result["capacity_decision"] = capacity
+        await asyncio.to_thread(
+            _audit_file_operation,
+            "RBD_FILE_WRITE",
+            volume,
+            path,
+            request_id=request.state.request_id,
+            started=started,
+            success=True,
+            bytes_count=content_length,
+            content_type=result.get("mime_type"),
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        return result
+    except (httpx.TimeoutException, httpx.HTTPError) as exc:
+        mapped = RbdControlError(503, "EXECUTOR_UNAVAILABLE", "Could not stream the upload to the SSH executor", retryable=True)
+        await asyncio.to_thread(
+            _audit_file_operation,
+            "RBD_FILE_WRITE",
+            volume,
+            path,
+            request_id=request.state.request_id,
+            started=started,
+            success=False,
+            error=str(exc),
+            error_code=mapped.code,
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        raise mapped from exc
+    except Exception as exc:
+        await asyncio.to_thread(
+            _audit_file_operation,
+            "RBD_FILE_WRITE",
+            volume,
+            path,
+            request_id=request.state.request_id,
+            started=started,
+            success=False,
+            error=str(exc),
+            error_code=getattr(exc, "code", "RBD_FILE_WRITE_FAILED"),
+            capacity_decision_id=capacity.get("id"),
+            osdmap_epoch=capacity.get("osdmap_epoch"),
+        )
+        raise
+
+
+@router.get("/volumes/{volume_id}/files/content")
+async def download_volume_file(
+    volume_id: UUID,
+    request: Request,
+    path: str = Query(min_length=1, max_length=4096),
+    preview: bool = False,
+):
+    started = time.monotonic()
+    volume = await asyncio.to_thread(_mounted_volume, volume_id)
+    metadata = await asyncio.to_thread(_call_file_executor, "rbd.files.stat", volume, path=path)
+    settings = get_settings()
+    mime_type = str(metadata.get("mime_type") or "application/octet-stream").split(";", 1)[0].lower()
+    if preview:
+        if int(metadata.get("size") or 0) > settings.rbd_file_preview_max_bytes:
+            raise RbdControlError(413, "PREVIEW_TOO_LARGE", "File exceeds the configured preview limit")
+        if mime_type not in settings.rbd_allowed_preview_mime_set:
+            raise RbdControlError(415, "PREVIEW_UNSUPPORTED", "This file type is download-only")
+
+    params = _volume_executor_params(volume, path=path)
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(settings.rbd_executor_timeout_seconds, read=None),
+        follow_redirects=False,
+    )
+    try:
+        upstream = await client.send(
+            client.build_request("GET", _executor_file_url(), headers=_executor_auth_headers(params)),
+            stream=True,
+        )
+        if not upstream.is_success:
+            await upstream.aread()
+            error = _executor_http_error(upstream)
+            await upstream.aclose()
+            await client.aclose()
+            raise error
+    except Exception:
+        await client.aclose()
+        raise
+
+    filename = str(metadata.get("name") or "download.bin").replace('"', "")
+    disposition = "inline" if preview else "attachment"
+    headers = {
+        "Content-Length": str(int(metadata.get("size") or 0)),
+        "Content-Disposition": f'{disposition}; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}',
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+        "Cache-Control": "private, no-store",
+    }
+
+    async def body():
+        sent = 0
+        stream_error: Exception | None = None
+        try:
+            async for chunk in upstream.aiter_bytes():
+                sent += len(chunk)
+                yield chunk
+        except Exception as exc:
+            stream_error = exc
+            raise
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+            await asyncio.to_thread(
+                _audit_file_operation,
+                "RBD_FILE_READ",
+                volume,
+                path,
+                request_id=request.state.request_id,
+                started=started,
+                success=stream_error is None and sent == int(metadata.get("size") or 0),
+                bytes_count=sent,
+                content_type=mime_type,
+                error=str(stream_error) if stream_error else None,
+                error_code="RBD_FILE_READ_FAILED" if stream_error else None,
+            )
+
+    return StreamingResponse(body(), media_type=mime_type, headers=headers)
+
+
+@router.post("/volumes/{volume_id}/terminal-ticket")
+def create_terminal_ticket(volume_id: UUID, request: Request):
+    volume = _mounted_volume(volume_id)
+    capacity = _require_reserved_volume_gate("RBD_FILE_WRITE", volume, request.state.request_id)
+    try:
+        result = ExecutorClient.from_settings().terminal_ticket(_volume_executor_params(volume))
+    except (ExecutorClientError, ValueError) as exc:
+        raise _executor_error(exc) from exc
+    result["websocket_path"] = "/ws/terminal"
+    result["capacity_decision"] = capacity
+    result["lab_warning"] = "This is a real shell on the configured Linux Ceph client host. Closing it does not unmount the volume."
+    return result
+
+
+def _validation_result(row: dict[str, Any]) -> dict[str, Any]:
+    return _json_value(dict(row))
+
+
+@router.get("/volumes/{volume_id}/validation-runs")
+def list_validation_runs(volume_id: UUID):
+    _load_volume(volume_id)
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM rbd_validation_runs WHERE volume_id=%s ORDER BY created_at DESC LIMIT 100",
+            (volume_id,),
+        ).fetchall()
+    return {"items": [_validation_result(dict(row)) for row in rows]}
+
+
+@router.post("/volumes/{volume_id}/validation-runs", status_code=201)
+def create_validation_run(
+    volume_id: UUID,
+    payload: ValidationBaselineRequest,
+    request: Request,
+):
+    started = time.monotonic()
+    volume = _mounted_volume(volume_id)
+    manifest = _call_file_executor("rbd.files.manifest", volume, paths=payload.paths)
+    files = manifest.get("files")
+    if (
+        manifest.get("algorithm") != "sha256"
+        or not isinstance(files, list)
+        or len(files) != len(payload.paths)
+        or len({item.get("path") for item in files if isinstance(item, dict)}) != len(files)
+        or any(
+            not isinstance(item, dict)
+            or item.get("status") != "PRESENT"
+            or not isinstance(item.get("sha256"), str)
+            or len(item["sha256"]) != 64
+            for item in files
+        )
+    ):
+        raise RbdControlError(409, "BASELINE_FILE_MISSING", "Every baseline path must be a present regular file")
+    with connection() as conn:
+        snapshot = conn.execute(
+            "SELECT fsid,osdmap_epoch FROM capacity_snapshots WHERE fresh=true ORDER BY captured_at DESC,id DESC LIMIT 1"
+        ).fetchone()
+        run_id = uuid.uuid4()
+        row = conn.execute(
+            """
+            INSERT INTO rbd_validation_runs (
+              id,volume_id,name,baseline_label,image_id,fs_uuid,
+              baseline_fsid,baseline_osdmap_epoch,manifest
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+            RETURNING *
+            """,
+            (
+                run_id,
+                volume_id,
+                payload.name,
+                payload.baseline_label,
+                volume["image_id"],
+                volume["fs_uuid"],
+                snapshot["fsid"] if snapshot else None,
+                snapshot["osdmap_epoch"] if snapshot else None,
+                json.dumps(manifest),
+            ),
+        ).fetchone()
+        conn.commit()
+    for item in manifest.get("files", []):
+        _audit_file_operation(
+            "RBD_FILE_READ",
+            volume,
+            item["path"],
+            request_id=request.state.request_id,
+            started=started,
+            success=True,
+            bytes_count=int(item.get("size") or 0),
+            content_type=item.get("mime_type"),
+        )
+    return _validation_result(dict(row))
+
+
+@router.post("/volumes/{volume_id}/validation-runs/{run_id}/verify")
+def verify_validation_run(volume_id: UUID, run_id: UUID, request: Request):
+    started = time.monotonic()
+    volume = _mounted_volume(volume_id)
+    with connection() as conn:
+        stored = conn.execute(
+            "SELECT * FROM rbd_validation_runs WHERE id=%s AND volume_id=%s",
+            (run_id, volume_id),
+        ).fetchone()
+    if stored is None:
+        raise RbdControlError(404, "VALIDATION_RUN_NOT_FOUND", "RBD validation run was not found")
+    stored = dict(stored)
+    if stored["image_id"] != volume["image_id"] or str(stored["fs_uuid"]) != str(volume["fs_uuid"]):
+        raise RbdControlError(409, "VOLUME_IDENTITY_MISMATCH", "The mounted image or filesystem no longer matches the baseline")
+    expected = {item["path"]: item for item in stored["manifest"].get("files", [])}
+    try:
+        observed_manifest = _call_file_executor(
+            "rbd.files.manifest",
+            volume,
+            paths=list(expected),
+        )
+        observed_files = observed_manifest.get("files")
+        if observed_manifest.get("algorithm") != "sha256" or not isinstance(observed_files, list) or len(observed_files) != len(expected):
+            raise RbdControlError(502, "EXECUTOR_PROTOCOL_ERROR", "Executor verification manifest is incomplete")
+        observed = {item["path"]: item for item in observed_files}
+        if len(observed) != len(observed_files):
+            raise RbdControlError(502, "EXECUTOR_PROTOCOL_ERROR", "Executor verification manifest contains duplicate paths")
+        comparisons = []
+        for path, baseline in expected.items():
+            current = observed.get(path)
+            matches = bool(
+                current
+                and current.get("sha256") == baseline.get("sha256")
+                and int(current.get("size") or 0) == int(baseline.get("size") or 0)
+            )
+            comparisons.append(
+                {
+                    "path": path,
+                    "status": "MATCH" if matches else "CHANGED_OR_MISSING",
+                    "expected_sha256": baseline.get("sha256"),
+                    "observed_sha256": current.get("sha256") if current else None,
+                    "expected_size": baseline.get("size"),
+                    "observed_size": current.get("size") if current else None,
+                }
+            )
+        passed = all(item["status"] == "MATCH" for item in comparisons)
+        verification = {
+            "algorithm": "sha256",
+            "checked_at": datetime.utcnow().isoformat() + "Z",
+            "passed": passed,
+            "files": comparisons,
+        }
+        status = "PASS" if passed else "FAIL"
+    except Exception as exc:
+        verification = {
+            "algorithm": "sha256",
+            "checked_at": datetime.utcnow().isoformat() + "Z",
+            "passed": False,
+            "error_code": getattr(exc, "code", "VALIDATION_FAILED"),
+            "error": str(exc)[:1000],
+        }
+        status = "ERROR"
+        with connection() as conn:
+            conn.execute(
+                "UPDATE rbd_validation_runs SET status=%s,verification=%s::jsonb,verified_at=now(),updated_at=now() WHERE id=%s",
+                (status, json.dumps(verification), run_id),
+            )
+            conn.commit()
+        raise
+    with connection() as conn:
+        row = conn.execute(
+            """
+            UPDATE rbd_validation_runs
+               SET status=%s,verification=%s::jsonb,verified_at=now(),updated_at=now()
+             WHERE id=%s
+            RETURNING *
+            """,
+            (status, json.dumps(verification), run_id),
+        ).fetchone()
+        conn.commit()
+    for item in observed.values():
+        present = item.get("status") == "PRESENT"
+        _audit_file_operation(
+            "RBD_FILE_READ",
+            volume,
+            item["path"],
+            request_id=request.state.request_id,
+            started=started,
+            success=present,
+            bytes_count=int(item.get("size") or 0),
+            content_type=item.get("mime_type"),
+            error="Validation file is missing" if not present else None,
+            error_code="FILE_NOT_FOUND" if not present else None,
+        )
+    return _validation_result(dict(row))
+
+
+def _executor_terminal_ws_url(ticket: str) -> str:
+    parsed = urlsplit(get_settings().rbd_executor_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return urlunsplit((scheme, parsed.netloc, "/ws/terminal", urlencode({"ticket": ticket}), ""))
+
+
+@terminal_router.websocket("/ws/terminal")
+async def terminal_websocket(websocket: WebSocket, ticket: str = Query(min_length=32, max_length=128)):
+    try:
+        async with websocket_connect(
+            _executor_terminal_ws_url(ticket),
+            max_size=64 * 1024,
+            open_timeout=get_settings().rbd_executor_timeout_seconds,
+        ) as upstream:
+            await websocket.accept()
+
+            async def browser_to_executor():
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        return
+                    if message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    elif message.get("text") is not None:
+                        await upstream.send(message["text"])
+
+            async def executor_to_browser():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            tasks = {
+                asyncio.create_task(browser_to_executor()),
+                asyncio.create_task(executor_to_browser()),
+            }
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                task.result()
+    except (WebSocketDisconnect, ConnectionClosed):
+        return
+    except Exception:
+        try:
+            await websocket.close(code=1011, reason="Terminal bridge unavailable")
+        except Exception:
+            pass

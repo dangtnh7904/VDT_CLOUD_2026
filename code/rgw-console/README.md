@@ -2,7 +2,8 @@
 
 Web console để tạo workload, quản lý dữ liệu thử nghiệm RGW/RBD và quan sát
 capacity/performance của Ceph. React không nhận AWS/RGW credential; mọi thao
-tác S3 hoặc đặc quyền Ceph nằm trong FastAPI, worker hoặc host-agent.
+tác S3 hoặc đặc quyền Ceph nằm trong FastAPI, worker hoặc Node SSH executor nội
+bộ.
 
 Kết quả đã chạy và các mục Ceph/RBD chưa thể chạy trên máy hiện tại được ghi
 tách bạch trong [`VALIDATION.md`](VALIDATION.md).
@@ -65,17 +66,18 @@ khởi động sau khi migration thành công. `extra_hosts` dùng
 `host-gateway` để cùng cấu hình hoạt động với Docker Desktop và Docker
 Engine hiện đại.
 
-Hai profile Ceph không được bật mặc định. Sau khi cài host-agent theo
-[`agent/README.md`](agent/README.md), đặt `CEPH_AGENT_SOCKET_DIR` thành thư mục
-socket thật trên Linux (thường là `/run/rgw-console`), khai báo chính xác FSID,
-pool/namespace allowlist, rồi mới bật collector và RBD worker:
+Profile `ceph-ssh` không được bật mặc định. Khai báo chính xác FSID, SSH target,
+private-key path, executor token, pool/namespace allowlist rồi bật Node executor,
+capacity collector và RBD worker cùng lúc:
 
 ```bash
-docker compose --profile ceph-collector --profile ceph-rbd up --build -d
-docker compose ps
+docker compose --profile ceph-ssh up --build -d
+docker compose --profile ceph-ssh ps
 ```
 
-Nếu thiếu FSID, allowlist hoặc socket, API/UI RBD fail closed. Không bật
+Nếu thiếu FSID, allowlist, executor token hoặc SSH, API/UI RBD fail closed. Node
+executor không publish port ra host/browser và chỉ nhận action schema đóng qua
+`POST /internal/v1/execute`. Không bật
 `CAPACITY_OBSERVE_ONLY=false` cho tới khi inventory mọi affected pool, tham số
 metadata/safety margin và chuỗi fresh stable samples đã được kiểm chứng.
 
@@ -118,10 +120,10 @@ Chạy `python -m app.worker` trong terminal thứ hai với cùng virtualenv,
 `PYTHONPATH` và working directory. Frontend native chạy bằng `npm ci` rồi
 `npm run dev` trong thư mục `frontend`.
 
-Trên Linux đã provision host-agent, chạy thêm `python -m
-app.capacity_collector` và `python -m app.rbd_lifecycle_worker`. Không chạy
-RBD lifecycle worker trên Windows: kernel RBD, block-device validation và mount
-chỉ được hỗ trợ trên host Linux.
+Khi chạy native, Node executor SSH tới Linux Ceph client; chạy thêm `python -m
+app.capacity_collector` và `python -m app.rbd_lifecycle_worker`. Private key chỉ
+được mount read-only vào executor. Không chạy lệnh Ceph/RBD trực tiếp trong
+FastAPI hoặc nhận command tùy ý từ frontend.
 
 Chạy `python -m app.performance_collector` trong một terminal khác trên mọi
 nền tảng. Collector này luôn ghi request IOPS/throughput của console. Để thêm
@@ -142,6 +144,44 @@ curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/corpora
 curl "http://127.0.0.1:8000/api/performance/current?source=application"
 curl "http://127.0.0.1:8000/api/performance/history?source=application&step=15"
+```
+
+## RBD file browser, checksum validation và terminal
+
+Volume ở trạng thái `MOUNTED`/`READY` có nút mở detail. File browser dùng SFTP
+qua Node executor để list, upload dạng stream, download, tạo directory và xóa
+file/directory rỗng. Text, ảnh và PDF chỉ được preview khi MIME sniff thực tế
+nằm trong `RBD_ALLOWED_PREVIEW_MIME` và file không vượt
+`RBD_FILE_PREVIEW_MAX_BYTES`; response luôn có `nosniff`. Path được resolve bằng
+SFTP `realpath`/`lstat`, từ chối `..`, special file và symlink để không thoát
+mountpoint của volume.
+
+Tab kiểm chứng upgrade lưu baseline SHA-256 của tối đa 100 file vào migration
+`0008_rbd_validation_runs.sql`. Sau unmount/remap/mount, nút `Verify now` đọc
+lại đúng image ID và filesystem UUID rồi ghi `PASS`, `FAIL` hoặc `ERROR`; đây
+là evidence workflow, không tự đánh dấu live upgrade PASS.
+
+Web terminal lấy vé ngẫu nhiên dùng một lần, hết hạn nhanh từ FastAPI. Browser
+kết nối `/ws/terminal`; FastAPI bridge tới Node và Node mở `ssh2.shell()` trên
+đúng Linux host, bắt đầu tại mountpoint. Đây là shell thật dành riêng cho lab,
+không phải sandbox: tài khoản SSH và `sudo -n` vẫn quyết định phạm vi quyền.
+Session idle/max-duration được giới hạn; đóng terminal chỉ đóng shell, không
+unmount volume. Unmount/unmap/delete bị từ chối khi còn file transfer hoặc
+terminal session do console quản lý.
+
+Các API chính:
+
+```text
+GET    /api/rbd/volumes/{id}/files?path=/
+GET    /api/rbd/volumes/{id}/files/metadata?path=/docs/a.txt
+GET    /api/rbd/volumes/{id}/files/content?path=/docs/a.txt&preview=true
+PUT    /api/rbd/volumes/{id}/files/content?path=/docs/a.txt
+POST   /api/rbd/volumes/{id}/directories
+DELETE /api/rbd/volumes/{id}/files?path=/docs/a.txt
+POST   /api/rbd/volumes/{id}/validation-runs
+POST   /api/rbd/volumes/{id}/validation-runs/{run_id}/verify
+POST   /api/rbd/volumes/{id}/terminal-ticket
+WS     /ws/terminal?ticket=<single-use-ticket>
 ```
 
 ## Forward port về máy host
@@ -168,9 +208,9 @@ docker compose restart backend worker performance-collector
 - `backend`: FastAPI + boto3, RGW/RBD allowlist, idempotency, capacity admission và telemetry APIs.
 - `worker`: process Python riêng, lấy streaming job từ PostgreSQL, hỗ trợ pause/resume/stop.
 - `performance-collector`: ghi application I/O, tùy chọn tính Ceph client IOPS/throughput từ counter mgr/Prometheus, tạo rollup 1 phút và dọn retention.
-- `capacity-collector` (profile `ceph-collector`): lấy telemetry chỉ đọc qua Unix socket.
-- `rbd-lifecycle-worker` (profile `ceph-rbd`): state machine create/map/format/mount/unmount/unmap/delete có fence và reconcile.
-- `ceph-host-agent`: systemd service Linux giữ CephX/keyring và thực thi action allowlist; FastAPI không nhận keyring.
+- `rbd-console` (profile `ceph-ssh`): Node executor nội bộ, giữ SSH key read-only; action Ceph/RBD dùng allowlist + FSID binding, file I/O dùng SFTP containment và terminal dùng vé một lần.
+- `capacity-collector` (profile `ceph-ssh`): lấy inventory Ceph chỉ đọc qua Node executor và lưu snapshot theo OSD/pool scope.
+- `rbd-lifecycle-worker` (profile `ceph-ssh`): state machine create/map/format/mount/unmount/unmap/delete có fence và reconcile.
 - PostgreSQL host: lưu operations, capacity ledger, idempotency, volume/action và trạng thái job.
 - `postgres` (profile `bundled-db`, tùy chọn): database container riêng cho lab.
 

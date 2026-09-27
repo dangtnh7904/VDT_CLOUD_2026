@@ -10,6 +10,14 @@ def settings(**overrides):
         "rgw_endpoint_url": "http://rgw.invalid",
         "rgw_access_key": "test-access",
         "rgw_secret_key": "test-secret",
+        "rgw_allowed_buckets": "",
+        "rgw_stream_prefix_root": "",
+        "rgw_affected_pools": "",
+        "rbd_allowed_pools": "",
+        "rbd_allowed_namespaces": "",
+        "ceph_expected_fsid": None,
+        "performance_source": "application_only",
+        "performance_prometheus_url": None,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -29,6 +37,9 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(configured.performance_enabled)
         self.assertEqual(configured.performance_source, "application_only")
         self.assertIsNone(configured.performance_prometheus_url)
+        self.assertIn("application/pdf", configured.rbd_allowed_preview_mime_set)
+        self.assertIn("image/png", configured.rbd_allowed_preview_mime_set)
+        self.assertGreaterEqual(configured.rbd_file_upload_max_bytes, configured.rbd_file_preview_max_bytes)
 
     def test_csv_allowlists_are_trimmed_and_deduplicated(self):
         configured = settings(rgw_allowed_buckets=" lab-b,lab-a, lab-b ")

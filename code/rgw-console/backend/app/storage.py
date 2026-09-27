@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import quote
 
 import boto3
 from botocore.config import Config
@@ -47,6 +48,19 @@ def client():
 def clean_segment(value: str, fallback: str = "unknown") -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip(".-")
     return cleaned[:100] or fallback
+
+
+def s3_metadata(metadata: dict[str, str] | None) -> dict[str, str]:
+    """Return HTTP-header-safe S3 metadata while retaining Unicode reversibly."""
+    encoded: dict[str, str] = {}
+    for key, raw_value in (metadata or {}).items():
+        value = str(raw_value)
+        try:
+            value.encode("ascii")
+        except UnicodeEncodeError:
+            value = quote(value, safe="")
+        encoded[str(key)] = value
+    return encoded
 
 
 def object_key(
@@ -95,7 +109,7 @@ def upload_file(
         with path.open("rb") as body:
             response = client().put_object(
                 Bucket=bucket, Key=key, Body=body, ContentType=mime,
-                Metadata={"client-id": clean_segment(client_id), "category": category, "source": source, "original-name": path.name},
+                Metadata=s3_metadata({"client-id": clean_segment(client_id), "category": category, "source": source, "original-name": path.name}),
             )
         latency = (time.perf_counter() - started) * 1000
         _journal_operation(kind="PUT", success=True, bytes_count=size, latency_ms=latency, bucket=bucket, object_key=key, client_id=client_id, category=category, source=source, content_type=mime, error=None, request_id=request_id, job_id=job_id, capacity_decision_id=capacity_decision_id, bytes_delta_logical=size)
@@ -123,7 +137,7 @@ def upload_stream(
     started = time.perf_counter()
     try:
         response = client().put_object(Bucket=bucket, Key=key, Body=body, ContentLength=size, ContentType=content_type,
-            Metadata={"client-id": clean_segment(client_id), "category": category, "source": source, "original-name": original_name})
+            Metadata=s3_metadata({"client-id": clean_segment(client_id), "category": category, "source": source, "original-name": original_name}))
         latency = (time.perf_counter() - started) * 1000
         _journal_operation(kind="PUT", success=True, bytes_count=size, latency_ms=latency, bucket=bucket, object_key=key, client_id=client_id, category=category, source=source, content_type=content_type, error=None, request_id=request_id, capacity_decision_id=capacity_decision_id, bytes_delta_logical=size)
         return {"success": True, "bucket": bucket, "key": key, "filename": original_name, "size": size, "content_type": content_type, "etag": response.get("ETag", "").strip('"'), "latency_ms": round(latency, 2)}
@@ -168,7 +182,7 @@ def exact_put(
         "Body": body,
         "ContentLength": size,
         "ContentType": content_type,
-        "Metadata": metadata or {},
+        "Metadata": s3_metadata(metadata),
     }
     if if_match:
         params["IfMatch"] = if_match
@@ -250,7 +264,7 @@ def replace_metadata(
             Key=key,
             CopySource=copy_source,
             MetadataDirective="REPLACE",
-            Metadata=metadata,
+            Metadata=s3_metadata(metadata),
             ContentType=content_type or head.get("ContentType") or "application/octet-stream",
         )
         latency = (time.perf_counter() - started) * 1000

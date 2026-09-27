@@ -42,7 +42,10 @@ class Settings(BaseSettings):
 
     ceph_expected_fsid: str | None = None
     ceph_cluster_name: str = "ceph"
-    ceph_agent_socket: Path = Path("/run/rgw-console/ceph-agent.sock")
+    rbd_executor_url: str = "http://rbd-console:3001"
+    rbd_executor_token: SecretStr | None = None
+    rbd_executor_timeout_seconds: float = Field(default=35, gt=0, le=300)
+    rbd_validation_timeout_seconds: float = Field(default=300, gt=0, le=3600)
 
     # Privileged RBD actions remain disabled while either allowlist is empty.
     rbd_allowed_pools: str = ""
@@ -52,6 +55,12 @@ class Settings(BaseSettings):
     rbd_default_capacity_mode: Literal["reserved-logical"] = "reserved-logical"
     rbd_action_lease_seconds: int = Field(default=120, ge=10)
     rbd_action_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    rbd_file_preview_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
+    rbd_file_upload_max_bytes: int = Field(default=16 * 1024 * 1024 * 1024, ge=1024)
+    rbd_allowed_preview_mime: str = (
+        "text/plain,text/markdown,text/yaml,text/csv,application/json,application/pdf,"
+        "image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+    )
 
     # Capacity policy defaults mirror the plan. Unknown byte budgets stay None;
     # future admission code must block instead of silently treating them as zero.
@@ -132,6 +141,19 @@ class Settings(BaseSettings):
             raise ValueError("CEPH_CLUSTER_NAME contains unsupported characters")
         return value
 
+    @field_validator("rbd_executor_url")
+    @classmethod
+    def validate_executor_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("RBD_EXECUTOR_URL must be an HTTP(S) URL with a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("RBD_EXECUTOR_URL must not contain credentials")
+        if parsed.path or parsed.query or parsed.fragment:
+            raise ValueError("RBD_EXECUTOR_URL must not include a path, query, or fragment")
+        return value
+
     @field_validator("rbd_image_prefix")
     @classmethod
     def validate_image_prefix(cls, value: str) -> str:
@@ -210,6 +232,10 @@ class Settings(BaseSettings):
     @property
     def rbd_allowed_namespace_set(self) -> frozenset[str]:
         return _csv_set(self.rbd_allowed_namespaces)
+
+    @property
+    def rbd_allowed_preview_mime_set(self) -> frozenset[str]:
+        return _csv_set(self.rbd_allowed_preview_mime)
 
     @property
     def corpus_roots(self) -> dict[str, Path]:

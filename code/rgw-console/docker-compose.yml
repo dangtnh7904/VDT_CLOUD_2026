@@ -6,6 +6,7 @@ x-backend-environment: &backend-environment
   DATABASE_URL: ${DOCKER_DATABASE_URL:?Set DOCKER_DATABASE_URL to a PostgreSQL URL reachable from Docker}
   CORPUS_MIXED_ROOT: /data/mix-file-corpus
   CORPUS_SIZE_ROOT: /data/size-file-corpus
+  RBD_EXECUTOR_URL: http://rbd-console:3001
 
 x-host-database: &host-database
   - "host.docker.internal:host-gateway"
@@ -42,7 +43,6 @@ services:
     extra_hosts: *host-database
     volumes:
       - ../data:/data:ro
-      - ${CEPH_AGENT_SOCKET_DIR:-./runtime}:/run/rgw-console
     ports:
       - "8000:8000"
     depends_on:
@@ -76,36 +76,55 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Opt in only on a Linux host where the ceph-host-agent socket is available.
-  # The collector invokes only the read-only inventory subset.
+  # Internal-only SSH executor. No port is published to the host or browser.
+  rbd-console:
+    profiles: ["ceph-ssh"]
+    build:
+      context: ./rbd-console
+      network: host
+    env_file: .env
+    environment:
+      RBD_SSH_KEY_PATH: /run/secrets/rbd_ssh_key
+      RBD_EXECUTOR_STATE_ROOT: /var/lib/rbd-executor
+    volumes:
+      - ${RBD_SSH_PRIVATE_KEY_FILE:-./runtime/id_rsa}:/run/secrets/rbd_ssh_key:ro
+      - rbd-executor-state:/var/lib/rbd-executor
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    restart: unless-stopped
+
+  # Both workers use the same authenticated, FSID-bound Node SSH executor.
   capacity-collector:
-    profiles: ["ceph-collector"]
+    profiles: ["ceph-ssh"]
     build: *backend-build
     command: ["python", "-m", "app.capacity_collector"]
     env_file: .env
     environment: *backend-environment
     extra_hosts: *host-database
-    volumes:
-      - ${CEPH_AGENT_SOCKET_DIR:-./runtime}:/run/rgw-console
     depends_on:
       migrate:
         condition: service_completed_successfully
+      rbd-console:
+        condition: service_healthy
     restart: unless-stopped
 
   rbd-lifecycle-worker:
-    profiles: ["ceph-rbd"]
+    profiles: ["ceph-ssh"]
     build: *backend-build
     command: ["python", "-m", "app.rbd_lifecycle_worker"]
     env_file: .env
     environment: *backend-environment
     extra_hosts: *host-database
-    volumes:
-      - ${CEPH_AGENT_SOCKET_DIR:-./runtime}:/run/rgw-console
     depends_on:
       migrate:
         condition: service_completed_successfully
       backend:
         condition: service_started
+      rbd-console:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -120,3 +139,4 @@ services:
 
 volumes:
   pgdata:
+  rbd-executor-state:

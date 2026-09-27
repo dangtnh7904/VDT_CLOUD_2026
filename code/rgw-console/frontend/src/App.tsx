@@ -6,6 +6,19 @@ import {
   ShieldAlert, Shuffle, Square, Trash2, Upload, Video, X, Zap,
 } from "lucide-react";
 import { api, formatBytes, uploadWithProgress } from "./api";
+import { RbdVolumeDetail } from "./RbdVolumeDetail";
+import {
+  CAPACITY_GUIDANCE,
+  CRUD_DEFAULT_OPERATION_WEIGHTS,
+  CRUD_OPERATIONS,
+  canResumeStreamJob,
+  capacityScopeLabel,
+  isRbdDeleteConfirmed,
+  isRbdFileAccessState,
+  resolveTelemetryStatus,
+  type CrudOperation,
+  type TelemetryStatus,
+} from "./ui-contracts";
 
 type View = "dashboard" | "performance" | "upload" | "random" | "stream" | "objects" | "volumes";
 type CorpusItem = { name: string; path: string; kind: "file" | "directory"; size?: number; category?: string; content_type?: string };
@@ -21,8 +34,30 @@ type CapacitySnapshot = {
   observe_only?: boolean;
   reasons?: string[];
   policy?: { hard_ceiling_ratio?: number; admission_stop_ratio?: number; resume_ratio?: number };
+  telemetry?: {
+    status: TelemetryStatus;
+    source: string;
+    age_seconds: number | null;
+    last_success_at: string | null;
+    error_code: string | null;
+    osd_scope: number[];
+    pool_scope: string[];
+  };
 };
 type ActionNotice = { kind: "success" | "error"; text: string };
+type StreamJobAction = "pause" | "resume" | "stop";
+type StreamJob = {
+  id: string;
+  state: string;
+  config: { client_id?: string };
+  operation_counts?: Partial<Record<CrudOperation, number>>;
+  operation_bytes?: Partial<Record<CrudOperation, number>>;
+  failed_count?: number;
+  bytes_sent?: number;
+  created_at: string;
+  paused_reason?: string | null;
+  last_error?: string | null;
+};
 type PerformanceSample = {
   state: "FRESH" | "STALE" | "PARTIAL" | "UNAVAILABLE";
   source: "application" | "ceph" | "device";
@@ -48,7 +83,7 @@ const nav: { id: View; label: string; icon: any }[] = [
   { id: "performance", label: "Performance", icon: LineChart },
   { id: "upload", label: "Upload objects", icon: Upload },
   { id: "random", label: "Random object", icon: Shuffle },
-  { id: "stream", label: "Streaming PUT", icon: Zap },
+  { id: "stream", label: "RGW CRUD stream", icon: Zap },
   { id: "objects", label: "Object explorer", icon: Boxes },
   { id: "volumes", label: "RBD volumes", icon: HardDrive },
 ];
@@ -137,16 +172,21 @@ function CapacityBanner() {
     : ["THROTTLED", "PAUSED_CAPACITY", "PAUSED_REMAP", "RECONCILING"].includes(state) ? "warning" : "normal";
   const observeOnly = snapshot?.observe_only ?? snapshot?.contract === "OBSERVE_ONLY";
   const ratio = snapshot?.most_full_ratio;
-  const reasons = error ? [error] : snapshot?.reasons || [];
+  const telemetry = snapshot?.telemetry;
+  const telemetryStatus = resolveTelemetryStatus(Boolean(error), telemetry?.status, snapshot?.fresh);
+  const age = telemetry?.age_seconds == null ? "age —" : `age ${Math.round(telemetry.age_seconds)}s`;
+  const scope = capacityScopeLabel(telemetry?.osd_scope, telemetry?.pool_scope);
+  const guidance = CAPACITY_GUIDANCE[telemetryStatus];
+  const reasons = error ? [error] : [...(snapshot?.reasons || []), ...(guidance ? [guidance] : [])];
   const Icon = severity === "danger" ? ShieldAlert : severity === "warning" ? AlertTriangle : Gauge;
 
   return <div className="capacity-shell"><section className={`capacity-banner ${severity}`}>
     <div className="capacity-state"><span className="capacity-icon"><Icon /></span><div><small>CAPACITY GUARD</small><strong>{state.replaceAll("_", " ")}</strong></div></div>
     <div className="capacity-reading"><small>Most-full participating OSD</small><strong>{ratio == null ? "—" : `${(ratio * 100).toFixed(1)}%`}</strong><span>{snapshot?.most_full_osd == null ? "No OSD evidence" : `osd.${snapshot.most_full_osd}`}</span></div>
     <div className="capacity-contract">
-      <span className={`fresh-pill ${snapshot?.fresh && !error ? "fresh" : "stale"}`}><Clock3 />{snapshot?.fresh && !error ? "FRESH" : "STALE"}</span>
+      <span className={`fresh-pill ${telemetryStatus === "FRESH" ? "fresh" : "stale"}`}><Clock3 />{telemetryStatus.replaceAll("_", " ")}</span>
       {observeOnly && <span className="observe-pill">OBSERVE ONLY</span>}
-      <p title={reasons.join(" · ")}>{reasons.length ? reasons.join(" · ") : "No active capacity warning."}</p>
+      <p title={reasons.join(" · ")}>{telemetry?.source || "node-ssh"} · {age} · {scope}. {observeOnly ? "Observe-only là chế độ policy; không phải lỗi. " : ""}{reasons.length ? reasons.join(" · ") : "No active capacity warning."}</p>
     </div>
   </section></div>;
 }
@@ -349,18 +389,52 @@ function RandomView({ defaultBucket }: { defaultBucket: string }) {
   </section>;
 }
 
+function StreamOperationResults({ job }: { job: StreamJob }) {
+  return <div className="operation-results" role="list" aria-label="Kết quả theo operation">
+    {CRUD_OPERATIONS.map(operation => <div className={`operation-result ${operation.toLowerCase()}`} role="listitem" key={operation}>
+      <span>{operation}</span>
+      <strong>{job.operation_counts?.[operation] || 0}</strong>
+      <small>{formatBytes(job.operation_bytes?.[operation] || 0)}</small>
+    </div>)}
+  </div>;
+}
+
 function StreamView({ defaultBucket }: { defaultBucket: string }) {
-  const defaults = { client_id: "loadgen-01", bucket: defaultBucket, prefix: "", requests_per_second: 2, concurrency: 2, duration_seconds: 60, object_limit: 100, weights: { images: 35, data: 25, documents: 20, media: 10, archives: 10 }, corpus_ids: ["mixed"], naming_strategy: "generated" };
-  const [form, setForm] = useState<any>(defaults); const [jobs, setJobs] = useState<any[]>([]);
-  const load = () => api("/jobs").then(setJobs).catch(() => {});
-  useEffect(() => { setForm((x: any) => ({ ...x, bucket: defaultBucket })); load(); const timer = setInterval(load, 1500); return () => clearInterval(timer); }, [defaultBucket]);
-  const create = async () => { await api("/jobs", { method: "POST", body: JSON.stringify(form) }); load(); };
-  const control = async (id: string, action: string) => { await api(`/jobs/${id}/${action}`, { method: "POST" }); load(); };
-  return <div className="stack"><section className="panel form-panel"><div className="section-head"><div><span className="eyebrow">FEATURE 5</span><h2>Mixed-object streaming PUT</h2><p>Tạo workload dài hạn từ corpus, worker chạy độc lập với API.</p></div><span className="worker-badge"><i /> WORKER QUEUE</span></div>
+  const defaults = { schema_version: 2, job_type: "rgw_crud", client_id: "loadgen-01", bucket: defaultBucket, prefix: "", requests_per_second: 2, concurrency: 2, duration_seconds: 60, object_limit: 100, weights: { images: 35, data: 25, documents: 20, media: 10, archives: 10 }, operation_weights: { ...CRUD_DEFAULT_OPERATION_WEIGHTS }, corpus_ids: ["mixed"], naming_strategy: "generated", max_live_objects: 10000, max_live_logical_bytes: 10737418240, delete_scope: "job_owned", auto_drain: true, version_policy: "detect" };
+  const [form, setForm] = useState<any>(defaults); const [jobs, setJobs] = useState<StreamJob[]>([]);
+  const [busyAction, setBusyAction] = useState(""); const [creating, setCreating] = useState(false); const [notice, setNotice] = useState<ActionNotice | null>(null);
+  const categoryWeight = Object.values(form.weights).reduce((sum: number, value: any) => sum + Number(value), 0);
+  const operationWeight = Object.values(form.operation_weights).reduce((sum: number, value: any) => sum + Number(value), 0);
+  const load = async (quiet = false) => {
+    try { setJobs(await api<StreamJob[]>("/jobs")); }
+    catch (error: any) { if (!quiet) setNotice({ kind: "error", text: error?.message || "Không thể tải danh sách stream jobs." }); }
+  };
+  useEffect(() => { setForm((x: any) => ({ ...x, bucket: defaultBucket })); void load(); const timer = setInterval(() => void load(true), 1500); return () => clearInterval(timer); }, [defaultBucket]);
+  const create = async () => {
+    setCreating(true); setNotice(null);
+    try { await api("/jobs", { method: "POST", body: JSON.stringify(form) }); setNotice({ kind: "success", text: "Đã tạo CRUD stream job mới." }); await load(true); }
+    catch (error: any) { setNotice({ kind: "error", text: error?.message || "Không thể tạo CRUD stream job." }); }
+    finally { setCreating(false); }
+  };
+  const control = async (id: string, action: StreamJobAction) => {
+    const busyKey = `${id}:${action}`; setBusyAction(busyKey); setNotice(null);
+    try { await api(`/jobs/${id}/${action}`, { method: "POST" }); setNotice({ kind: "success", text: `Đã gửi lệnh ${action} cho job ${id.slice(0, 8)}.` }); await load(true); }
+    catch (error: any) { setNotice({ kind: "error", text: error?.message || `Không thể ${action} job ${id.slice(0, 8)}.` }); }
+    finally { setBusyAction(""); }
+  };
+  return <div className="stack"><section className="panel form-panel"><div className="section-head"><div><span className="eyebrow">FEATURE 5</span><h2>RGW CRUD stream</h2><p>Workload PUT/GET/HEAD/LIST/UPDATE/DELETE từ corpus; worker chạy độc lập với API.</p></div><span className="worker-badge"><i /> WORKER QUEUE</span></div>
     <div className="form-grid three"><label><span>Client ID</span><input value={form.client_id} onChange={e => setForm({ ...form, client_id: e.target.value })} /></label><label><span>Bucket</span><input value={form.bucket} onChange={e => setForm({ ...form, bucket: e.target.value })} /></label><label><span>Prefix</span><input value={form.prefix} onChange={e => setForm({ ...form, prefix: e.target.value })} /></label><label><span>Requests / second</span><input type="number" value={form.requests_per_second} onChange={e => setForm({ ...form, requests_per_second: Number(e.target.value) })} /></label><label><span>Concurrency</span><input type="number" value={form.concurrency} onChange={e => setForm({ ...form, concurrency: Number(e.target.value) })} /></label><label><span>Duration (seconds)</span><input type="number" value={form.duration_seconds} onChange={e => setForm({ ...form, duration_seconds: Number(e.target.value) })} /></label><label><span>Object limit</span><input type="number" value={form.object_limit} onChange={e => setForm({ ...form, object_limit: Number(e.target.value) })} /></label><label><span>Naming strategy</span><select value={form.naming_strategy} onChange={e => setForm({ ...form, naming_strategy: e.target.value })}><option value="generated">Timestamp + UUID</option><option value="preserve">UUID + original filename</option></select></label></div>
     <div className="weights"><span className="source-label">Tỷ lệ category</span>{Object.entries(form.weights).map(([name, value]: any) => <label key={name}><span>{name}<em>{value}%</em></span><input type="range" min="0" max="100" value={value} onChange={e => setForm({ ...form, weights: { ...form.weights, [name]: Number(e.target.value) } })} /></label>)}</div>
-    <div className="action-row"><span>Tổng weight: {Object.values(form.weights).reduce((a: any, b: any) => a + b, 0) as number}%</span><button className="button primary large" onClick={create}><Play size={17} /> Start new job</button></div></section>
-    <section className="panel table-panel"><div className="section-head"><div><h2>Streaming jobs</h2><p>Pause, resume hoặc stop từng workload.</p></div></div><table><thead><tr><th>Client</th><th>State</th><th>Objects</th><th>Bytes</th><th>Created</th><th></th></tr></thead><tbody>{jobs.map(job => <tr key={job.id}><td><strong>{job.config.client_id}</strong><small className="block">{job.id.slice(0, 8)}</small></td><td><span className={`job-state ${job.state}`}>{job.state}</span></td><td>{job.sent_count} <span className="error-text">/ {job.failed_count} failed</span></td><td>{formatBytes(job.bytes_sent)}</td><td>{new Date(job.created_at).toLocaleString()}</td><td><div className="row-actions">{job.state === "paused" ? <button onClick={() => control(job.id, "resume")}><Play /></button> : <button disabled={!['running','pending'].includes(job.state)} onClick={() => control(job.id, "pause")}><Pause /></button>}<button disabled={['completed','stopped','failed'].includes(job.state)} onClick={() => control(job.id, "stop")}><Square /></button></div></td></tr>)}</tbody></table>{!jobs.length && <div className="empty">Chưa có streaming job.</div>}</section>
+    <div className="weights"><span className="source-label">Operation mix</span>{Object.entries(form.operation_weights).map(([name, value]: any) => <label key={name}><span>{name}<em>{value}%</em></span><input aria-label={`${name} weight`} type="range" min="0" max="100" value={value} onChange={e => setForm({ ...form, operation_weights: { ...form.operation_weights, [name]: Number(e.target.value) } })} /></label>)}</div>
+    <div className="action-row"><span>Category {categoryWeight}% · operations {operationWeight}%</span><button className="button primary large" onClick={create} disabled={creating || !form.client_id || !form.bucket || categoryWeight !== 100 || operationWeight !== 100}>{creating ? <LoaderCircle className="spin" /> : <Play size={17} />} Start new job</button></div></section>
+    <section className="panel table-panel stream-jobs-panel"><div className="section-head"><div><h2>CRUD stream jobs</h2><p>Pause, resume hoặc stop từng workload; kết quả tách theo từng operation.</p></div><button className="button ghost" onClick={() => void load()}><RefreshCw size={15} /> Refresh</button></div>
+      {notice && <div className={`action-notice stream-notice ${notice.kind === "error" ? "error" : ""}`}>{notice.kind === "success" ? <Check /> : <AlertTriangle />}<span>{notice.text}</span></div>}
+      <div className="stream-job-scroll"><table className="stream-job-table"><thead><tr><th>Client</th><th>State</th><th>Operation results</th><th>Failed</th><th>Total bytes</th><th>Created</th><th><span className="sr-only">Controls</span></th></tr></thead><tbody>{jobs.map(job => {
+        const resumeAllowed = canResumeStreamJob(job.state, job.paused_reason);
+        const terminal = ["completed", "stopped", "failed"].includes(job.state);
+        const actionPending = busyAction.startsWith(`${job.id}:`);
+        return <tr key={job.id}><td><strong>{job.config.client_id || "—"}</strong><small className="block">{job.id.slice(0, 8)}</small></td><td><span className={`job-state ${job.state}`}>{job.state}</span>{job.paused_reason && <small className="block job-reason" title={job.paused_reason}>{job.paused_reason.replaceAll("_", " ")}</small>}{job.last_error && <small className="block error-text job-reason" title={job.last_error}>{job.last_error}</small>}</td><td><StreamOperationResults job={job} /></td><td><strong className={job.failed_count ? "error-text" : "success-text"}>{job.failed_count || 0}</strong></td><td>{formatBytes(job.bytes_sent)}</td><td className="created-cell">{new Date(job.created_at).toLocaleString()}</td><td><div className="row-actions stream-actions">{job.state === "paused" ? <button title={resumeAllowed ? "Resume job" : "Job cần reconcile trước khi resume"} aria-label={`Resume job ${job.id.slice(0, 8)}`} disabled={!resumeAllowed || actionPending} onClick={() => void control(job.id, "resume")}>{busyAction === `${job.id}:resume` ? <LoaderCircle className="spin" /> : <Play />}</button> : <button title="Pause job" aria-label={`Pause job ${job.id.slice(0, 8)}`} disabled={!['running','pending'].includes(job.state) || actionPending} onClick={() => void control(job.id, "pause")}>{busyAction === `${job.id}:pause` ? <LoaderCircle className="spin" /> : <Pause />}</button>}<button title="Stop job" aria-label={`Stop job ${job.id.slice(0, 8)}`} disabled={terminal || job.state === "stopping" || actionPending} onClick={() => void control(job.id, "stop")}>{busyAction === `${job.id}:stop` ? <LoaderCircle className="spin" /> : <Square />}</button></div></td></tr>;
+      })}</tbody></table>{!jobs.length && <div className="empty">Chưa có CRUD stream job.</div>}</div></section>
   </div>;
 }
 
@@ -476,6 +550,9 @@ function RbdVolumes() {
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState<ActionNotice | null>(null);
   const [lastAction, setLastAction] = useState<any>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [deleteText, setDeleteText] = useState("");
+  const [detailVolume, setDetailVolume] = useState<any>(null);
 
   const load = async () => {
     setLoading(true);
@@ -524,7 +601,7 @@ function RbdVolumes() {
         }),
       });
       setLastAction(action);
-      setNotice({ kind: "success", text: `Đã queue create action ${action.action_id}. UI chỉ báo READY sau khi host-agent xác nhận.` });
+      setNotice({ kind: "success", text: `Đã queue create action ${action.action_id}. UI chỉ báo READY sau khi Node SSH executor xác nhận.` });
       await load();
     } catch (error: any) {
       setNotice({ kind: "error", text: error?.message || "Không thể queue RBD create." });
@@ -532,7 +609,6 @@ function RbdVolumes() {
   };
 
   const transition = async (volume: any, action: "mount" | "unmount" | "delete") => {
-    if (action === "delete" && !window.confirm(`Xóa volume “${volume.display_name || volume.image_name}”?\n\nAgent sẽ unmount/unmap trước và từ chối nếu còn watcher, snapshot hoặc clone.`)) return;
     setBusy(`${volume.id}:${action}`); setNotice(null);
     try {
       const result = await api(`/rbd/volumes/${volume.id}${action === "delete" ? "" : `/${action}`}`, {
@@ -541,6 +617,7 @@ function RbdVolumes() {
       });
       setLastAction(result);
       setNotice({ kind: "success", text: `Đã queue ${action} action ${result.action_id}.` });
+      if (action === "delete") { setDeleteTarget(null); setDeleteText(""); }
       await load();
     } catch (error: any) {
       setNotice({ kind: "error", text: error?.message || `Không thể queue ${action}.` });
@@ -551,9 +628,9 @@ function RbdVolumes() {
   const unmountable = new Set(["READY", "MOUNTED"]);
   return <div className="stack rbd-console">
     <section className="panel form-panel">
-      <div className="section-head"><div><span className="eyebrow">MANUAL RBD LIFECYCLE</span><h2>Create an isolated ext4 volume</h2><p>Format 2 · exclusive-lock · fenced host-agent · reserved-logical capacity.</p></div><span className={`worker-badge ${poolState.enabled ? "" : "disabled"}`}><i />{poolState.enabled ? "AGENT SCOPE ENABLED" : "FAIL CLOSED"}</span></div>
+      <div className="section-head"><div><span className="eyebrow">MANUAL RBD LIFECYCLE</span><h2>Create an isolated ext4 volume</h2><p>Format 2 · exclusive-lock · fenced Node SSH executor · reserved-logical capacity.</p></div><span className={`worker-badge ${poolState.enabled ? "" : "disabled"}`}><i />{poolState.enabled ? "EXECUTOR SCOPE ENABLED" : "FAIL CLOSED"}</span></div>
       {notice && <div className={`rbd-notice ${notice.kind}`}>{notice.kind === "success" ? <Check /> : <AlertTriangle />}<span>{notice.text}</span></div>}
-      {!poolState.enabled && <div className="rbd-disabled"><ShieldAlert /><div><strong>RBD mutation chưa được bật</strong><span>{poolState.reason || "Cần CEPH_EXPECTED_FSID cùng allowlist pool/namespace và Unix socket host-agent."}</span></div></div>}
+      {!poolState.enabled && <div className="rbd-disabled"><ShieldAlert /><div><strong>RBD mutation chưa được bật</strong><span>{poolState.reason || "Cần CEPH_EXPECTED_FSID, executor token, SSH target và allowlist pool/namespace."}</span></div></div>}
       <div className="form-grid three">
         <label><span>Pool</span><select value={form.pool} disabled={!poolState.enabled} onChange={event => setForm({ ...form, pool: event.target.value })}><option value="">Select allowlisted pool</option>{poolState.pools?.map((pool: any) => <option key={pool.name} value={pool.name}>{pool.name}</option>)}</select></label>
         <label><span>Namespace <em>blank = default</em></span><input value={form.namespace} disabled={!poolState.enabled} onChange={event => setForm({ ...form, namespace: event.target.value })} /></label>
@@ -565,8 +642,10 @@ function RbdVolumes() {
     </section>
     {lastAction && <section className="panel rbd-action"><div><small>LATEST ACTION</small><strong>{lastAction.action_id}</strong><span>{lastAction.current_step || lastAction.action_type || "Queued"}</span></div><span className={`job-state ${String(lastAction.state).toLowerCase()}`}>{lastAction.state}</span></section>}
     <section className="panel table-panel"><div className="section-head"><div><h2>Managed volumes</h2><p>Only database records inside the configured pool, namespace and image-prefix scope.</p></div><button className="button ghost" onClick={load}><RefreshCw className={loading ? "spin" : ""} />Refresh</button></div>
-      <div className="object-table"><table><thead><tr><th>Volume</th><th>Scope</th><th>Logical / reserved</th><th>Desired</th><th>Observed</th><th>Device / mount</th><th></th></tr></thead><tbody>{volumes.map(volume => <tr key={volume.id}><td><div className="object-name"><span><HardDrive /></span><div><strong>{volume.display_name || volume.image_name}</strong><small>{volume.image_name} · {volume.image_id || "image ID pending"}</small></div></div></td><td>{volume.pool}<small className="block">{volume.namespace || "default"}</small></td><td>{formatBytes(volume.logical_size_bytes)}<small className="block">reserved {formatBytes(volume.reserved_raw_bytes)}</small></td><td><span className="source-pill">{volume.desired_state}</span></td><td><span className={`job-state ${String(volume.observed_state).toLowerCase()}`}>{volume.observed_state}</span>{volume.last_error && <small className="block error-text">{volume.last_error}</small>}</td><td>{volume.device || "—"}<small className="block">{volume.mountpoint || "not mounted"}</small></td><td><div className="row-actions">{mountable.has(volume.observed_state) && <button title="Mount" disabled={Boolean(busy)} onClick={() => transition(volume, "mount")}>{busy === `${volume.id}:mount` ? <LoaderCircle className="spin" /> : <Play />}</button>}{unmountable.has(volume.observed_state) && <button title="Unmount" disabled={Boolean(busy)} onClick={() => transition(volume, "unmount")}>{busy === `${volume.id}:unmount` ? <LoaderCircle className="spin" /> : <Square />}</button>}{volume.observed_state !== "DELETED" && <button className="danger" title="Delete" disabled={Boolean(busy)} onClick={() => transition(volume, "delete")}>{busy === `${volume.id}:delete` ? <LoaderCircle className="spin" /> : <Trash2 />}</button>}</div></td></tr>)}</tbody></table>{loading && <div className="empty"><LoaderCircle className="spin" />Reading managed RBD state…</div>}{!loading && !volumes.length && <div className="empty">Chưa có managed RBD volume.</div>}</div>
+      <div className="object-table"><table><thead><tr><th>Volume</th><th>Scope</th><th>Logical / reserved</th><th>Desired</th><th>Observed</th><th>Device / mount</th><th></th></tr></thead><tbody>{volumes.map(volume => <tr key={volume.id}><td><div className="object-name"><span><HardDrive /></span><div><strong>{volume.display_name || volume.image_name}</strong><small>{volume.image_name} · {volume.image_id || "image ID pending"}</small></div></div></td><td>{volume.pool}<small className="block">{volume.namespace || "default"}</small></td><td>{formatBytes(volume.logical_size_bytes)}<small className="block">reserved {formatBytes(volume.reserved_raw_bytes)}</small></td><td><span className="source-pill">{volume.desired_state}</span></td><td><span className={`job-state ${String(volume.observed_state).toLowerCase()}`}>{volume.observed_state}</span>{volume.last_error && <small className="block error-text">{volume.last_error}</small>}</td><td>{volume.device || "—"}<small className="block">{volume.mountpoint || "not mounted"}</small></td><td><div className="row-actions">{isRbdFileAccessState(volume.observed_state) && <button title="Browse files" disabled={Boolean(busy)} onClick={() => setDetailVolume(volume)}><FolderOpen /></button>}{mountable.has(volume.observed_state) && <button title="Mount" disabled={Boolean(busy)} onClick={() => transition(volume, "mount")}>{busy === `${volume.id}:mount` ? <LoaderCircle className="spin" /> : <Play />}</button>}{unmountable.has(volume.observed_state) && <button title="Unmount" disabled={Boolean(busy)} onClick={() => transition(volume, "unmount")}>{busy === `${volume.id}:unmount` ? <LoaderCircle className="spin" /> : <Square />}</button>}{volume.observed_state !== "DELETED" && <button className="danger" title="Delete" disabled={Boolean(busy)} onClick={() => { setDeleteTarget(volume); setDeleteText(""); }}>{busy === `${volume.id}:delete` ? <LoaderCircle className="spin" /> : <Trash2 />}</button>}</div></td></tr>)}</tbody></table>{loading && <div className="empty"><LoaderCircle className="spin" />Reading managed RBD state…</div>}{!loading && !volumes.length && <div className="empty">Chưa có managed RBD volume.</div>}</div>
     </section>
+    {deleteTarget && <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && setDeleteTarget(null)}><section className="picker panel"><header className="picker-head"><div><span className="eyebrow">CONFIRM RBD DELETE</span><h2>Delete {deleteTarget.display_name || deleteTarget.image_name}</h2></div><button className="icon-button" onClick={() => setDeleteTarget(null)}><X /></button></header><p>Node SSH executor sẽ unmount/unmap trước và từ chối khi còn watcher, snapshot hoặc clone. Nhập chính xác <code>{deleteTarget.display_name || deleteTarget.image_name}</code> để tiếp tục.</p><label><span>Volume name</span><input autoFocus value={deleteText} onChange={event => setDeleteText(event.target.value)} /></label><footer className="picker-foot"><button className="button ghost" onClick={() => setDeleteTarget(null)}>Cancel</button><button className="button danger" disabled={!isRbdDeleteConfirmed(deleteTarget.display_name || deleteTarget.image_name, deleteText) || Boolean(busy)} onClick={() => transition(deleteTarget, "delete")}>{busy === `${deleteTarget.id}:delete` ? <LoaderCircle className="spin" /> : <Trash2 />}Delete permanently</button></footer></section></div>}
+    {detailVolume && <RbdVolumeDetail volume={detailVolume} onClose={() => setDetailVolume(null)} onChanged={load} />}
   </div>;
 }
 

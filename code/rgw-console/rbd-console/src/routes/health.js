@@ -30,20 +30,20 @@ router.get("/health", async (_req, res, next) => {
     let error = null;
 
     try {
-      cluster = await execJson("ceph -s --format=json");
+      cluster = await execJson("ceph -s --format=json", { sudo: true });
     } catch (err) {
       error = `ceph -s failed: ${err.message}`;
     }
 
     try {
-      const fsidResult = await exec("ceph fsid");
+      const fsidResult = await exec("ceph fsid", { sudo: true });
       fsid = fsidResult.stdout.trim();
     } catch (err) {
       error = error || `ceph fsid failed: ${err.message}`;
     }
 
     try {
-      const versionResult = await exec("rbd --version");
+      const versionResult = await exec("rbd --version", { sudo: true });
       rbdVersion = versionResult.stdout.trim();
     } catch (err) {
       error = error || `rbd --version failed: ${err.message}`;

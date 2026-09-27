@@ -17,7 +17,7 @@ from .capacity_guard import (
     require_admission,
     reservation_lease,
 )
-from .rbd_agent_client import RbdAgentClient, RbdAgentClientError
+from .executor_client import ExecutorClient, ExecutorClientError
 
 
 MUTATION_TO_OPERATION = {
@@ -29,11 +29,11 @@ MUTATION_TO_OPERATION = {
     "rbd.device.unmap": "RBD_UNMAP",
     "rbd.image.remove": "RBD_DELETE",
 }
-AMBIGUOUS_AGENT_CODES = {
-    "AGENT_TIMEOUT",
-    "AGENT_UNAVAILABLE",
-    "AGENT_PROTOCOL_ERROR",
-    "AGENT_RESPONSE_TOO_LARGE",
+AMBIGUOUS_EXECUTOR_CODES = {
+    "EXECUTOR_TIMEOUT",
+    "EXECUTOR_UNAVAILABLE",
+    "EXECUTOR_PROTOCOL_ERROR",
+    "EXECUTOR_RESPONSE_TOO_LARGE",
     "FSID_MISMATCH",
     "FENCE_REJECTED",
     "STALE_FENCE",
@@ -53,7 +53,7 @@ DEPENDENCY_CODES = {
     "CLONE_EXISTS",
     "DELETE_BLOCKED_DEPENDENCY",
 }
-FINAL_AGENT_CODES = {
+FINAL_EXECUTOR_CODES = {
     "INVALID_PARAMS",
     "ACTION_NOT_ALLOWED",
     "INVALID_SIZE",
@@ -89,7 +89,7 @@ class ClaimedAction:
 
 
 def granular_action_id(action_id: UUID | str, step: str) -> str:
-    """Stable agent idempotency identity for one step of a lifecycle action."""
+    """Stable executor idempotency identity for one lifecycle step."""
 
     return str(uuid5(UUID(str(action_id)), step))
 
@@ -111,11 +111,11 @@ class RbdLifecycleWorker:
 
     def __init__(
         self,
-        client: RbdAgentClient | Any | None = None,
+        client: ExecutorClient | Any | None = None,
         *,
         worker_id: str | None = None,
     ) -> None:
-        self.client = client or RbdAgentClient.from_settings()
+        self.client = client or ExecutorClient.from_settings()
         self.worker_id = worker_id or f"rbd-worker-{uuid.uuid4()}"
         self.lease_seconds = int(get_settings().rbd_action_lease_seconds)
 
@@ -290,15 +290,15 @@ class RbdLifecycleWorker:
         }
         for field, value in expected.items():
             if field not in result or result[field] != value:
-                raise RbdAgentClientError(
-                    "AGENT_PROTOCOL_ERROR",
-                    f"Host-agent result did not confirm the expected {field}",
+                raise ExecutorClientError(
+                    "EXECUTOR_PROTOCOL_ERROR",
+                    f"Executor result did not confirm the expected {field}",
                     retryable=False,
                 )
         if volume.get("image_id") and result.get("image_id") != volume["image_id"]:
-            raise RbdAgentClientError(
+            raise ExecutorClientError(
                 "STATE_CONFLICT",
-                "Host-agent result image identity differs from the database",
+                "Executor result image identity differs from the database",
                 retryable=False,
             )
 
@@ -325,21 +325,21 @@ class RbdLifecycleWorker:
                     ),
                 ).fetchone()
                 if owned is None:
-                    raise RbdActionFenceLost("RBD action lost its fence before an agent call")
+                    raise RbdActionFenceLost("RBD action lost its fence before an executor call")
                 fence_token = owned["current_fence_token"]
                 if owned["current_step"] != step or fence_token is None:
                     fenced = conn.execute(
                         """
                         UPDATE rbd_volumes
-                           SET agent_fence_token=agent_fence_token+1,updated_at=now()
+                           SET executor_fence_token=executor_fence_token+1,updated_at=now()
                          WHERE id=%s AND transition_generation=%s
-                        RETURNING agent_fence_token
+                        RETURNING executor_fence_token
                         """,
                         (claimed.volume["id"], action["volume_generation"]),
                     ).fetchone()
                     if fenced is None:
                         raise RbdActionFenceLost("RBD volume fence could not be advanced")
-                    fence_token = int(fenced["agent_fence_token"])
+                    fence_token = int(fenced["executor_fence_token"])
                 row = conn.execute(
                     """
                     UPDATE rbd_actions
@@ -360,7 +360,7 @@ class RbdLifecycleWorker:
                     ),
                 ).fetchone()
         if row is None:
-            raise RbdActionFenceLost("RBD action lost its fence before an agent call")
+            raise RbdActionFenceLost("RBD action lost its fence before an executor call")
         action["current_step"] = step
         action["current_fence_token"] = fence_token
         return int(fence_token)
@@ -409,7 +409,7 @@ class RbdLifecycleWorker:
         try:
             result = self.client.mutate(step, params)
             self._validate_identity(result, claimed.volume)
-        except RbdAgentClientError as exc:
+        except ExecutorClientError as exc:
             self._audit(
                 claimed,
                 step,
@@ -498,7 +498,7 @@ class RbdLifecycleWorker:
         )
         self._validate_identity(result, volume)
         if result.get("image_id") != volume.get("image_id"):
-            raise RbdAgentClientError(
+            raise ExecutorClientError(
                 "STATE_CONFLICT",
                 "Read-back image identity differs from the create result",
             )
@@ -514,11 +514,11 @@ class RbdLifecycleWorker:
         image_id = result.get("image_id")
         features = result.get("features")
         if not isinstance(image_id, str) or not image_id:
-            raise RbdAgentClientError("AGENT_PROTOCOL_ERROR", "Create result has no image_id")
+            raise ExecutorClientError("EXECUTOR_PROTOCOL_ERROR", "Create result has no image_id")
         if int(result.get("size_bytes", -1)) != int(volume["logical_size_bytes"]):
-            raise RbdAgentClientError("STATE_CONFLICT", "Created image size differs from the request")
+            raise ExecutorClientError("STATE_CONFLICT", "Created image size differs from the request")
         if not isinstance(features, list) or "exclusive-lock" not in features:
-            raise RbdAgentClientError(
+            raise ExecutorClientError(
                 "STATE_CONFLICT",
                 "Created image did not confirm the exclusive-lock feature",
             )
@@ -548,8 +548,8 @@ class RbdLifecycleWorker:
             or not isinstance(minor, int)
             or minor < 0
         ):
-            raise RbdAgentClientError(
-                "AGENT_PROTOCOL_ERROR", "Map result has no valid device identity"
+            raise ExecutorClientError(
+                "EXECUTOR_PROTOCOL_ERROR", "Map result has no valid device identity"
             )
         self._checkpoint(
             claimed,
@@ -582,8 +582,8 @@ class RbdLifecycleWorker:
         )
         fs_uuid = result.get("fs_uuid")
         if not isinstance(fs_uuid, str) or not fs_uuid or result.get("filesystem") != "ext4":
-            raise RbdAgentClientError(
-                "AGENT_PROTOCOL_ERROR", "Format result did not confirm an ext4 filesystem UUID"
+            raise ExecutorClientError(
+                "EXECUTOR_PROTOCOL_ERROR", "Format result did not confirm an ext4 filesystem UUID"
             )
         self._checkpoint(claimed, "FORMATTED", fs_uuid=fs_uuid)
 
@@ -604,8 +604,8 @@ class RbdLifecycleWorker:
         )
         mountpoint = result.get("mountpoint")
         if not isinstance(mountpoint, str) or result.get("state") not in {"mounted", "MOUNTED", "READY"}:
-            raise RbdAgentClientError(
-                "AGENT_PROTOCOL_ERROR", "Mount result did not confirm a mounted path"
+            raise ExecutorClientError(
+                "EXECUTOR_PROTOCOL_ERROR", "Mount result did not confirm a mounted path"
             )
         self._checkpoint(claimed, "READY", mountpoint=mountpoint)
 
@@ -625,8 +625,8 @@ class RbdLifecycleWorker:
             },
         )
         if result.get("state") not in {"unmounted", "UNMOUNTED"}:
-            raise RbdAgentClientError(
-                "AGENT_PROTOCOL_ERROR", "Unmount result did not confirm the unmounted state"
+            raise ExecutorClientError(
+                "EXECUTOR_PROTOCOL_ERROR", "Unmount result did not confirm the unmounted state"
             )
         self._checkpoint(claimed, "UNMOUNTED", mountpoint=result.get("mountpoint"))
 
@@ -645,8 +645,8 @@ class RbdLifecycleWorker:
             },
         )
         if result.get("state") not in {"unmapped", "UNMAPPED"}:
-            raise RbdAgentClientError(
-                "AGENT_PROTOCOL_ERROR", "Unmap result did not confirm the unmapped state"
+            raise ExecutorClientError(
+                "EXECUTOR_PROTOCOL_ERROR", "Unmap result did not confirm the unmapped state"
             )
         self._checkpoint(
             claimed,
@@ -679,8 +679,8 @@ class RbdLifecycleWorker:
             raise
         finish_reservation(decision, "success")
         if result.get("state") not in {"deleted", "DELETED", "removed", "REMOVED"}:
-            raise RbdAgentClientError(
-                "AGENT_PROTOCOL_ERROR", "Remove result did not confirm image deletion"
+            raise ExecutorClientError(
+                "EXECUTOR_PROTOCOL_ERROR", "Remove result did not confirm image deletion"
             )
         self._checkpoint(
             claimed,
@@ -909,7 +909,10 @@ class RbdLifecycleWorker:
                     if state in {"READY", "MOUNTED"}:
                         self._unmount(claimed)
                         state = claimed.volume["observed_state"]
-                    if state != "UNMOUNTED":
+                    if state == "UNMOUNTED":
+                        self._unmap(claimed)
+                        state = claimed.volume["observed_state"]
+                    if state != "UNMAPPED":
                         raise RbdActionStateError(f"Unexpected unmount state {state}")
                 elif action_type == "DELETE":
                     if state in {"REQUESTED", "CAPACITY_RESERVED"} and not claimed.volume.get("image_id"):
@@ -940,7 +943,7 @@ class RbdLifecycleWorker:
         except RbdActionFenceLost:
             # The newer owner is responsible for reconciliation.
             return
-        except RbdAgentClientError as exc:
+        except ExecutorClientError as exc:
             if exc.code in BUSY_CODES:
                 self._fail_final(claimed, "VOLUME_BUSY", exc.message, "BUSY")
             elif exc.code in DEPENDENCY_CODES:
@@ -950,7 +953,7 @@ class RbdLifecycleWorker:
                     exc.message,
                     "DELETE_BLOCKED_DEPENDENCY",
                 )
-            elif exc.code in FINAL_AGENT_CODES:
+            elif exc.code in FINAL_EXECUTOR_CODES:
                 self._fail_final(claimed, exc.code, exc.message)
             else:
                 # Includes every timeout/transport/protocol ambiguity and unknown
@@ -1090,7 +1093,7 @@ class RbdLifecycleWorker:
                 image_name=volume["image_name"],
             )
             self._validate_identity(image, volume)
-        except RbdAgentClientError as exc:
+        except ExecutorClientError as exc:
             if exc.code not in {"IMAGE_NOT_FOUND", "NOT_FOUND", "ENOENT"}:
                 self._release_reconcile_claim(claimed, exc.code, exc.message)
                 return
@@ -1115,7 +1118,7 @@ class RbdLifecycleWorker:
         image_id = image.get("image_id")
         if not isinstance(image_id, str) or not image_id:
             self._release_reconcile_claim(
-                claimed, "AGENT_PROTOCOL_ERROR", "Image observation has no immutable image_id"
+                claimed, "EXECUTOR_PROTOCOL_ERROR", "Image observation has no immutable image_id"
             )
             return
         if volume.get("image_id") and volume["image_id"] != image_id:
@@ -1125,9 +1128,9 @@ class RbdLifecycleWorker:
             return
 
         if action["action_type"] == "CREATE" and action.get("current_step") == "rbd.image.create":
-            # The image may exist while the host-agent's durable registry still
+            # The image may exist while the executor's durable registry still
             # contains an IN_PROGRESS create record. Re-enter the same create
-            # step so the agent can observe and finalize that exact action ID;
+            # step so the executor can observe and finalize that exact action ID;
             # skipping directly to map would leave the identity registry
             # permanently incomplete.
             prior = action.get("observed_state") or (
@@ -1152,7 +1155,7 @@ class RbdLifecycleWorker:
 
         try:
             devices_result = self.client.rbd_device_list()
-        except RbdAgentClientError as exc:
+        except ExecutorClientError as exc:
             self._release_reconcile_claim(claimed, exc.code, exc.message)
             return
         device = next(

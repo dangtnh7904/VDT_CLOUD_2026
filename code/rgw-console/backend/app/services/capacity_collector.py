@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from uuid import UUID
 
 from ..config import get_settings
 from ..db import connection
-from .rbd_agent_client import RbdAgentClient, RbdAgentClientError
+from .executor_client import ExecutorClient, ExecutorClientError
 
 
 COLLECTOR_VERSION = "pacific-v1"
@@ -469,7 +470,12 @@ def _pool_scopes(
         try:
             if pool is None:
                 raise _error("UNKNOWN_POOL", "configured affected pool is absent", pool=pool_name)
-            pool_id = _integer(pool.get("pool"), f"pool[{pool_name}].pool")
+            # Pacific commonly emits ``pool_id`` here, while older fixtures and
+            # some releases use ``pool``. Accept exactly those two numeric keys.
+            pool_id = _integer(
+                pool.get("pool_id", pool.get("pool")),
+                f"pool[{pool_name}].pool_id",
+            )
             pool_type = pool.get("type")
             type_name = pool.get("type_name")
             replicated = pool_type == 1 or type_name == "replicated" or pool_type == "replicated"
@@ -588,20 +594,20 @@ def parse_ceph_inventory(
     )
 
 
-def _unwrap_agent_result(
+def _unwrap_executor_result(
     result: Any,
     action: str,
     expected_fsid: str,
 ) -> tuple[Any, datetime]:
-    envelope = _mapping(result, f"agent.{action}")
-    observed_fsid = _normalize_fsid(envelope.get("fsid"), f"agent.{action}.fsid")
+    envelope = _mapping(result, f"executor.{action}")
+    observed_fsid = _normalize_fsid(envelope.get("fsid"), f"executor.{action}.fsid")
     if observed_fsid != expected_fsid:
-        raise _error("FSID_MISMATCH", "host-agent responses came from different clusters")
+        raise _error("FSID_MISMATCH", "executor responses came from different clusters")
     if envelope.get("action") != action:
-        raise _error("AGENT_PROTOCOL_ERROR", "host-agent action does not match the request", action=action)
+        raise _error("EXECUTOR_PROTOCOL_ERROR", "executor action does not match the request", action=action)
     if "data" not in envelope:
-        raise _error("AGENT_PROTOCOL_ERROR", "host-agent inventory result has no data", action=action)
-    collected_at = _aware_datetime(envelope.get("collected_at"), f"agent.{action}.collected_at")
+        raise _error("EXECUTOR_PROTOCOL_ERROR", "executor inventory result has no data", action=action)
+    collected_at = _aware_datetime(envelope.get("collected_at"), f"executor.{action}.collected_at")
     return envelope["data"], collected_at
 
 
@@ -865,7 +871,7 @@ def _failed_inventory(
 ) -> CapacityInventory:
     code = (
         exc.code
-        if isinstance(exc, (CapacityTelemetryError, RbdAgentClientError))
+        if isinstance(exc, (CapacityTelemetryError, ExecutorClientError))
         else "COLLECTOR_FAILED"
     )
     try:
@@ -906,16 +912,16 @@ def _failed_inventory(
 
 def collect_capacity_once(
     *,
-    client: RbdAgentClient | Any | None = None,
+    client: ExecutorClient | Any | None = None,
     store: Callable[[CapacityInventory], dict[str, Any]] | None = None,
     now: Callable[[], datetime] | None = None,
 ) -> dict[str, Any]:
     """Collect and persist one read-only capacity sample."""
 
     settings = get_settings()
-    agent = client or RbdAgentClient.from_settings()
+    executor = client or ExecutorClient.from_settings()
     expected_fsid = _normalize_fsid(
-        getattr(agent, "expected_fsid", None) or settings.ceph_expected_fsid,
+        getattr(executor, "expected_fsid", None) or settings.ceph_expected_fsid,
         "CEPH_EXPECTED_FSID",
     )
     persist = store or store_capacity_inventory
@@ -924,23 +930,46 @@ def collect_capacity_once(
     status_for_failure: Mapping[str, Any] | None = None
     observations: list[datetime] = []
     try:
-        before, timestamp = _unwrap_agent_result(agent.ceph_status(), "ceph.status", expected_fsid)
-        status_for_failure = _mapping(before, "status_before")
-        observations.append(timestamp)
-        df, timestamp = _unwrap_agent_result(agent.ceph_osd_df(), "ceph.osd_df", expected_fsid)
-        observations.append(timestamp)
-        tree, timestamp = _unwrap_agent_result(agent.ceph_osd_tree(), "ceph.osd_tree", expected_fsid)
-        observations.append(timestamp)
-        pools, timestamp = _unwrap_agent_result(
-            agent.ceph_pool_ls_detail(), "ceph.pool_ls_detail", expected_fsid
-        )
-        observations.append(timestamp)
-        rules, timestamp = _unwrap_agent_result(
-            agent.ceph_crush_rule_dump(), "ceph.crush_rule_dump", expected_fsid
-        )
-        observations.append(timestamp)
-        after, timestamp = _unwrap_agent_result(agent.ceph_status(), "ceph.status", expected_fsid)
-        observations.append(timestamp)
+        bundled_call = getattr(executor, "ceph_capacity_inventory", None)
+        if callable(bundled_call):
+            bundle, timestamp = _unwrap_executor_result(
+                bundled_call(), "ceph.capacity_inventory", expected_fsid
+            )
+            bundle = _mapping(bundle, "capacity_inventory")
+            before = _mapping(bundle.get("status_before"), "status_before")
+            after = _mapping(bundle.get("status_after"), "status_after")
+            df = _mapping(bundle.get("osd_df"), "osd_df")
+            tree = _mapping(bundle.get("osd_tree"), "osd_tree")
+            pools = _list(bundle.get("pool_details"), "pool_details")
+            rules = _list(bundle.get("crush_rules"), "crush_rules")
+            status_for_failure = before
+            observations.append(timestamp)
+        else:
+            before, timestamp = _unwrap_executor_result(executor.ceph_status(), "ceph.status", expected_fsid)
+            status_for_failure = _mapping(before, "status_before")
+            observations.append(timestamp)
+            inventory_calls = {
+                "ceph.osd_df": executor.ceph_osd_df,
+                "ceph.osd_tree": executor.ceph_osd_tree,
+                "ceph.pool_ls_detail": executor.ceph_pool_ls_detail,
+                "ceph.crush_rule_dump": executor.ceph_crush_rule_dump,
+            }
+            with ThreadPoolExecutor(max_workers=len(inventory_calls)) as pool:
+                futures = {name: pool.submit(call) for name, call in inventory_calls.items()}
+                inventory_results = {
+                    name: _unwrap_executor_result(future.result(), name, expected_fsid)
+                    for name, future in futures.items()
+                }
+            df, timestamp = inventory_results["ceph.osd_df"]
+            observations.append(timestamp)
+            tree, timestamp = inventory_results["ceph.osd_tree"]
+            observations.append(timestamp)
+            pools, timestamp = inventory_results["ceph.pool_ls_detail"]
+            observations.append(timestamp)
+            rules, timestamp = inventory_results["ceph.crush_rule_dump"]
+            observations.append(timestamp)
+            after, timestamp = _unwrap_executor_result(executor.ceph_status(), "ceph.status", expected_fsid)
+            observations.append(timestamp)
         finished_at = clock().astimezone(timezone.utc)
         inventory = parse_ceph_inventory(
             fsid=expected_fsid,
@@ -965,16 +994,20 @@ def collect_capacity_once(
         )
         if not timing_safe:
             summary = dict(inventory.cluster_health_summary)
-            summary["collector_error_code"] = "STALE_OR_FUTURE_AGENT_TELEMETRY"
+            summary["collector_error_code"] = "STALE_OR_FUTURE_EXECUTOR_TELEMETRY"
             inventory = replace(inventory, fresh=False, cluster_health_summary=summary)
         return persist(inventory)
     except Exception as exc:
         # If status was trustworthy enough to identify the cluster and epoch,
         # persist an explicit invalid sample. This makes API state UNKNOWN now,
         # rather than displaying old data as 0% or waiting for it to age out.
-        if status_for_failure is not None:
-            try:
-                persist(_failed_inventory(expected_fsid, status_for_failure, exc, clock()))
-            except Exception:
-                pass
+        failure_status = status_for_failure or {
+            "health": {"status": "UNKNOWN", "checks": {}},
+            "pgmap": {"pgs_by_state": []},
+            "osdmap": {"epoch": 0},
+        }
+        try:
+            persist(_failed_inventory(expected_fsid, failure_status, exc, clock()))
+        except Exception:
+            pass
         raise

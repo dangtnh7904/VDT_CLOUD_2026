@@ -11,13 +11,17 @@ const SAFE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 /** Characters that must never appear in shell arguments. */
 const SHELL_META_RE = /[;&|`$(){}[\]<>!\\'"*?\n\r]/;
 
+export function csvSet(value) {
+  return new Set(String(value || "").split(",").map(item => item.trim()).filter(Boolean));
+}
+
 /**
  * Validate that pool is in the allowlist.
  * @param {string} pool
  * @returns {{ok: boolean, error?: string}}
  */
 export function validatePool(pool) {
-  const allowed = (process.env.RBD_POOL || "").split(",").map(s => s.trim()).filter(Boolean);
+  const allowed = [...csvSet(process.env.RBD_ALLOWED_POOLS || process.env.RBD_POOL)];
   if (!pool || typeof pool !== "string") {
     return { ok: false, error: "Pool name is required" };
   }
@@ -25,6 +29,26 @@ export function validatePool(pool) {
     return { ok: false, error: `Pool "${pool}" not in allowlist: [${allowed.join(", ")}]` };
   }
   return { ok: true };
+}
+
+export function validateNamespace(namespace = "") {
+  if (typeof namespace !== "string" || SHELL_META_RE.test(namespace)) {
+    return { ok: false, error: "Namespace contains invalid characters" };
+  }
+  const allowed = csvSet(process.env.RBD_ALLOWED_NAMESPACES || "default");
+  const normalized = namespace === "default" ? "" : namespace;
+  const configured = new Set([...allowed].map(item => item === "default" ? "" : item));
+  if (!configured.has(normalized)) {
+    return { ok: false, error: `Namespace "${namespace}" is outside the allowlist` };
+  }
+  return { ok: true, value: normalized };
+}
+
+export function validateUuid(value, field = "value") {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    return { ok: false, error: `${field} must be a UUID` };
+  }
+  return { ok: true, value: value.toLowerCase() };
 }
 
 /**
@@ -72,7 +96,7 @@ export function validateMountPath(path) {
 
   const resolved = mountRoot.replace(/\/+$/, "") + "/" + segments.join("/");
 
-  if (!resolved.startsWith(mountRoot)) {
+  if (resolved !== mountRoot && !resolved.startsWith(`${mountRoot.replace(/\/+$/, "")}/`)) {
     return { ok: false, error: `Path escapes mount root ${mountRoot}` };
   }
 
@@ -105,7 +129,7 @@ export function validateFilePath(imageName, filePath) {
   }
 
   const resolved = volumeRoot + "/" + segments.join("/");
-  if (!resolved.startsWith(volumeRoot)) {
+  if (resolved !== volumeRoot && !resolved.startsWith(`${volumeRoot}/`)) {
     return { ok: false, error: `Path escapes volume root ${volumeRoot}` };
   }
 
@@ -120,7 +144,7 @@ export function validateFilePath(imageName, filePath) {
  */
 export function safeCommand(parts) {
   for (const part of parts) {
-    if (SHELL_META_RE.test(part)) {
+    if (typeof part !== "string" || !part || SHELL_META_RE.test(part) || /\s/.test(part)) {
       throw new Error(`Unsafe shell argument: ${part}`);
     }
   }

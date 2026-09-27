@@ -1,48 +1,49 @@
 # Read-only capacity collector
 
-The collector polls the Unix-socket host agent and stores per-OSD evidence in
-`capacity_snapshots` and `capacity_osds`. It never runs Ceph CLI itself and only
-uses these agent actions:
+The collector calls the authenticated internal Node SSH executor and stores
+per-OSD evidence in `capacity_snapshots` and `capacity_osds`. FastAPI and the
+collector never accept an arbitrary shell command and never hold the SSH key.
+The preferred `ceph.capacity_inventory` action captures the following bounded,
+FSID-bound inventory in one request:
 
-- `ceph.status` (before and after each sample)
-- `ceph.osd_df`
-- `ceph.osd_tree`
-- `ceph.pool_ls_detail`
-- `ceph.crush_rule_dump`
+- `ceph status` before and after the sample
+- `ceph osd df`
+- `ceph osd tree`
+- `ceph osd pool ls detail`
+- `ceph osd crush rule dump`
 
-Set `CEPH_EXPECTED_FSID`, `CEPH_AGENT_SOCKET`, `RGW_AFFECTED_POOLS`, and/or
-`RBD_ALLOWED_POOLS`. Keep `CAPACITY_OBSERVE_ONLY=true` until the output has been
-compared with the Pacific CLI on the lab cluster and all affected pools resolve
-to complete replicated CRUSH scopes.
+Set `CEPH_EXPECTED_FSID`, `RBD_EXECUTOR_TOKEN`, the `RBD_SSH_*` settings,
+`RGW_AFFECTED_POOLS`, and `RBD_ALLOWED_POOLS`. The executor does not discover
+or add pools outside those allowlists. Keep `CAPACITY_OBSERVE_ONLY=true` until
+the inventory has been compared with the Pacific CLI and every affected pool
+resolves to a complete replicated CRUSH scope.
 
-Run one sample:
+Run the internal executor and both Ceph workers with one Compose profile:
+
+```bash
+docker compose --profile ceph-ssh up --build -d
+docker compose --profile ceph-ssh ps
+```
+
+The executor has no published host port. Its only execution endpoint is
+`POST /internal/v1/execute` on the Compose network and requires the shared
+token. Public diagnostics remain on FastAPI at `/api/rbd/ssh/health` and
+`/api/rbd/ssh/capabilities`.
+
+To run one collector cycle from a configured backend environment:
 
 ```bash
 python -m app.capacity_collector --once
 ```
 
-Run continuously using `CAPACITY_COLLECTOR_INTERVAL_SECONDS`:
+Malformed counters, an FSID mismatch, changing OSDMap epochs, stale/future
+executor timestamps, incomplete pool scope, and executor failures never become
+a zero-percent sample. Where possible the collector persists a failed sample so
+the API can distinguish `EXECUTOR_UNAVAILABLE` from `COLLECTOR_ERROR`; otherwise
+the last good sample becomes `STALE`.
 
-```bash
-python -m app.capacity_collector
-```
-
-The optional Compose service is behind a profile so a workstation without the
-agent socket still starts normally:
-
-```bash
-CEPH_AGENT_SOCKET_DIR=/run/rgw-console \
-  docker compose --profile ceph-collector up capacity-collector
-```
-
-Malformed counters, changing OSDMap epochs, stale/future agent timestamps, and
-agent failures never become a zero-percent sample. If cluster identity and epoch
-are still trustworthy, the collector writes an explicit `fresh=false` snapshot;
-otherwise the previous snapshot naturally becomes stale and admission fails
-closed.
-
-Successful transient reservations remain `SETTLING` until the configured minimum
-window has elapsed and the configured number of consecutive samples are fresh,
+Successful transient reservations remain `SETTLING` until the configured
+minimum window has elapsed and the required consecutive samples are fresh,
 current, same-FSID/same-epoch, healthy, and cover every reservation allocation.
-`LEASE_EXPIRED_UNRECONCILED` and persistent volume commitments are never released
-by this collector.
+`LEASE_EXPIRED_UNRECONCILED` and persistent volume commitments are never
+released by this collector.

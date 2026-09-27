@@ -20,7 +20,7 @@ export async function listImages(pool) {
 
   const cmd = safeCommand(["rbd", "ls", pool, "--format=json"]);
   try {
-    return await execJson(cmd);
+    return await execJson(cmd, { sudo: true });
   } catch (err) {
     // rbd ls returns empty string for empty pool
     if (err.message.includes("Invalid JSON")) return [];
@@ -43,7 +43,7 @@ export async function imageInfo(name, pool) {
 
   const spec = `${pool}/${name}`;
   const cmd = safeCommand(["rbd", "info", spec, "--format=json"]);
-  return execJson(cmd);
+  return execJson(cmd, { sudo: true });
 }
 
 /**
@@ -106,7 +106,7 @@ export async function listImagesDetailed(pool) {
 export async function listDevices() {
   const cmd = "rbd device list --format=json";
   try {
-    const raw = await execJson(cmd);
+    const raw = await execJson(cmd, { sudo: true });
     // rbd device list returns array of {id, pool, namespace, name, snap, device}
     return Array.isArray(raw) ? raw : [];
   } catch (err) {

@@ -37,16 +37,16 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         first = migrate(self.conn)
         second = migrate(self.conn)
 
-        self.assertEqual(first.applied_versions, (1, 2, 3, 4, 5, 6))
+        self.assertEqual(first.applied_versions, (1, 2, 3, 4, 5, 6, 7, 8))
         self.assertEqual(first.stamped_versions, ())
         self.assertEqual(second.applied_versions, ())
-        self.assertEqual(second.current_version, 6)
-        self.assertEqual(assert_schema_current(self.conn), 6)
+        self.assertEqual(second.current_version, 8)
+        self.assertEqual(assert_schema_current(self.conn), 8)
         self.assertEqual(
             self.conn.execute("SELECT count(*) AS count FROM schema_migrations").fetchone()[
                 "count"
             ],
-            6,
+            8,
         )
         self.assertEqual(
             self.conn.execute(
@@ -85,7 +85,7 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         result = migrate(self.conn)
 
         self.assertEqual(result.stamped_versions, (1,))
-        self.assertEqual(result.applied_versions, (2, 3, 4, 5, 6))
+        self.assertEqual(result.applied_versions, (2, 3, 4, 5, 6, 7, 8))
         job = self.conn.execute(
             "SELECT * FROM stream_jobs WHERE id = %s",
             ("11111111-1111-1111-1111-111111111111",),
@@ -99,6 +99,12 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(operation["bytes_count"], 2048)
         self.assertEqual(operation["target_type"], "RGW_OBJECT")
         self.assertEqual(operation["target_id"], "rgw:13:legacy-bucket:legacy-key")
+        renamed = self.conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema=current_schema() AND table_name='rbd_volumes' "
+            "AND column_name='executor_fence_token'"
+        ).fetchone()
+        self.assertIsNotNone(renamed)
 
     def test_unknown_partial_schema_is_rejected_without_guessing(self) -> None:
         self.conn.execute("CREATE TABLE operations (id BIGINT PRIMARY KEY)")
