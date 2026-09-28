@@ -77,11 +77,12 @@ function ensure(condition, code, message, options) {
 }
 
 export class SshExecutor {
-  constructor({ transport = ssh, store = new VolumeStateStore(), tickets = new TerminalTicketStore() } = {}) {
+  constructor({ transport = ssh, store = new VolumeStateStore(), tickets = new TerminalTicketStore(), wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
     this.transport = transport;
     this.store = store;
     this.files = new SftpFileService(transport);
     this.tickets = tickets;
+    this.wait = wait;
     this.activeAccessSessions = new Map();
     this.expectedFsid = String(process.env.CEPH_EXPECTED_FSID || "").toLowerCase();
     this.mountRoot = String(process.env.RBD_MOUNT_ROOT || "/mnt/rbd").replace(/\/+$/, "");
@@ -456,14 +457,27 @@ export class SshExecutor {
     return raw;
   }
 
+  async waitForNoWatchers(params) {
+    // An unmap may disappear from the local device list before Ceph drops its
+    // watcher. Keep the refusal for persistent or external users of the image.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (!(await this.imageStatus(params)).watchers.length) return;
+      if (attempt < 5) await this.wait(1000);
+    }
+    throw new ExecutorError("IMAGE_IN_USE", "RBD image has an existing watcher");
+  }
+
   async mapImage(params, record) {
     const state = await this.begin(record, "rbd.image.map", params); if (state.replay) return state.replay;
     const info = await this.assertLive(params, record); ensure(info.features.includes("exclusive-lock"), "FEATURE_MISMATCH", "RBD image lacks exclusive-lock");
     let mappings = await this.matchingMappings(params);
     if (!mappings.length) {
-      ensure(!(await this.imageStatus(params)).watchers.length, "IMAGE_IN_USE", "RBD image has an existing watcher");
-      await this.run(["rbd", "device", "map", ...this.imageArgs(params), "--exclusive"], "rbd.image.map", { timeout: 60000 });
+      await this.waitForNoWatchers(params);
       mappings = await this.matchingMappings(params);
+      if (!mappings.length) {
+        await this.run(["rbd", "device", "map", ...this.imageArgs(params), "--exclusive"], "rbd.image.map", { timeout: 60000 });
+        mappings = await this.matchingMappings(params);
+      }
     }
     ensure(mappings.length === 1, "MAPPING_IDENTITY_UNKNOWN", "Expected exactly one managed RBD mapping", { retryable: true });
     const observed = await this.observeMapping(mappings[0], params);

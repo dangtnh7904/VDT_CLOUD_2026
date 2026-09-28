@@ -894,7 +894,7 @@ class RbdLifecycleWorker:
                         if state != "READY":
                             raise RbdActionStateError(f"Unexpected create state {state}")
                 elif action_type == "MOUNT":
-                    if state in {"CREATED", "UNMAPPED"}:
+                    if state in {"CREATED", "UNMAPPED", "BUSY"}:
                         self._map(claimed)
                         state = claimed.volume["observed_state"]
                     if state == "MAPPED" and not claimed.volume.get("fs_uuid"):

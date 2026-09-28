@@ -162,11 +162,44 @@ def _step_action_id(action_id: UUID | str, step: str) -> UUID:
     return uuid5(UUID(str(action_id)), step)
 
 
-def _volume_result(row: dict[str, Any]) -> dict[str, Any]:
+def _volume_result(row: dict[str, Any], *, can_retry_busy_mount: bool = False) -> dict[str, Any]:
     result = _json_value(dict(row))
     result["namespace"] = result.get("namespace") or ""
+    result["can_retry_busy_mount"] = can_retry_busy_mount
     result["status_url"] = f"/api/rbd/volumes/{result['id']}"
     return result
+
+
+def _busy_mount_retryable(volume: dict[str, Any], latest_action: dict[str, Any] | None) -> bool:
+    """Only retry a known map refusal, never an ambiguous mount or unmount."""
+    return bool(
+        volume.get("observed_state") == "BUSY"
+        and volume.get("image_id")
+        and volume.get("device") is None
+        and volume.get("device_major") is None
+        and volume.get("device_minor") is None
+        and volume.get("mountpoint") is None
+        and latest_action
+        and latest_action.get("action_type") == "MOUNT"
+        and latest_action.get("state") == "FAILED_FINAL"
+        and latest_action.get("error_code") == "VOLUME_BUSY"
+        and latest_action.get("current_step") == "rbd.image.map"
+        and latest_action.get("volume_generation") == volume.get("transition_generation")
+    )
+
+
+def _latest_volume_action(conn, volume_id: UUID | str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT action_type,state,error_code,current_step,volume_generation
+          FROM rbd_actions
+         WHERE volume_id=%s
+         ORDER BY created_at DESC,id DESC
+         LIMIT 1
+        """,
+        (volume_id,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def _action_result(row: dict[str, Any]) -> dict[str, Any]:
@@ -424,9 +457,29 @@ def list_volumes(
                 limit + 1,
             ),
         ).fetchall()
+        busy_ids = [row["id"] for row in rows if row["observed_state"] == "BUSY"]
+        latest_actions = {}
+        if busy_ids:
+            action_rows = conn.execute(
+                """
+                SELECT DISTINCT ON (volume_id)
+                       volume_id,action_type,state,error_code,current_step,volume_generation
+                  FROM rbd_actions
+                 WHERE volume_id=ANY(%s)
+                 ORDER BY volume_id,created_at DESC,id DESC
+                """,
+                (busy_ids,),
+            ).fetchall()
+            latest_actions = {row["volume_id"]: dict(row) for row in action_rows}
     items = [dict(row) for row in rows[:limit]]
     return {
-        "items": [_volume_result(row) for row in items],
+        "items": [
+            _volume_result(
+                row,
+                can_retry_busy_mount=_busy_mount_retryable(row, latest_actions.get(row["id"])),
+            )
+            for row in items
+        ],
         "next_cursor": _cursor(items[-1]) if len(rows) > limit and items else None,
     }
 
@@ -597,7 +650,10 @@ def _load_volume(volume_id: UUID | str, *, lock: bool = False, conn=None):
 
 @router.get("/volumes/{volume_id}")
 def get_volume(volume_id: UUID):
-    return _volume_result(_load_volume(volume_id))
+    with connection() as conn:
+        volume = _load_volume(volume_id, conn=conn)
+        latest = _latest_volume_action(conn, volume_id) if volume["observed_state"] == "BUSY" else None
+    return _volume_result(volume, can_retry_busy_mount=_busy_mount_retryable(volume, latest))
 
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
@@ -679,7 +735,12 @@ def _enqueue_volume_action(
                         retryable=True,
                         observed_state={"observed_state": observed},
                     )
-                if observed not in _ALLOWED_TRANSITIONS[action_type]:
+                retry_busy_mount = (
+                    action_type == "MOUNT"
+                    and observed == "BUSY"
+                    and _busy_mount_retryable(volume, _latest_volume_action(conn, volume_id))
+                )
+                if observed not in _ALLOWED_TRANSITIONS[action_type] and not retry_busy_mount:
                     raise RbdControlError(
                         409,
                         "STATE_CONFLICT",

@@ -25,7 +25,7 @@ const IMAGE_ID = "1a2b3c";
 const FS_UUID = "99999999-9999-4999-8999-999999999999";
 
 class FakeTransport {
-  constructor() { this.image = false; this.mapped = false; this.formatted = false; this.mounted = false; }
+  constructor() { this.image = false; this.mapped = false; this.formatted = false; this.mounted = false; this.watcherReadsRemaining = 0; this.persistentWatcher = false; this.statusReads = 0; }
   async probeFile() { assert.equal(this.mounted, true); }
   async exec(command) {
     const ok = stdout => ({ code: 0, stdout, stderr: "" });
@@ -38,7 +38,12 @@ class FakeTransport {
     if (command.includes("ceph osd pool ls --format=json")) return ok('["rbd-lab","other"]');
     if (command.includes("rbd info")) return this.image ? ok(JSON.stringify({ id: IMAGE_ID, size: 1073741824, features: ["layering", "exclusive-lock"] })) : { code: 2, stdout: "", stderr: "No such file or directory" };
     if (command.includes("rbd create")) { this.image = true; return ok(""); }
-    if (command.includes("rbd status")) return ok('{"watchers":[]}');
+    if (command.includes("rbd status")) {
+      this.statusReads += 1;
+      const watched = this.persistentWatcher || this.watcherReadsRemaining > 0;
+      if (this.watcherReadsRemaining > 0) this.watcherReadsRemaining -= 1;
+      return ok(JSON.stringify({ watchers: watched ? [{ address: "client" }] : [] }));
+    }
     if (command.includes("rbd device list")) return ok(this.mapped ? JSON.stringify([{ id: 0, pool: "rbd-lab", namespace: "", name: "lab-test", image_id: IMAGE_ID, device: "/dev/rbd0" }]) : "[]");
     if (command.includes("rbd device map")) { this.mapped = true; return ok("/dev/rbd0\n"); }
     if (command.includes("stat -Lc")) return ok("fb:0\n");
@@ -133,5 +138,33 @@ test("complete PR7 lifecycle is fenced, verified, replayable, and cleaned", asyn
     const unmapped = await executor.dispatch("rbd.device.unmap", params(IDS[5], 6, { image_id: IMAGE_ID, device_major: 251, device_minor: 0 })); assert.equal(unmapped.data.state, "UNMAPPED");
     const deleted = await executor.dispatch("rbd.image.remove", params(IDS[6], 7, { image_id: IMAGE_ID })); assert.equal(deleted.data.state, "DELETED");
     assert.equal(transport.image, false); assert.equal(transport.mapped, false); assert.equal(transport.mounted, false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("map waits for a watcher left briefly after unmap", async () => {
+  env(); const root = await mkdtemp(join(tmpdir(), "rbd-executor-")); const transport = new FakeTransport();
+  try {
+    const executor = new SshExecutor({ transport, store: new VolumeStateStore(root), wait: async () => {} });
+    await executor.dispatch("rbd.image.create", params(IDS[0], 1, { size_bytes: 1073741824 }));
+    transport.watcherReadsRemaining = 2;
+    const mapped = await executor.dispatch("rbd.image.map", params(IDS[1], 2, { image_id: IMAGE_ID }));
+    assert.equal(mapped.data.state, "MAPPED");
+    assert.equal(transport.statusReads, 3);
+    assert.equal(transport.mapped, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("map refuses a persistent watcher without mapping the image", async () => {
+  env(); const root = await mkdtemp(join(tmpdir(), "rbd-executor-")); const transport = new FakeTransport();
+  try {
+    const executor = new SshExecutor({ transport, store: new VolumeStateStore(root), wait: async () => {} });
+    await executor.dispatch("rbd.image.create", params(IDS[0], 1, { size_bytes: 1073741824 }));
+    transport.persistentWatcher = true;
+    await assert.rejects(
+      () => executor.dispatch("rbd.image.map", params(IDS[1], 2, { image_id: IMAGE_ID })),
+      error => error.code === "IMAGE_IN_USE",
+    );
+    assert.equal(transport.statusReads, 6);
+    assert.equal(transport.mapped, false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

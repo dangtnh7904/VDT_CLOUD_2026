@@ -4,13 +4,14 @@ import os
 import unittest
 import uuid
 from contextlib import nullcontext
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
 from app.migrations.runner import migrate
+from app.api.rbd import _busy_mount_retryable
 from app.services.rbd_lifecycle import ClaimedAction, RbdLifecycleWorker, granular_action_id
 
 
@@ -23,6 +24,49 @@ class RbdLifecycleIdentityTests(unittest.TestCase):
         first = granular_action_id(action_id, "rbd.image.create")
         self.assertEqual(first, granular_action_id(action_id, "rbd.image.create"))
         self.assertNotEqual(first, granular_action_id(action_id, "rbd.image.map"))
+
+    def test_only_failed_map_with_no_recorded_device_can_retry_busy_mount(self) -> None:
+        volume = {
+            "observed_state": "BUSY",
+            "image_id": "a1b2c3",
+            "device": None,
+            "device_major": None,
+            "device_minor": None,
+            "mountpoint": None,
+            "transition_generation": 3,
+        }
+        action = {
+            "action_type": "MOUNT",
+            "state": "FAILED_FINAL",
+            "error_code": "VOLUME_BUSY",
+            "current_step": "rbd.image.map",
+            "volume_generation": 3,
+        }
+        self.assertTrue(_busy_mount_retryable(volume, action))
+        for change in (
+            {"action_type": "DELETE"},
+            {"current_step": "rbd.device.unmount"},
+            {"state": "RECONCILING"},
+            {"volume_generation": 2},
+        ):
+            self.assertFalse(_busy_mount_retryable(volume, {**action, **change}))
+        self.assertFalse(_busy_mount_retryable({**volume, "device": "/dev/rbd0"}, action))
+
+    def test_retry_mount_maps_busy_volume_then_mounts(self) -> None:
+        claimed = ClaimedAction(
+            action={"action_type": "MOUNT"},
+            volume={"observed_state": "BUSY", "fs_uuid": "existing-fs"},
+            request_id=str(uuid.uuid4()),
+        )
+        worker = RbdLifecycleWorker.__new__(RbdLifecycleWorker)
+        worker._heartbeat = Mock(return_value=nullcontext())
+        worker._map = Mock(side_effect=lambda item: item.volume.update(observed_state="MAPPED"))
+        worker._mount = Mock(side_effect=lambda item: item.volume.update(observed_state="READY"))
+        worker._complete = Mock()
+        worker.process(claimed)
+        worker._map.assert_called_once_with(claimed)
+        worker._mount.assert_called_once_with(claimed)
+        worker._complete.assert_called_once_with(claimed)
 
 
 @unittest.skipUnless(DATABASE_URL, "set TEST_DATABASE_URL to run RBD fencing integration tests")

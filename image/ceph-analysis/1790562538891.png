@@ -1,0 +1,495 @@
+# H0 — Kiểm chứng dữ liệu trước/sau nâng cấp Ceph, kết hợp PA1 và web OSD canary
+
+**Ngày cập nhật:** 28/09/2026 · **Phiên bản:** đề xuất 1.2  
+**Phạm vi:** cluster dùng cephadm, dữ liệu RBD/RGW, pool test replicated và PA1 cho giai đoạn OSD.  
+**Nguồn dự án đã rà soát:** `dangtnh7904/VDT_CLOUD_2026`, commit `9180375b279caf31943abb81541151868c4879ab`; kết hợp xác nhận mới của người thực hiện.
+
+**Hiện tại chưa triển khai H0.** Những checksum/SHA-256, baseline và verify đã chạy là các bài kiểm thử toàn vẹn dữ liệu. Không đổi tên kết quả cũ thành bằng chứng H0 đã tồn tại.
+
+Bản này điều chỉnh thiết kế H0 theo yêu cầu mới: **lưu tham chiếu độc lập trước quy trình nâng cấp, kiểm lại đúng dữ liệu tại các checkpoint và dùng kết quả để quyết định có mở rộng bước nâng tiếp hay không**. Phiên bản đầu có thể triển khai ở công cụ kiểm thử/controller bên ngoài Ceph; không bắt buộc sửa mã OSD. Thiết kế hook đồng bộ trong OSD ở bản 1.1 không còn là yêu cầu của bản này. Toàn bộ phần H0 mới vẫn là đề xuất.
+
+## 1. Ba phần của giải pháp và kết quả cần chứng minh
+
+| Phần | Vai trò | Trạng thái |
+|---|---|---|
+| Quy trình nâng cấp toàn cluster | Chốt phiên bản đích, thứ tự daemon, điều kiện đi tiếp và bằng chứng hoàn tất từng chặng | Cần hoàn thiện MOP và diễn tập đủ các pha |
+| PA1 trong pha OSD | Chuyển PG qua spare có kiểm soát, nâng OSD rồi đưa dữ liệu trở lại theo từng batch | Đã có nghiên cứu/prelab và kết quả nâng thử một OSD được báo cáo; chưa chứng minh toàn quy trình cluster |
+| H0 kết hợp web canary | Lưu tham chiếu trước thay đổi, kiểm lại payload đúng version/snapshot, gắn với checkpoint PA1 và báo coverage | Chưa triển khai feature theo đặc tả này |
+
+Câu hỏi H0 trả lời là: **“Trong phạm vi đã chốt, dữ liệu quan sát sau quy trình có giống trạng thái tham chiếu trước quy trình không?”** H0 không tự chứng minh mọi replica đều tốt, không chặn mọi lần đọc sai và không phục hồi dữ liệu chỉ từ hash.
+
+Đóng góp phù hợp để báo cáo là **tích hợp kiểm chứng dữ liệu có truy vết vào quy trình nâng cấp**, cùng kiểm soát phạm vi OSD và điều kiện mở rộng. Hash trước/sau là kỹ thuật quen thuộc; chưa có căn cứ gọi đây là thuật toán checksum mới hoặc cơ chế mạnh hơn Ceph trong mọi tình huống.
+
+## 2. Hiện trạng và phạm vi bằng chứng
+
+| Hạng mục | Đã ghi nhận | Cách sử dụng trong báo cáo |
+|---|---|---|
+| Script S3 PUT/GET | Hash nguồn, đọc lại và so SHA-256 | Kiểm toàn vẹn qua client; không phải H0 đã triển khai |
+| Web RGW | CRUD, workload, pause/resume/stop, allowlist và telemetry | Nền chạy bài thử; GET của worker hiện chủ yếu đọc và đếm byte |
+| Web RBD | Baseline/verify file, image ID/FS UUID, migration 0008 | Kiểm file trong RBD; cần bổ sung consistency và lịch sử kiểm |
+| VALIDATION.md | RBD lifecycle, file browser/terminal; 4 file baseline, phát hiện overwrite, PASS sau phục hồi | Bài này không thay phiên bản Ceph |
+| Test phần mềm | 73 backend, 14 Node, 4 frontend trong VALIDATION ngày 24/09/2026 | Số liệu lịch sử của repo, không phải vừa chạy lại |
+| Lab nâng OSD | Một OSD từ 16.2.5 lên 16.2.15; báo cáo 16/16 đối tượng khớp checksum | Kết quả được báo cáo; cần log gốc của version, corpus, thời điểm kiểm |
+| Trình tự hiện tại | Người thực hiện xác nhận đã nâng một OSD trước MON/MGR | Thử nghiệm riêng pha OSD; chưa hoàn tất chặng nâng toàn cluster |
+| H0 | Có tài liệu ý tưởng nhưng người thực hiện xác nhận chưa có implementation | Toàn bộ feature và kết quả H0 vẫn chưa thực hiện |
+| Web chọn N OSD | Có collector suy ra eligible OSD; chưa có đầy đủ planner/provisioner/coverage | Thiết kế mở rộng, không trình bày như giao diện đã chạy |
+
+Log prelab ngày 23/09 ghi 3 MON, 4 OSD, 9 pool, 233 PG `active+clean`. Log chuẩn bị spare có thêm S với weight 0. Đây là các ảnh chụp trạng thái lịch sử, không thay inventory hiện tại và không chứng minh S đã chứa dữ liệu. Capacity guard được ghi nhận ở `OBSERVE_ONLY`; mẫu performance còn stale tại lần validation. [G3][G7][G9]
+
+## 3. Lộ trình phiên bản và kiểu nâng cấp
+
+### 3.1. Ba chặng của lab
+
+| Chặng | Từ → đến | Loại thay đổi | Mục tiêu kiểm chứng |
+|---|---|---|---|
+| U1 | Pacific 16.2.5 → 16.2.15 | Nâng bản vá trong cùng major 16 | Chuẩn hóa quy trình, hoàn thành toàn cluster ở một mốc Pacific; xử lý bước MGR ban đầu |
+| U2 | Pacific 16.2.15 → Quincy 17.2.7 | Nâng major 16 → 17 | Kiểm điều kiện chuyển nhánh, tương thích client/store và hành vi mixed-version trong cửa sổ nâng |
+| U3 | Quincy 17.2.7 → Reef 18.2.7 | Nâng major 17 → 18 | Lặp lại toàn bộ quy trình trên chặng tiếp theo, kiểm cả RBD và RGW |
+
+Đây là **các mốc lab được giữ theo yêu cầu**, chưa phải khuyến nghị đích production. Tại ngày cập nhật, Pacific, Quincy và Reef đều nằm trong nhóm hết hỗ trợ upstream; sản xuất phải chọn lại đích được hỗ trợ và kiểm bản vá, image thực tế cùng chính sách nhà cung cấp. Không tự thay mốc của bài thực nghiệm. [C10]
+
+Hoàn tất U1 và nghiệm thu trước khi bắt đầu U2; hoàn tất U2 trước U3. Không nâng một OSD lên Reef trong lúc phần còn lại còn ở 16.2.5 rồi coi đó là lộ trình này. Đi qua Quincy giúp tách biến số giữa hai lần đổi major; release notes Reef hiện cũng không khuyến nghị đi trực tiếp Pacific → Reef. [C12]
+
+### 3.2. Phân biệt ba khái niệm
+
+| Khái niệm | Áp dụng trong đề tài |
+|---|---|
+| Patch/major | Phân loại thay đổi phiên bản như bảng U1–U3 |
+| Rolling upgrade | Thay daemon theo lượt khi cluster tiếp tục phục vụ trong điều kiện đủ khả năng chịu lỗi; không cam kết không có dao động hoặc gián đoạn ngắn |
+| Staggered upgrade | Chia rolling upgrade thành các đợt theo loại daemon/host/service/số lượng để có mốc kiểm chứng |
+
+**Phương án đề xuất:** cephadm rolling upgrade, chia đợt để kiểm; PA1 hỗ trợ xử lý dữ liệu trong đợt OSD. H0 là điều kiện kiểm chứng bổ sung, không phải một phương thức nâng phiên bản thay cephadm. Tham số `--limit` giới hạn số daemon được xử lý trong lệnh, không phải cam kết số OSD chạy song song. [C9]
+
+## 4. Thứ tự daemon của mỗi chặng và lý do
+
+Phạm vi ở đây là **cephadm**. Thứ tự do cephadm thực thi là:
+
+`mgr → mon → crash → osd → mds → rgw → rbd-mirror → cephfs-mirror → iscsi → nfs`
+
+Chỉ thực hiện các dịch vụ thực sự được triển khai. Cluster RBD/RGW không có CephFS thì không tự bổ sung MDS/cephfs-mirror; dùng RBD không có nghĩa đang chạy rbd-mirror. [C9]
+
+| Pha | Cách thực hiện trong MOP đề xuất | Vì sao / điều kiện qua pha |
+|---|---|---|
+| P0 — Preflight | Inventory daemon/image/FSID, client, host, store, PG, cấu hình; chốt backup, corpus, SLO; tạo H0 nếu feature đã có | Biết chính xác điểm xuất phát và có reference trước thay đổi |
+| P1 — MGR | Có standby khỏe; nâng standby, chuyển active sang bản mới, hoàn tất các MGR còn lại | MGR chạy module quản trị/orchestration; cần bộ điều phối hoạt động và đúng khả năng phiên bản để quản lý các pha sau |
+| P2 — MON | Nâng từng MON; kiểm quorum sau mỗi lượt | MON giữ cluster map và đồng thuận; giữ đa số MON sẵn sàng khi thay daemon |
+| P3 — crash | Nâng daemon thu thập crash theo cephadm | Đây là thứ tự của công cụ; giữ khả năng thu sự cố cho các bước tiếp theo, không phải vì crash nằm trên đường I/O dữ liệu |
+| P4 — OSD | Xử lý từng OSD/batch; áp dụng PA1, kiểm dữ liệu và QoS trước khi tăng phạm vi | Đây là pha tác động trực tiếp đến lưu trữ, placement, peering/recovery; cần kiểm an toàn của cả tập sắp dừng |
+| P5 — MDS nếu có | Theo hướng dẫn CephFS của đúng chặng, kiểm rank/standby/client | CephFS có quy tắc riêng; không áp dụng trình tự OSD cho MDS |
+| P6 — RGW | Nâng từng instance theo khả năng dự phòng/LB; kiểm S3 qua endpoint thật | Kiểm lớp truy cập object sau pha storage; một RGW duy nhất có thể gián đoạn khi restart |
+| P7 — Các dịch vụ còn lại | rbd-mirror, cephfs-mirror, iSCSI, NFS theo thứ tự và inventory | Kiểm đồng bộ hoặc truy cập tương ứng; không bỏ qua vì workload mẫu vẫn đọc được |
+| P8 — Nghiệm thu chặng | Đối chiếu versions/image, các gate dữ liệu/dịch vụ/QoS, cấu hình tạm và trạng thái orchestrator | Xác nhận hoàn tất toàn cluster trước chặng kế tiếp |
+
+Lý do ở bảng là giải thích vận hành cho MOP; **không suy ra mọi cặp daemon có quan hệ phụ thuộc cứng**. Với nâng bằng package ngoài cephadm, tài liệu release có trình tự khác, gồm MON trước MGR. Vì vậy không dùng “MGR luôn trước MON trong mọi cách triển khai Ceph” làm kết luận. [C11][C12][C14][C15]
+
+**Monitoring:** không cố định Prometheus/Grafana/node-exporter vào “nâng sau cùng”. Tài liệu cephadm Pacific ghi monitoring được refresh sau pha MGR trong staggered upgrade; có thể chỉ redeploy mà không đổi version. Kiểm metrics liên tục và kiểm toàn bộ lại ở P8. Các daemon này không dùng cùng số version 16/17/18 như Ceph. [C9]
+
+**RBD client:** librbd/kernel client và ứng dụng nằm trong ma trận tương thích riêng; không có một daemon “RBD” chung cần xếp sau RGW. Chưa bật feature mới đòi client mới khi inventory client chưa đạt yêu cầu.
+
+## 5. Bước riêng khi xuất phát từ 16.2.5
+
+### 5.1. Chuẩn bị khả năng nâng theo từng đợt
+
+Các tùy chọn giới hạn staggered upgrade có từ Pacific **16.2.11** và Quincy **17.2.1**. Nếu active MGR còn 16.2.5, không giả định có thể chạy ngay lệnh với `--daemon-types`, `--hosts`, `--limit`. Tài liệu chính thức đưa workaround nâng MGR trước. [C9]
+
+MOP U1 cần cụ thể hóa như sau sau khi biết tên daemon và image:
+
+1. Xác nhận ít nhất hai MGR đang chạy, biết active và từng standby; xác minh image 16.2.15 truy cập được trên các host liên quan.
+2. Redeploy các standby MGR bằng image đích; kiểm chúng thực sự chạy và báo đúng version.
+3. Thực hiện failover có kiểm soát sang standby mới; xác nhận active MGR mới và orchestration hoạt động.
+4. Hoàn tất các MGR còn lại bằng luồng nâng theo loại `mgr`; kiểm đủ active/standby.
+5. Tiếp tục MON → crash → OSD/PA1 → các dịch vụ còn lại. Chỉ dùng tham số mà MGR đang active hỗ trợ.
+
+Đây là bước chuyển năng lực của orchestrator ở **chặng U1**, không lặp nâng MGR thủ công một cách máy móc ở U2/U3 nếu orchestrator đã hỗ trợ. Khi có thiếu standby hoặc lỗi failover, dừng ở gate MGR; không đi thẳng sang OSD để “làm trước”.
+
+Các mốc từ 16.2.6 có thay đổi registry mặc định so với giai đoạn cũ. Run phải lưu image đầy đủ và digest đã xác minh, không dựa riêng vào chuỗi version hoặc giả định mọi host pull được. [C9]
+
+### 5.2. Đưa trạng thái đã nâng một OSD vào quy trình đầy đủ
+
+Không thể xác nhận trạng thái cluster hiện tại chỉ từ lời kể hoặc log cũ. Cần lấy một bộ inventory mới, ví dụ trong môi trường quản trị đúng cluster:
+
+```bash
+ceph fsid
+ceph -s
+ceph health detail
+ceph versions
+ceph orch ps --refresh
+ceph orch upgrade status
+ceph mgr dump
+ceph quorum_status --format json-pretty
+ceph osd tree
+ceph osd dump
+```
+
+Sau đó lập bảng `daemon → host → version → image/digest → trạng thái → chặng đã nghiệm thu` và đối chiếu cấu hình image theo daemon/service. `ceph --version` trên máy quản trị không thay được bảng version của từng daemon.
+
+- **Nếu chỉ một OSD đang ở 16.2.15, các thành phần khác còn 16.2.5 và cluster đủ điều kiện:** giữ bằng chứng bài canary, hoàn thành MGR → MON → crash trước rồi tiếp tục phần OSD của U1. OSD đã đúng image/build được kiểm lại và đánh dấu đã đạt; không buộc nâng lại chỉ để giống sơ đồ.
+- **Nếu OSD đã lên 17/18, hoặc có lỗi health/store/mixed-version:** cần xử lý tương thích và sự cố theo inventory thực tế trước khi chọn bước tiếp; không tự áp dụng nhánh trên.
+- **Nếu còn upmap/flags/tài nguyên từ bài PA1 cũ:** đối chiếu ownership và mapping hiện hành trước khi tiếp tục; không xóa tất cả override hoặc ngừng recovery đang cần thiết.
+- **Không mặc định hạ OSD về bản cũ.** Khả năng downgrade phụ thuộc chặng, store và feature đã kích hoạt; dừng orchestrator không hoàn tác một lần nâng major. [C11][C12]
+
+Nếu chưa có manifest đủ tin cậy từ trước lần nâng OSD vừa qua, H0 tạo hôm nay chỉ bảo vệ từ **checkpoint hôm nay trở đi**. Kết quả checksum cũ vẫn giữ nguyên tên, thời điểm và giới hạn; không tạo chứng nhận “trước lần nâng đầu tiên” bằng dữ liệu đọc sau sự kiện.
+
+### 5.3. Điều kiện hoàn tất chặng
+
+Một chặng chỉ đóng khi có đủ bằng chứng:
+
+- Các Ceph daemon cần nâng đã đúng version/image; orchestrator không còn tác vụ hoặc lỗi treo. Dịch vụ monitoring được kiểm theo image riêng.
+- MGR active/standby, MON quorum, PG/dung lượng/health đạt policy đã chốt; cảnh báo tạm thời có giải thích, không dùng chỉ một chữ HEALTH_OK để thay kiểm dữ liệu.
+- RBD và S3 đọc/ghi đúng, H0 đạt trên toàn scope bắt buộc nếu profile yêu cầu H0, QoS và soak đạt ngưỡng của lab.
+- Release-specific checks đã hoàn thành: ví dụ kiểm LevelDB/RocksDB trước Quincy, client compatibility, feature flags và release floor sau khi các OSD cần thiết đã được nâng. Không đặt `require-osd-release` mới khi còn OSD cũ cần chạy; kiểm tác động cephadm đã thực hiện trước khi thao tác thêm. [C11][C12]
+- Hoàn nguyên đúng cấu hình tạm thuộc run; lưu inventory, checkpoint, incident và kế hoạch phục hồi. Cập nhật công cụ quản trị tương thích theo hướng dẫn chặng. [C9]
+
+## 6. H0 bổ sung điều gì bên cạnh BlueStore checksum?
+
+### 6.1. Không lấy việc đổi binary làm lý do “Ceph tính lại toàn bộ checksum”
+
+BlueStore tạo checksum cho dữ liệu ghi xuống disk và kiểm khi đọc từ disk. Việc thay daemon/image tự nó không đồng nghĩa đọc, hash lại và ghi lại mọi payload đang có. Một chặng cụ thể có thể có chuyển đổi metadata/format; phải xem release notes, không khẳng định mọi upgrade hoàn toàn không đụng store. [C1][C13]
+
+Với PA1, **upmap thay placement**; khi thay đổi đó dẫn đến backfill/recovery/copy, dữ liệu mới ghi tại đích được checksum cho lần ghi ấy. Upmap không trực tiếp là một lệnh viết lại toàn bộ object. Vì vậy cần phân biệt đổi phần mềm với các lần dịch chuyển/ghi dữ liệu trong workflow. [C1][C8]
+
+Ví dụ giả định: reference trước nâng là SHA-256 của `ABC`; một lỗi logic xảy ra trước điểm tạo checksum của lần ghi mới làm payload thành `AXC`. Nếu BlueStore nhận và lưu `AXC` cùng checksum tương ứng, việc tự khớp checksum nội bộ không trả lời được payload có còn bằng `ABC` hay không. H0 độc lập cho phép đặt câu hỏi đó ở lần kiểm sau. Đây là **mô hình lỗi để kiểm thử**, không phải xác nhận một lỗi Ceph đã quan sát.
+
+### 6.2. Hai phạm vi tin cậy
+
+| Cơ chế | Tham chiếu | Câu hỏi kiểm tra |
+|---|---|---|
+| BlueStore checksum | Checksum gắn với dữ liệu lưu tại store | Dữ liệu đọc từ disk có khớp checksum đã lưu không? |
+| H0 của đề tài | Manifest độc lập đã chốt trước thay đổi | Payload đúng version/snapshot sau checkpoint có giống reference trước thay đổi không? |
+
+Khác biệt chính là **nguồn và thời điểm của tham chiếu**, không phải kết luận SHA-256 luôn tốt hơn CRC cho mọi mục tiêu. Native checksum, scrub/deep-scrub và recovery của Ceph vẫn được giữ; H0 không thay thế chúng. [C16]
+
+### 6.3. Khi có và khi ít có giá trị
+
+| Tình huống | Giá trị/giới hạn của H0 đề xuất |
+|---|---|
+| Muốn nghiệm thu payload qua cả nâng daemon, chuyển PG và trả dữ liệu | Có bằng chứng trước/sau, gắn checkpoint và scope cụ thể |
+| Lỗi disk làm dữ liệu khác checksum nội bộ | Ceph đã có cơ chế phát hiện; H0 có thể bổ sung bằng chứng client nhưng không mặc định có ưu thế |
+| Payload bị thay đổi thành trạng thái có checksum nội bộ hợp lệ | Có thể phát hiện khác reference nếu đúng version và lỗi nằm trong scope kiểm |
+| Dữ liệu đã sai trước lúc lập H0 | Không chứng minh đúng ban đầu; cần nguồn gốc đáng tin hoặc reference sớm hơn |
+| Chỉ đổi binary, corpus không đổi, native tests đã đủ mục tiêu | Có thể chỉ cần bộ kiểm regression đơn giản; không bắt buộc triển khai feature H0 phức tạp |
+| Cần ngăn byte sai được trả ngay tại mọi read | Bản H0 bên ngoài theo checkpoint không đáp ứng; sửa core là hướng nghiên cứu khác |
+
+Do đó H0 **không phải điều kiện bắt buộc để Ceph nâng cấp đúng**. Chỉ triển khai nếu nhu cầu nghiệm thu độc lập, truy vết, tự động gate và coverage đáng với chi phí đọc/hash/quản lý reference.
+
+## 7. Hợp đồng dữ liệu và checkpoint của H0 — thiết kế mới
+
+### 7.1. Reference bất biến, đúng phiên bản dữ liệu
+
+`H0 = SHA256(payload của object version / snapshot range đã chốt)`
+
+Tại checkpoint t, tính `Ht` trên **cùng danh tính, version/snapshot, range và representation**, rồi so `Ht == H0`. H1/H2 chỉ là quan sát mới; không thay H0 bằng hash mới sau mỗi bước để xóa dấu vết thay đổi.
+
+| Trường | Nội dung bắt buộc |
+|---|---|
+| Định danh run | run ID, cluster FSID, chặng U1/U2/U3, thời gian, người tạo |
+| Định danh payload | S3 bucket/key/version ID hoặc RBD image ID/snapshot ID/range/file; pool/namespace khi có |
+| Consistency | Key bất biến, versioning hay snapshot/quiesce; generation; chính sách writer |
+| Reference | Nguồn, thuật toán, digest, size/chunk layout, manifest revision/hash |
+| Phạm vi | Tập dữ liệu phải kiểm, OSD/PG liên quan, kế hoạch coverage và sampling |
+| Truy vết | Phiên bản công cụ, checkpoint tạo, cấu hình run, link backup/source nếu có |
+
+Reference đặt ngoài các tài nguyên bị dịch chuyển/nâng trong bài thử, có quyền ghi hạn chế và lưu revision. Snapshot có thể ở trong Ceph để cố định version; **kho digest tham chiếu** không chỉ có một bản nằm trên chính pool test đang thử lỗi. Baseline chỉ đọc từ Ceph chứng minh tính không đổi từ thời điểm đó; nguồn chuẩn trước PUT còn kiểm được đúng payload đầu vào trong phạm vi bài thử.
+
+### 7.2. RBD/RGW và tải đang ghi
+
+**S3:** ưu tiên corpus dùng key bất biến, hoặc GET đúng version ID đã xác minh có hỗ trợ. Lưu hash nguồn trước PUT; xử lý multipart theo payload logic, không dùng ETag thay SHA-256. PUT timeout là `WRITE_UNCERTAIN`, phải reconcile. Bucket validation cũ chưa bật versioning nên không tự giả định version ID có sẵn.
+
+**RBD:** quiesce/flush phù hợp rồi tạo snapshot; đọc cùng snapshot/range để so. Nếu kiểm file, ghi rõ cách truy cập snapshot và trạng thái filesystem. Snapshot không phối hợp ứng dụng thường chỉ cho crash consistency; image ID/FS UUID không chứng minh nội dung nhất quán. Kiểm hash không thay bài restore ứng dụng. [C6]
+
+**Live writes:** không so H0 của dữ liệu cũ với live head đang thay đổi hợp lệ. Chia corpus bất biến dùng để chứng minh preservation và corpus write/read mới có manifest theo generation. Snapshot cũ MATCH không chứng minh mọi ghi mới sau upgrade đều đúng.
+
+### 7.3. Checkpoint toàn chặng
+
+| Mốc | Kiểm gì | Ý nghĩa |
+|---|---|---|
+| B0 trước thay đổi | Chốt reference và kiểm read-back ban đầu | Điểm gốc của khoảng thời gian được chứng minh |
+| B1 sau MGR/MON | Kiểm control plane và corpus smoke | Xác nhận đường dịch vụ vẫn dùng được; không suy ra đã đọc mọi replica |
+| B2 trong pha OSD | Kiểm các gate PA1 ở mục 9 | Đặt bằng chứng cạnh các lần copy/return |
+| B3 sau RGW/dịch vụ | Kiểm đúng endpoint RBD/S3 và corpus | Bao gồm thay đổi lớp truy cập dữ liệu |
+| B4 cuối chặng và sau soak | Kiểm đủ scope bắt buộc, versions và SLO | Đóng chặng trước khi sang U tiếp theo |
+
+Giữ manifest gốc cho corpus bất biến xuyên các chặng. Có thể tạo revision bổ sung cho dữ liệu mới với lý do rõ ràng; phải so reference cũ trước khi chấp nhận điểm gốc mới, không tự rebaseline khi mismatch.
+
+### 7.4. Replica và primary có làm thay đổi ý nghĩa H0 không?
+
+Không. Vai trò primary/replica thay đổi nơi phục vụ và đường đọc, không tự tạo một lần kiểm H0 đầy đủ. Đối với bốn trường hợp người dùng nêu:
+
+- **Replica đã sai trước khi chạy:** checksum nội bộ có thể phát hiện khi đọc/scrub nếu dữ liệu không khớp checksum. H0 qua client có thể vẫn MATCH vì đọc một bản khác; không kết luận replica đó sạch.
+- **Replica sai trong quá trình chạy:** giới hạn trên vẫn tồn tại. Muốn nghiệm thu riêng replica cần reader/instrumentation hoặc quy trình kiểm vai trò có bằng chứng; không suy từ acting set.
+- **OSD lên primary nhưng có lỗi từ trước:** peering/chuyển vai trò không tương đương kiểm full payload theo H0. Đọc canary đúng corpus có thể phát hiện; MATCH chỉ phủ những byte thực sự đọc qua đường đã ghi nhận.
+- **Primary sai sau thời gian hoạt động:** chỉ được quan sát ở lần kiểm tiếp theo hoặc qua cơ chế Ceph phù hợp. H0 theo checkpoint không ngăn lỗi giữa hai lần kiểm và không bảo đảm ứng dụng chưa nhận dữ liệu sai.
+
+Cách Ceph phát hiện/sửa còn tùy loại lỗi, đường đọc, scrub và nguồn replica tốt; không viết “Ceph luôn tự sửa ngay”. Nếu cần bảo đảm kiểm trước từng read/send/receive, đó là phạm vi sửa core khác, chưa triển khai và không nằm trong MVP này. [C2][C13][C16]
+
+## 8. Web: chọn một OSD hoặc tập OSD canary
+
+### 8.1. Hai tập OSD có ý nghĩa khác nhau
+
+- `test_osd_ids`: các OSD được phép chứa dữ liệu của pool test trong một run.
+- `upgrade_osd_ids`: các OSD đang được nâng theo PA1.
+
+Hai tập này có thể khác nhau. **Nâng một OSD production không có nghĩa hạ pool production xuống một replica.** Quy tắc replica dưới đây chỉ áp dụng cho pool test riêng có dữ liệu có thể tạo lại.
+
+Gọi `N` là số OSD phân biệt được chọn. Nếu topology đáp ứng rule, đặt:
+
+`test_pool.size = min(N, 3)`
+
+Trong Ceph, `size` là tổng số bản, bao gồm bản ở primary. [C3]
+
+| N được chọn | size pool test | min_size đề xuất | Ý nghĩa |
+|---:|---:|---:|---|
+| 0 | Không tạo run | — | Yêu cầu chọn ít nhất một OSD |
+| 1 | 1 | 1 | Kiểm chức năng trên một OSD; mất OSD thì dữ liệu không phục vụ được |
+| 2 | 2 | 2 | Kiểm đường replication giữa hai OSD; bài chuẩn không duy trì I/O khi mất một bản |
+| 3 | 3 | 2 | Kiểm ba bản và lỗi một OSD trong điều kiện phù hợp |
+| 4 | 3 | 2 | Mỗi PG chọn ba OSD trong tập bốn; cần kiểm độ bao phủ cả bốn |
+| 5 | 3 | 2 | Mỗi PG chọn ba OSD trong tập năm; cần kiểm độ bao phủ cả năm |
+| >5 | 3 | 2 | Mở rộng tập ứng viên; mỗi object vẫn tối đa ba bản |
+
+`min_size` không phải công thức người dùng yêu cầu; đây là policy test đề xuất để tránh mặc định ghi với một bản trong bài size=2. Một bài nghiên cứu size=2/min_size=1 phải là profile riêng, được ghi rõ trong kết quả; không tự đổi cấu hình giữa bài thử để đạt PASS.
+
+**Size=1:** Pacific có chốt `mon_allow_pool_size_one` và yêu cầu xác nhận đặc biệt khi đặt size=1. Adapter phải kiểm khả năng/cấu hình, journal và khôi phục thay đổi nếu run sở hữu. UI báo rõ “1 bản — không có dự phòng”; không âm thầm sửa default size/min_size của cluster. [C4]
+
+### 8.2. Kiểm topology trước khi áp dụng
+
+Replica count và failure domain phải đồng thời hợp lệ:
+
+- Với `failure_domain=host`, cần ít nhất `size` host vật lý khác nhau trong tập được chọn.
+- Chọn ba OSD trên hai host không đáp ứng bài size=3/host; trả `INSUFFICIENT_FAILURE_DOMAINS`.
+- Nếu muốn kiểm các OSD cùng host, dùng profile lab `failure_domain=osd`, ghi rõ không chứng minh khả năng chịu mất host.
+- Không tự giảm size, thêm OSD ngoài danh sách hoặc đổi failure domain để che việc thiếu topology.
+- Ví dụ chọn năm OSD trên ba host: size=3 có thể hợp lệ, nhưng vẫn phải xác nhận mapping thực tế và mỗi OSD có workload.
+
+### 8.3. Chọn OSD phải ràng buộc placement thật
+
+Checkbox UI chỉ là yêu cầu. Planner phải tạo hoặc chọn **CRUSH rule/pool test có tập OSD hợp lệ đúng bằng scope đã chọn**, sau đó xác minh:
+
+1. OSD tồn tại, `up/in`, đúng FSID, đủ headroom và đúng host/device class.
+2. Pool/rule mang run ID, có ownership; dùng mapping mô phỏng để chứng minh không làm đổi placement của pool ngoài run.
+3. Sau hội tụ, mọi `up/acting` của PG test nằm trong allowlist; đủ số bản phân biệt, đúng failure domain, `active+clean`.
+4. Khi OSDMap thay đổi, kiểm lại scope. Nếu dữ liệu đi ra ngoài allowlist, dừng cấp workload mới và báo `SCOPE_CHANGED`; không ngăn recovery cần thiết cho các pool khác.
+5. Không đạt mapping thì không cho run tiến sang kiểm chứng dữ liệu, dù pool đã tạo thành công.
+
+Adapter CRUSH phải được diễn tập trên lab trước. Có thể nghiên cứu hierarchy phụ cho test nhưng không dùng thao tác `move`/reweight làm thay đổi vị trí phục vụ production. Nếu dùng nhiều đường hierarchy cho cùng OSD, phải giữ danh tính host vật lý chính xác; collector hiện có kiểm tra “OSD belongs to multiple hosts”, nên cần cập nhật parser và bài test tương ứng trước khi hỗ trợ cấu trúc đó. Không coi việc đặt weight rất nhỏ hoặc chỉ tắt balancer là allowlist tuyệt đối.
+
+Giai đoạn đầu có thể dùng các scope đã provision và xác minh trước. UI vẫn cho chọn OSD, nhưng báo `PLACEMENT_NOT_READY` nếu chưa có scope tương ứng. Bản hoàn thiện bổ sung planner/provisioner để tạo scope theo lựa chọn; không báo “đã kiểm OSD” khi chỉ dùng pool chung.
+
+### 8.4. RBD và RGW cần scope khác nhau
+
+**RBD:** tạo image test trong pool riêng; nếu dùng data pool riêng, inventory cả metadata pool và data pool. MVP ưu tiên image đơn giản trong replicated pool đã chọn. File browser là lớp truy cập bên trên RBD, không tự chứng minh file thuộc đúng một RADOS object hay PG.
+
+**RGW:** bucket test mới phải gắn placement target riêng. Inventory `data_pool`, `index_pool`, `data_extra_pool`; nếu chỉ pool payload nằm trên OSD chọn, nhãn kết quả là **phạm vi dữ liệu payload**, không tuyên bố toàn bộ S3 request chỉ dùng các OSD đó. Các pool hệ thống RGW và MON/MGR vẫn là phụ thuộc. Sửa placement default của bucket production không nằm trong run này. [C5]
+
+### 8.5. Tập 4–5 OSD và chứng minh coverage
+
+Với size=3, một object không nằm đồng thời trên bốn hoặc năm OSD. Planner chọn đủ object/PG để từng OSD trong scope thực sự tham gia; không tăng PG tùy tiện chỉ để lấp bảng.
+
+Mỗi OSD cần bảng bằng chứng:
+
+| OSD | PG test thực tế | PG làm primary | PG làm replica | Byte workload thuộc PG | Mức kiểm chứng | Kết quả |
+|---|---:|---:|---:|---:|---|---|
+| osd.X | số đo | số đo | số đo | số đo | client/mapping/local-reader nếu có | chưa chạy |
+
+Tách các mức: `MAPPED`, `CLIENT_VERIFIED`, `LOCAL_REPLICA_VERIFIED` (chỉ khi có cơ chế đọc riêng đã xác minh). Có mặt trong acting set không đồng nghĩa đã đọc và hash riêng bản local. GET qua client có thể chỉ đọc primary hoặc cache; chỉ hook/local-reader đã kiểm thử mới cho phép kết luận theo từng replica. Mapping logical object → RADOS object → PG phải xử lý multipart/striping và gắn epoch; không suy coverage chỉ từ tên file.
+
+### 8.6. Không xung đột scope canary với đường chuyển PA1
+
+Một pool chỉ được nằm trên X không thể vừa giữ allowlist `{X}` vừa chuyển dữ liệu sang S. Vì vậy có hai profile riêng:
+
+- **Test chức năng OSD X:** size=1 trên X sau nâng; chấp nhận không phục vụ khi X dừng, không dùng làm bài chứng minh PA1 duy trì availability.
+- **Test PA1:** khai báo trước toàn bộ tập OSD có thể tham gia, gồm X, S và các peer; giữ replica của pool thử phù hợp. Ví dụ tập bốn OSD X/S/Y/Z với size=3: trước chuyển là X/Y/Z, sau chuyển là S/Y/Z, rồi trả về X/Y/Z. Placement từng checkpoint phải nằm trong scope đã duyệt.
+
+`test_osd_ids` là phạm vi kiểm; `upgrade_osd_ids` là đối tượng nâng; `migration_osd_ids` là tập nguồn/đích của PA1. Không dùng cùng một biến cho cả ba và không âm thầm mở rộng allowlist.
+
+## 9. Kết hợp H0 với PA1 trong pha OSD
+
+Quy ước: X là OSD cần nâng; S là spare; Y/Z là peer; minh họa size=3. **Giữ X online khi chuyển dữ liệu sang S.** Chỉ dừng X sau khi hoàn thành điều kiện drain, đủ bản và kiểm an toàn. MOP nguồn có bước dừng X sớm phải reconcile trước khi dùng trình tự mới. [G8]
+
+| Gate | PA1 thực hiện | H0/checksum cần kiểm trong thiết kế mới | Điều kiện đi tiếp |
+|---|---|---|---|
+| G0 — Chuẩn bị | Xác nhận đang ở pha OSD của đúng chặng; MGR/MON đã đạt; inventory X/S/PG và dung lượng | Chốt corpus bất biến, manifest nguồn, scope và công cụ | H0 đã được triển khai nếu run khai báo PA1 + H0; thiếu thì báo NOT_IMPLEMENTED |
+| G1 — Trước chuyển | Lưu CRUSH/upmap/flags và kế hoạch batch, giữ X online | Kiểm toàn bộ corpus bắt buộc so H0 | Đúng version, không mismatch chưa xử lý; read-back đủ byte |
+| G2 — Chuyển X → S | Upmap theo batch hợp lệ; chờ backfill/recovery hoàn tất | Đọc kiểm corpus bị ảnh hưởng, so với H0 gốc | Mapping hợp lệ, đủ bản, PG clean; QoS và dữ liệu đạt |
+| G3 — Dừng/nâng X | X đã ra khỏi các PG cần drain; kiểm `ok-to-stop` sát thời điểm dừng; nâng đúng image | Giữ nguyên H0, tiếp tục kiểm dịch vụ ở S/peer | Không còn PG ngoài kế hoạch bị bỏ sót; dịch vụ đạt policy |
+| G4 — X trở lại/canary | Kiểm version, boot/store, cho một phạm vi nhỏ về X | Kiểm sau dữ liệu được copy về; chạy cả read cũ và write/read mới có reference riêng | Native gates, coverage và QoS đạt; không chỉ kiểm process UP |
+| G5 — X phục vụ canary | Quan sát X làm primary trên PG canary nếu bài yêu cầu; không nhầm restart với đổi role | Kiểm đúng corpus/endpoint và ghi role, epoch, đường đọc | Kết luận đúng mức client/local; không suy riêng từng replica từ GET |
+| G6 — Mở rộng/đóng lượt | Trả PG theo batch; hoàn nguyên đúng override thuộc run khi an toàn | Kiểm đủ scope cuối lượt và sau soak so H0 gốc | Không có incident chưa giải quyết; đủ SLO/coverage; lưu evidence |
+
+H0 bên ngoài là **gate mở rộng quy trình**, không phải hook chặn byte trong Ceph. Ví dụ G2 mismatch thì controller không cho bắt đầu G3 hoặc mở rộng batch; các thao tác phục hồi cần thiết của cluster vẫn phải được xử lý phù hợp.
+
+`up/acting` đủ bản và `active+clean` không thay H0; H0 MATCH cũng không thay `ok-to-stop`, quorum, dung lượng hoặc số replica. Kiểm cả tập OSD nếu định dừng nhiều OSD; `N=5` trên web không có nghĩa được dừng đồng thời năm OSD.
+
+S cần đủ dung lượng, đúng failure domain và thực sự được chấp nhận trong mapping. Việc S xuất hiện với weight 0 ở một log chuẩn bị không chứng minh đã sẵn sàng nhận dữ liệu. Phải kiểm loại weight, trạng thái in/out và mapping thực tế trước G2.
+
+### Vai trò của S khi nâng X lỗi
+
+Nếu PG đã chuyển hoàn tất và còn phục vụ trên S/Y/Z, có thể giữ chúng ở đó trong khi xử lý X; vẫn phải theo dõi phiên bản dữ liệu hiện hành, health và tải. Khi đã trả PG về X, S có thể không còn là bản cập nhật. Không gọi S là backup cố định và không mặc định copy ngược từ S.
+
+Nếu cần giữ S phục vụ lâu dài, đó là thay đổi placement/nguồn lực cần cập nhật vào trạng thái đích của MOP. Việc một PG chọn primary do cơ chế Ceph quyết định không đồng nghĩa “biến spare thành bản dữ liệu đáng tin hơn”.
+
+## 10. Luồng web và kết quả H0
+
+Luồng đề xuất: **chọn cluster/chặng → chọn OSD/profile → kiểm topology/scope → chuẩn bị corpus → chốt H0 → thực hiện checkpoint → kiểm → xuất báo cáo**.
+
+Các khu vực trên web:
+
+1. Inventory daemon, host, version/image và trạng thái các pha U/P/G.
+2. Tập OSD test/nâng/migration; replica, failure domain và mapping thực tế.
+3. Corpus S3/RBD, version/snapshot, nguồn reference và phạm vi bắt buộc.
+4. H0/checkpoint: expected/observed digest, byte kiểm, attempt và verdict.
+5. SLO/coverage/incident và lý do được đi tiếp hoặc đang bị chặn.
+
+Feature hiện tại phải hiển thị `H0_NOT_IMPLEMENTED`. Sau khi có implementation được nghiệm thu, một run thiếu baseline là `BASELINE_MISSING`, chưa chạy là `NOT_RUN`; không chuyển thành PASS vì số lỗi bằng 0.
+
+| Kết quả kiểm | Ý nghĩa |
+|---|---|
+| MATCH | Đúng identity/version, đủ byte trong phạm vi và digest khớp |
+| MISMATCH | Payload được đọc không khớp reference của cùng trạng thái kỳ vọng |
+| MISSING / READ_ERROR | Không có object hoặc đọc lỗi; không đồng nhất với mismatch nội dung |
+| VERSION_UNAVAILABLE | Không truy cập được version/snapshot đã chốt |
+| WRITE_UNCERTAIN | Chưa biết kết quả ghi; cần reconcile trước kiểm |
+| INCONCLUSIVE | Không đủ consistency/coverage/evidence để kết luận |
+
+MATCH từng object không tự làm run PASS. Run phải có corpus không rỗng, đủ phạm vi bắt buộc, native gates và SLO đạt, không incident chưa xử lý. Lần PASS sau phải giữ lại lần FAIL trước; việc đổi verdict cần lý do và bằng chứng.
+
+Chỉ sau khi hoàn thành nguồn reference, consistency, checkpoint controller, coverage, lịch sử kiểm và nghiệm thu mới gọi đó là **feature H0 theo bản 1.2**. Các bài checksum lịch sử vẫn là kết quả test lịch sử, dù có thể tái sử dụng một phần mã.
+
+## 11. Xử lý sai lệch và phục hồi
+
+Khi phát hiện bất thường:
+
+1. Dừng mở rộng đợt nâng/migration, lưu attempt đầu cùng manifest, version, epoch, image và metrics.
+2. Xác minh đang so đúng version/snapshot/range và reference đáng tin; loại trừ ghi hợp lệ, short read, cache hoặc lỗi client.
+3. Đối chiếu native health/scrub/error logs và nguồn dữ liệu khác; H0 client không tự chỉ ra OSD hỏng hoặc nguyên nhân gốc.
+4. Chọn hành động theo dữ liệu hiện hành: giữ PG trên tập đang phục vụ, khôi phục từ bản tốt đã xác minh, hoặc restore backup đúng recovery point.
+5. Kiểm lại cả payload lẫn ứng dụng, ghi RTO/RPO thực đo; giữ incident sau khi dịch vụ phục hồi.
+
+Không tự gọi `pg repair` để biến kết quả thành MATCH và không lấy dữ liệu nghi sai làm H0 mới. Một digest đúng không chứa dữ liệu để phục hồi. Size=1 có thể chỉ phát hiện được lỗi, không có replica khác để tự cứu.
+
+Phân biệt **pause/stop upgrade**, **giữ dịch vụ trên S/peer**, **restore dữ liệu** và **downgrade daemon**. Chúng là bốn hành động khác nhau; release notes Quincy/Reef nói dừng upgrade không cung cấp đường downgrade về major trước. [C11][C12]
+
+Backup khoảng 100 TB so với phạm vi production khoảng 24 PB, nếu inventory xác nhận đúng, cần danh sách dữ liệu ưu tiên và restore rehearsal; H0 không bù cho thiếu payload backup.
+
+## 12. Chi phí và cách đánh giá có đáng triển khai không
+
+H0 theo checkpoint phát sinh đọc dữ liệu, truyền về verifier, hash, lưu manifest và thời gian chờ gate. Với corpus kích thước D và k lần đọc đủ corpus, riêng lượng đọc logic để verify xấp xỉ `k × D`; chưa gồm baseline nếu lấy qua cluster, migration và thao tác ứng dụng. Số byte đọc từ disk phụ thuộc cache, replica và đường I/O, phải đo thực tế.
+
+| Lượt | Cấu hình | Mục tiêu |
+|---|---|---|
+| A | Workload, không PA1, không H0 | Baseline tài nguyên/dịch vụ |
+| B | Workload + H0 theo checkpoint | Chi phí đọc/hash/manifest/checkpoint của feature mới |
+| C | Workload + PA1, không H0 | Chi phí chuyển đi, trả về, restart và hội tụ |
+| D | Workload + PA1 + H0 | Tổng chi phí và giá trị gate trong quy trình kết hợp |
+
+B/D chỉ chạy sau khi feature tồn tại. Giữ workload, corpus, topology và chính sách cache tương đương; native checksum/scrub vẫn hoạt động. Nếu chạy bộ checksum kiểm soát ở các lượt, giữ lịch tương đương hoặc đo tách khỏi cửa sổ so sánh. Không suy overhead H0 từ test checksum cũ.
+
+Thu thập p95/p99, IOPS/throughput, error/timeout, CPU/RAM, disk/network, byte migration hai chiều, byte verify, thời gian chờ checkpoint, coverage và time-to-detect. Metrics stale là thiếu dữ liệu, không phải 0. Không tắt kiểm bắt buộc âm thầm để đạt QoS.
+
+Với dữ liệu rất lớn, có thể kiểm toàn bộ corpus canary và lấy mẫu có khai báo cho phạm vi lớn hơn. Báo rõ mẫu đã chọn, phần chưa đọc và giới hạn; không kết luận toàn bộ cluster nguyên vẹn từ vài file MATCH.
+
+Tiêu chí quyết định triển khai: feature có làm run lặp lại được, chỉ ra sai lệch hoặc ngăn mở rộng đúng mốc, tạo bằng chứng tốt hơn quy trình thủ công, và nằm trong budget hay không. Nếu chỉ thêm giao diện quanh một lệnh hash mà không giải quyết các nhu cầu đó, không có đủ lý do mở rộng kiến trúc.
+
+## 13. Dữ liệu và API dự kiến
+
+### 13.1. Các thực thể mới
+
+| Nhóm | Nội dung |
+|---|---|
+| upgrade_runs / daemon_inventory | Chặng, target image, version từng daemon, pha hiện tại, trạng thái MGR/MON/OSD/dịch vụ |
+| canary_plans / run_resources | Ba tập OSD, topology, pool/rule/bucket/image, ownership và cleanup journal |
+| h0_manifests / h0_entries | Reference bất biến, identity/version/snapshot/range, digest, nguồn và manifest revision |
+| verification_attempts | Từng lần đọc/so sánh, số byte, observed hash, verdict, lỗi và tool build |
+| placement_observations | PG, up/acting, primary, epoch, mapping logic và giới hạn coverage |
+| checkpoint_decisions / incidents | Bằng chứng được dùng cho gate, lý do đi tiếp/dừng, toàn bộ lịch sử sự cố |
+
+Không cần bảng hook-event trong OSD cho MVP này. PostgreSQL console có thể lưu kế hoạch và kết quả; manifest cần bản lưu phù hợp trust boundary, tránh phụ thuộc duy nhất vào chính storage bị thử lỗi. API RBD hiện cập nhật kết quả verification cần được mở rộng thành lịch sử append-only.
+
+### 13.2. Hợp đồng API gợi ý — chưa triển khai
+
+| API | Chức năng |
+|---|---|
+| GET /api/canary/osds | Inventory fresh và host/failure domain |
+| POST /api/canary/plans | Tính scope, replica và các ràng buộc trước mutation |
+| POST /api/canary/runs | Tạo run từ kế hoạch còn hợp lệ |
+| POST /api/canary/runs/{id}/baseline | Chốt manifest mới sau kiểm consistency/nguồn; không import mù checksum cũ |
+| POST /api/canary/runs/{id}/checkpoints/{name}/verify | Đọc đúng corpus và lưu attempt so với reference đã khóa |
+| GET /api/canary/runs/{id}/gates | Trạng thái từng pha và lý do chặn/đi tiếp |
+| GET /api/canary/runs/{id}/report | Xuất versions, dữ liệu, coverage, QoS và incident |
+
+MVP có thể nhập log checkpoint MOP rồi kiểm, chưa cần cho web tự nâng daemon. Tự động hóa hành động nâng phải dùng executor có allowlist, FSID binding, lease và idempotency; không nhận shell command tùy ý. Hoàn nguyên chỉ tài nguyên/cấu hình run sở hữu.
+
+### 13.3. Điểm mở rộng từ code hiện có
+
+Frontend thêm chọn OSD và báo cáo checkpoint; backend thêm manifest/attempts/consistency; RGW worker thêm verify payload đúng version; RBD adapter thêm snapshot/quiesce và đọc ổn định; collector/executor thêm bằng chứng mapping. Phần mới chủ yếu nằm ở test/controller, không đặt truy vấn web/database vào mỗi I/O Ceph.
+
+## 14. Ma trận nghiệm thu và lộ trình
+
+Mọi bài dưới đây là kế hoạch, không phải kết quả đã chạy trong lần sửa tài liệu.
+
+| ID | Tình huống | Điều kiện đạt |
+|---|---|---|
+| U01 | Xuất phát 16.2.5 | Xử lý MGR/standby/failover trước khi dùng staggered options; đủ evidence |
+| U02 | Một OSD đã nâng trước | Reconcile inventory, không lặp/đảo version mù; tiếp tục đúng pha |
+| U03 | Đóng U1/U2/U3 | Tất cả daemon cần thiết, dịch vụ và gates đạt trước chặng kế |
+| T01 | N=1/2/3/4/5 | size=1/2/3/3/3; topology và scope đúng |
+| T02 | N=0, trùng OSD, down hoặc thiếu host | Lỗi cụ thể, không tự thêm OSD/giảm replica |
+| T03 | Scope drift hoặc epoch thay đổi | Phát hiện và reconcile; không gắn kết quả cũ cho mapping mới |
+| T04 | Tập 4–5 OSD | Mọi OSD có workload/PG; báo rõ client coverage và local coverage |
+| H01 | Corpus bất biến trước/sau checkpoint | Cùng identity/version, đủ byte, giữ H0 gốc và lưu attempts |
+| H02 | Payload khác reference nhưng ghi hợp lệ qua Ceph | Phát hiện khác trạng thái kỳ vọng; chứng minh gate, không gọi là lỗi checksum BlueStore |
+| H03 | Overwrite hợp lệ ngoài corpus / generation mới | Không báo corruption giả do so nhầm version; manifest mới có nguồn rõ |
+| H04 | Mất reference, timeout, short read, version mất | Không PASS giả; phân loại đúng và chặn gate theo policy |
+| H05 | Snapshot cũ MATCH, live write mới lỗi | Hai corpus có kết quả riêng; không dùng snapshot cũ che lỗi ghi mới |
+| P01 | Chuyển X→S, nâng X, trả về dưới tải | Native gates, H0 nếu bật và SLO đạt cả hai chiều |
+| P02 | X không boot hoặc peer lỗi | Fallback theo mapping hiện hành, đo availability; không coi S là backup cố định |
+| P03 | Restart verifier/controller giữa run | Không mất H0/attempt; resume có reconcile và không chạy lặp mutation |
+| R01 | Restore S3/RBD | Đúng recovery point, payload và ứng dụng đọc được; đo RTO/RPO |
+
+H02 có thể dùng corpus lab bị thay byte bằng một ghi hợp lệ để kiểm detector. Nếu bài yêu cầu payload bất biến thì đây là vi phạm trạng thái kỳ vọng; nó không chứng minh BlueStore bỏ lọt corruption vật lý. Với S3 versioning, ghi version mới không làm version cũ đổi: phải thiết kế bài lỗi đúng version/range đang kiểm. Fault injection vào native path cần bài nghiên cứu riêng, có log Ceph và verifier cùng lúc.
+
+Thứ tự phát triển:
+
+1. Chốt inventory thực tế và MOP toàn cluster, hoàn thiện U1 trước khi mở U2/U3.
+2. Hoàn thiện web scope N=1–5, corpus nhất quán và lịch sử kiểm, có thể chạy test độc lập.
+3. Triển khai H0 bản 1.2: manifest bất biến → checkpoints → gates → báo cáo; nghiệm thu H01–H05.
+4. Tích hợp vào PA1, chạy P01–P03, A/B/C/D và restore; quyết định giá trị dựa số đo.
+5. Chỉ mở rộng local-replica verification, sửa core hoặc EC nếu có nhu cầu và bằng chứng riêng. EC dùng `k+m`, không dùng công thức replica `min(N,3)`.
+
+Đầu ra bàn giao: MOP từng chặng, inventory trước/sau, phiên bản feature thật, manifest/attempts, báo cáo coverage/QoS và diễn tập phục hồi. Một run chỉ PASS cho đúng dữ liệu, khoảng thời gian và đường kiểm đã công bố.
+
+## 15. Nguồn và cách sử dụng bằng chứng
+
+### Nguồn dự án — cố định commit đã đọc
+
+- [G1 — Tài liệu ý tưởng H0 V2, chưa triển khai](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/features/ceph-v2-h0-verifier.md).
+- [G2 — Web README](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/code/rgw-console/README.md).
+- [G3 — Web VALIDATION](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/code/rgw-console/VALIDATION.md).
+- [G4 — RBD validation API](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/code/rgw-console/backend/app/api/rbd.py).
+- [G5 — RGW worker](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/code/rgw-console/backend/app/worker.py).
+- [G6 — S3 PUT/GET checksum](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/code/s3_put_get_test.py).
+- [G7 — Capacity collector](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/code/rgw-console/backend/app/services/capacity_collector.py).
+- [G8 — MOP nguồn](https://github.com/dangtnh7904/VDT_CLOUD_2026/blob/9180375b279caf31943abb81541151868c4879ab/MOP/MOP-Ceph-Pacific-16.2.5-to-16.2.15.md). Là tài liệu quy trình, không phải log thực thi; có trình tự cũ cần reconcile như mục 9.
+- [G9 — Hồ sơ prelab PA1](https://github.com/dangtnh7904/VDT_CLOUD_2026/tree/9180375b279caf31943abb81541151868c4879ab/as-is-base/pa1-prelab-20260923-090845).
+
+### Tài liệu Ceph chính thức
+
+- [C1 — BlueStore checksums](https://docs.ceph.com/en/quincy/rados/configuration/bluestore-config-ref/#checksums).
+- [C2 — Peering và PG history](https://docs.ceph.com/en/pacific/dev/peering/).
+- [C3 — Pool size/min_size](https://docs.ceph.com/en/pacific/rados/operations/pools/).
+- [C4 — Pacific release notes, size-one guard](https://docs.ceph.com/en/latest/releases/pacific/).
+- [C5 — RGW pool placement](https://docs.ceph.com/en/pacific/radosgw/placement/).
+- [C6 — RBD snapshots](https://docs.ceph.com/en/pacific/rbd/rbd-snapshot/).
+- [C7 — CRUSH maps](https://docs.ceph.com/en/pacific/rados/operations/crush-map/).
+- [C8 — Upmap](https://docs.ceph.com/en/pacific/rados/operations/upmap/).
+- [C9 — Cephadm upgrade](https://docs.ceph.com/en/pacific/cephadm/upgrade/).
+
+- [C10 — Vòng đời các nhánh Ceph](https://docs.ceph.com/en/latest/releases/).
+- [C11 — Quincy release notes và hướng dẫn nâng cấp](https://docs.ceph.com/en/latest/releases/quincy/).
+- [C12 — Reef release notes và hướng dẫn nâng cấp](https://docs.ceph.com/en/latest/releases/reef/).
+- [C13 — BlueStore kiểm checksum khi đọc disk](https://ceph.io/en/news/blog/2017/new-luminous-bluestore/).
+- [C14 — Ceph Manager administrator guide](https://docs.ceph.com/en/pacific/mgr/administrator/).
+- [C15 — MON quorum](https://docs.ceph.com/en/pacific/rados/configuration/mon-config-ref/#monitor-quorum).
+- [C16 — Kiểm và sửa PG inconsistency](https://docs.ceph.com/en/pacific/rados/operations/pg-repair/).
+
+Nguồn Ceph mô tả cơ chế nền và thứ tự công cụ; không chứng nhận feature H0 này đã được Ceph cung cấp. Các gate, schema, API, policy web và ma trận nghiệm thu là thiết kế của đề tài. Xác nhận hiện trạng của người thực hiện được ưu tiên khi phân loại tiến độ. Bản sửa này không chạy nâng cấp, không chạy lại các test lịch sử và không thay đổi repository/cluster.
