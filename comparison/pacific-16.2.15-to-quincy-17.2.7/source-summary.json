@@ -1,0 +1,28 @@
+{
+  "repo": "D:\\career\\VDT\\GD2\\upgrade_Ceph\\ceph16.2.15\\ceph",
+  "base_ref": "v16.2.15",
+  "target_ref": "v17.2.7",
+  "base_sha": "618f440892089921c3e944a991122ddc44e60516",
+  "target_sha": "b12291d110049b2f35e32e0de30d70e9a4c060d2",
+  "git_version": "git version 2.49.0.windows.1",
+  "dirty": false,
+  "shallow": false,
+  "base_is_ancestor": false,
+  "commit_count": 14759,
+  "rename_detection": "--find-renames=50%",
+  "files": 4179,
+  "status_counts": {
+    "A": 665,
+    "D": 306,
+    "M": 2934,
+    "R": 273,
+    "T": 1
+  },
+  "additions": 276334,
+  "deletions": 268473,
+  "binary_files": 26,
+  "zero_zero_text_records": 173,
+  "renames": 273,
+  "mode_changes": 9,
+  "gitlinks": 14
+}
