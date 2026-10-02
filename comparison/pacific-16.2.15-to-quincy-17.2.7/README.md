@@ -12,7 +12,7 @@ Hai tag được resolve trong cùng repo `ceph16.2.15/ceph`: base `618f44089208
 - Git trả về một trạng thái `T` thật cho symlink chuyển thành file thường. Bản script trong `tools/` giữ `T` và raw mode/blob; không gộp thành `M`.
 - 14 gitlink đổi pointer. Chưa kết luận hành vi bên trong các dependency từ pointer đơn thuần.
 - Mỗi hàng đã có đúng một owner `01`–`15`; validator chế độ `inventory` đã qua. `P0 816`, `P1 1.285`, `P2 2.078` chỉ là thứ tự đọc.
-- **270 hàng `affect`, 283 hàng `trivial`, 3.626 hàng chưa phân loại.** Các finding đã xác minh bước đầu: [BLU-001–013, SEA-001–012](./02-bluestore-bluefs.md) về allocation file, BlueFS, fsck, tool và onode format; [KV-001–006](./03-rocksdb-block-device.md) về LevelDB, block IO, zoned device, KV, chỉ số RocksDB và cache; [CFG-001–014](./06-config-defaults.md)/[OSD-001–024](./01-osd-pg-recovery.md) cho mClock, default, recipe reshard, FastCGI RGW, MDS/MGR/MON, OSD scheduler, network bind, peering, scrub, SnapMapper, manifest và PG stats; [MON-001–025](./04-mon-osdmap-crush.md) cho checkpoint Quincy, quorum feature, pending key, CRUSH rule, MON log và command; [MGR-001](./07-mgr-modules-monitoring.md) cho `.mgr`/SQLite; [ADM-001–002](./08-cephadm-orchestrator.md) cho offline host và image identity; cùng [VOL-001–003](./09-ceph-volume-activation.md) cho inventory, encrypted zap và tox gate. [Owner 02](./02-bluestore-bluefs.md), [owner 03](./03-rocksdb-block-device.md), [owner 04](./04-mon-osdmap-crush.md), [owner 06](./06-config-defaults.md), [owner 09](./09-ceph-volume-activation.md) và [owner 14](./14-security-cross-reference.md) đã hoàn tất binary gate trong phạm vi hàng của mình. Chưa thể tổng hợp rủi ro toàn suite.
+- **852 hàng `affect`. 522 hàng `trivial`. 2.805 hàng chưa phân loại.** Các finding đã xác minh bước đầu: [BLU-001–013, SEA-001–012](./02-bluestore-bluefs.md) về allocation file, BlueFS, fsck, tool và onode format; [KV-001–006](./03-rocksdb-block-device.md) về LevelDB, block IO, zoned device, KV, chỉ số RocksDB và cache; [CFG-001–014](./06-config-defaults.md)/[OSD-001–094](./01-osd-pg-recovery.md) cho mClock, default, recipe reshard, FastCGI RGW, MDS/MGR/MON, OSD scheduler, network bind, peering, scrub, SnapMapper, message compatibility, ObjectStore, Crimson và QA RADOS; [MON-001–025](./04-mon-osdmap-crush.md) cho checkpoint Quincy, quorum feature, pending key, CRUSH rule, MON log và command; [MSG-001–074](./05-messaging-auth-common.md) cho CephX, msgr2, định danh release, timer/cache, device metadata và logging; [MGR-001–013](./07-mgr-modules-monitoring.md) cho `.mgr`/SQLite, progress event, Prometheus exporter, telemetry opt-in, crash health, Influx, Zabbix, Telegraf, MGR activation, OSD metadata, retry clock và reweight CLI; [ADM-001–025](./08-cephadm-orchestrator.md) cho offline host, image identity, device cache, placement, agent, OSD deployment, SSH và QA upgrade, tuned profile, maintenance, monitoring, MON CRUSH location, NFS VIP, Rook QA, runbook, Keepalived image và tox; cùng [VOL-001–003](./09-ceph-volume-activation.md) cho inventory, encrypted zap và tox gate. [Owner 01](./01-osd-pg-recovery.md), [owner 02](./02-bluestore-bluefs.md), [owner 03](./03-rocksdb-block-device.md), [owner 04](./04-mon-osdmap-crush.md), [owner 05](./05-messaging-auth-common.md), [owner 06](./06-config-defaults.md), [owner 08](./08-cephadm-orchestrator.md), [owner 09](./09-ceph-volume-activation.md) và [owner 14](./14-security-cross-reference.md) đã hoàn tất binary gate trong phạm vi hàng của mình. Chưa thể tổng hợp rủi ro toàn suite.
 - Commit target ghi ngày 2023-10-25, trong khi base ghi ngày 2024-02-26. Đây là hai release branch: target major mới hơn nhưng endpoint commit cũ hơn theo lịch. Cần đối chiếu riêng các backport Pacific cuối nhánh trước khi kết luận một fix có trong target.
 
 ## Mục lục
@@ -20,14 +20,14 @@ Hai tag được resolve trong cùng repo `ceph16.2.15/ceph`: base `618f44089208
 | Phần | Markdown | CSV | Trạng thái |
 | --- | --- | --- | --- |
 | 00 — inventory | [Báo cáo](./00-file-inventory.md) | [Dữ liệu](./00-file-inventory.csv) | Đã tạo, đối soát Git và phân owner |
-| 01 — OSD/PG | [Báo cáo](./01-osd-pg-recovery.md) | [CSV](./01-osd-pg-recovery.csv) | Đang phân tích |
+| 01 — OSD/PG | [Báo cáo](./01-osd-pg-recovery.md) | [CSV](./01-osd-pg-recovery.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 02 — BlueStore | [Báo cáo](./02-bluestore-bluefs.md) | [CSV](./02-bluestore-bluefs.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 03 — KV/block | [Báo cáo](./03-rocksdb-block-device.md) | [CSV](./03-rocksdb-block-device.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 04 — MON/CRUSH | [Báo cáo](./04-mon-osdmap-crush.md) | [CSV](./04-mon-osdmap-crush.csv) | Binary gate owner đã hoàn tất; lab còn mở |
-| 05 — messaging/auth | [Báo cáo](./05-messaging-auth-common.md) | [CSV](./05-messaging-auth-common.csv) | Đang phân tích |
+| 05 — messaging/auth | [Báo cáo](./05-messaging-auth-common.md) | [CSV](./05-messaging-auth-common.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 06 — config | [Báo cáo](./06-config-defaults.md) | [CSV](./06-config-defaults.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 07 — MGR | [Báo cáo](./07-mgr-modules-monitoring.md) | [CSV](./07-mgr-modules-monitoring.csv) | Đang phân tích |
-| 08 — cephadm | [Báo cáo](./08-cephadm-orchestrator.md) | [CSV](./08-cephadm-orchestrator.csv) | Đang phân tích |
+| 08 — cephadm | [Báo cáo](./08-cephadm-orchestrator.md) | [CSV](./08-cephadm-orchestrator.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 09 — ceph-volume | [Báo cáo](./09-ceph-volume-activation.md) | [CSV](./09-ceph-volume-activation.csv) | Binary gate owner đã hoàn tất; lab còn mở |
 | 10 — RADOS/RBD | [Báo cáo](./10-rados-rbd-clients.md) | [CSV](./10-rados-rbd-clients.csv) | Đang phân tích |
 | 11 — CephFS | [Báo cáo](./11-cephfs-mds.md) | [CSV](./11-cephfs-mds.csv) | Đang phân tích |
@@ -44,7 +44,7 @@ CSV dùng dấu `;`, UTF-8 BOM, CRLF và 21 cột chuẩn. Mỗi hàng là một
 
 Các kết luận nâng cấp cần có hunk, symbol ở hai endpoint, commit/test liên quan và điều kiện áp dụng. Chưa có kiểm chứng runtime hay thông tin As-Is cluster. Bộ này hiện **không** cung cấp quyết định GO/NO-GO production.
 
-Validator `--mode complete` đã qua cho layout, link và partition CSV. Gate cuối `--mode complete --require-impact binary` hiện **không qua** vì 3.675 hàng còn thiếu nhãn và lý do; đây là trạng thái có chủ đích, không phải coi các hàng ấy là `trivial`.
+Validator `--mode complete` đã qua cho layout, link và partition CSV. Gate cuối `--mode complete --require-impact binary` hiện **không qua** vì 2.805 hàng còn thiếu nhãn và lý do; đây là trạng thái có chủ đích, không phải coi các hàng ấy là `trivial`.
 
 ## Tái lập
 

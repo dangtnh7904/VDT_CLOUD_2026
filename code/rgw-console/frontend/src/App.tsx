@@ -249,6 +249,7 @@ function PerformanceView() {
   const [metric, setMetric] = useState<"iops" | "throughput">("iops");
   const [current, setCurrent] = useState<PerformanceSample | null>(null);
   const [history, setHistory] = useState<PerformanceSample[]>([]);
+  const [historyKind, setHistoryKind] = useState<"raw" | "rollup_1m" | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -264,6 +265,7 @@ function PerformanceView() {
     params.set("from", from.toISOString()); params.set("to", to.toISOString()); params.set("step", String(settings.step));
     const result = await api(`/performance/history?${params}`);
     setHistory(result.items || []);
+    setHistoryKind(result.sample_kind || null);
   };
   const load = async () => {
     setLoading(true);
@@ -317,7 +319,7 @@ function PerformanceView() {
       <div className="section-head"><div><h2>Performance history</h2><p>Read/write series · stale và reset không bị biến thành zero</p></div><div className="chart-legend"><span className="read">Read</span><span className="write">Write</span></div></div>
       <div className="performance-toolbar"><div className="segmented">{(["iops", "throughput"] as const).map(item => <button className={metric === item ? "active" : ""} onClick={() => setMetric(item)} key={item}>{item === "iops" ? "IOPS" : "Throughput"}</button>)}</div><div className="segmented">{(["5m", "1h", "24h"] as const).map(item => <button className={range === item ? "active" : ""} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div>
       <PerformanceChart samples={history.filter(sample => !sample.reset_detected && sample.state !== "STALE")} metric={metric} />
-      <footer className="performance-meta"><span>source <strong>{source}</strong></span><span>scope <strong>{current?.scope_type || scopeType}:{current?.scope || scope}</strong></span><span>samples <strong>{history.length}</strong></span><span>resolution <strong>{history[0]?.sample_kind === "rollup_1m" ? "1 minute rollup" : "raw"}</strong></span></footer>
+      <footer className="performance-meta"><span>source <strong>{source}</strong></span><span>scope <strong>{current?.scope_type || scopeType}:{current?.scope || scope}</strong></span><span>samples <strong>{history.length}</strong></span><span>resolution <strong>{historyKind === "rollup_1m" ? "1 minute rollup" : historyKind || "—"}</strong></span></footer>
     </section>
   </div>;
 }

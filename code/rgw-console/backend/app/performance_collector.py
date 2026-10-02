@@ -18,6 +18,22 @@ def _stop(*_args) -> None:
     stop_event.set()
 
 
+def collect_and_maintain_once() -> None:
+    try:
+        result = collect_performance_once()
+        logger.info("performance collection=%s", result)
+    except Exception:
+        logger.exception("performance collection failed")
+
+    # Application samples may have been stored before the Ceph scrape failed.
+    # Always roll them up so the 1h/24h history keeps advancing.
+    try:
+        maintenance = maintain_samples()
+        logger.info("performance maintenance=%s", maintenance)
+    except Exception:
+        logger.exception("performance maintenance failed")
+
+
 def main() -> None:
     settings = get_settings()
     initialize()
@@ -26,12 +42,7 @@ def main() -> None:
     try:
         maintain_samples(catch_up=True)
         while not stop_event.is_set():
-            try:
-                result = collect_performance_once()
-                maintenance = maintain_samples()
-                logger.info("performance collection=%s maintenance=%s", result, maintenance)
-            except Exception:
-                logger.exception("performance collection failed")
+            collect_and_maintain_once()
             stop_event.wait(settings.performance_collector_interval_seconds)
     finally:
         pool.close()
