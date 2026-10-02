@@ -35,7 +35,7 @@ finding_numbers = [int(number) for number in re.findall(
 assert finding_numbers
 change(readme, r"\[MGR-001(?:–\d+)?\]", f"[MGR-001–{max(finding_numbers):03d}]")
 change(readme, r"cho `\.mgr`/SQLite[^;]*;",
-       "cho `.mgr`/SQLite, progress event, Prometheus exporter, telemetry opt-in, crash health, Influx, Zabbix, Telegraf, MGR activation, OSD metadata, retry clock và reweight CLI;")
+       "cho `.mgr`/SQLite, progress event, Prometheus exporter, telemetry opt-in, crash health, Influx, Zabbix, Telegraf, MGR activation, OSD/device metadata, retry clock, reweight CLI, lỗi cấu hình module và Dashboard service/alert/CRUSH API;")
 change(readme, r"vì [\d.]+ hàng còn thiếu nhãn và lý do",
        f"vì {counts['']:,} hàng còn thiếu nhãn và lý do".replace(",", "."))
 plan = root.parent / "PLAN-pacific-16.2.15-to-quincy-17.2.7.md"

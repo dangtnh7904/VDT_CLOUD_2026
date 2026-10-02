@@ -98,6 +98,8 @@ export TARGET_IMAGE='quay.io/ceph/ceph@sha256:f15b41add2c01a65229b0db515d2dd5792
 export CLI_IMAGE="$TARGET_IMAGE"
 export RUN_ID='mon-20261001T092850Z-f9f494b7'
 export EVIDENCE='/home/dangg/mgr-mop-20260930T093558Z/evidence-mon-20261001T092850Z-f9f494b7'
+export CLI_CONFIG='/etc/ceph/ceph.conf'
+export CLI_KEYRING='/etc/ceph/ceph.client.admin.keyring'
 
 umask 077
 mkdir -p "$EVIDENCE"
@@ -108,19 +110,23 @@ set -o pipefail
 
 ### 4.2 Tạo hàm gọi Ceph
 
-Hàm `c` rút gọn cách gọi Ceph qua cephadm, dùng đúng FSID và image CLI đã chọn. Thư mục minh chứng trên host được đưa vào container tại `/evidence` để các lệnh xuất file có thể ghi đúng vị trí.
+Hàm `c` rút gọn cách gọi Ceph qua cephadm, dùng đúng FSID và image CLI đã chọn. Trước khi dùng, kiểm tra `CLI_CONFIG` đúng FSID và cả hai file tồn tại trên host; không đưa nội dung keyring vào hồ sơ. Thư mục minh chứng trên host được đưa vào container tại `/evidence` để các lệnh xuất file có thể ghi đúng vị trí.
 
 ```bash
 c() {
   sudo timeout --kill-after=5s 30s \
     cephadm --image "$CLI_IMAGE" shell \
     --fsid "$FSID" \
+    --config "$CLI_CONFIG" \
+    --keyring "$CLI_KEYRING" \
     --mount "$EVIDENCE:/evidence" \
     -- ceph "$@"
 }
 ```
 
 Giới hạn 30 giây áp dụng cho từng lệnh quản trị nhằm tránh terminal chờ vô hạn. Đây không phải thời hạn để MON hoàn thành redeploy. `CLI_IMAGE` chỉ chọn image chạy công cụ quản trị; daemon MON chỉ đổi phiên bản sau thao tác triển khai lại.
+
+Log gốc run 01/10 ghi bốn lần `cephadm shell` lỗi trong nhánh `_infer_config → list_daemons`: parser memusage gặp giá trị `--` và ném `ValueError`. Truyền `--config` tường minh bỏ qua nhánh tự suy luận đó theo mã cephadm trên lab. Đây là sửa cho lần chạy tiếp theo; chưa có lượt kiểm thực thi vì phiên SSH đọc evidence không có quyền `sudo` không tương tác. [Phân tích bốn mẫu và gate](<../test/MON-20261001-QUORUM-VA-GATE-CLOSEOUT.md>).
 
 Một số ảnh lab có dòng `Using recent ceph image trangtran97/ceph...`. Dòng này mô tả image của phiên CLI đang gọi lệnh. Phiên bản MON được xác định từ daemon đang chạy, như bảng kết quả trong ảnh cuối, không lấy từ dòng thông báo chọn image CLI.
 
@@ -366,7 +372,7 @@ Hồ sơ lab đính kèm chưa có minh chứng diễn tập failback MON. Vì v
 
 Ảnh trước MON cuối xác nhận quorum 3/3 sau khi đã nâng hai follower. Ảnh PG trong giai đoạn này ghi nhận `265 active+clean`, khoảng 18 GiB dữ liệu và 55 GiB đã sử dụng. Đây là số liệu tại thời điểm ảnh được chụp, không được sử dụng thay cho số liệu sau toàn bộ rollout.
 
-Ảnh log observer có bốn mẫu `ok=false, rc=1` tại 13:26:38Z, 13:31:35Z, 14:37:09Z và 14:41:28Z ngày 01/10/2026. Các mẫu này cho biết lệnh truy vấn quorum đã thất bại. Cần đối chiếu stderr, journal MON và log client cùng thời điểm để xác định nguyên nhân và tác động. Phần đánh giá được ghi tại MG6 của file GATE.
+Ảnh log observer có bốn mẫu `ok=false, rc=1` tại 13:26:38Z, 13:31:35Z, 14:37:09Z và 14:41:28Z ngày 01/10/2026. Log gốc xác định `cephadm` lỗi khi parse memusage `--` trong bước tự suy luận config, trước khi lệnh Ceph chạy. Cả bốn mốc trước lượt redeploy đầu tiên; các mẫu timeline liền kề vẫn ghi quorum 3/3. Phần đánh giá phạm vi tác động và gate được ghi tại MG6 của file GATE.
 
 ```bash
 # MINH CHỨNG MC08 — Quorum và trạng thái PG trong quá trình nâng

@@ -253,42 +253,54 @@ Dùng một terminal riêng cho mỗi luồng; terminal quản trị gửi lện
 
 ### 7.2 Quorum observer
 
-Chạy tại terminal quản trị riêng, đã khai báo `c` và `EVIDENCE`. Vòng lặp xác thực cả exit code lẫn nội dung JSON để tránh ghi thành công cho một mẫu không hợp lệ.
+Chạy tại terminal quản trị riêng, đã khai báo `c` và `EVIDENCE`. Hàm `c` trong MOP phải truyền `--config` và `--keyring` tường minh. Vòng lặp dưới đây là bản sửa sau khi đối chiếu run 01/10: tách mã trả về CLI với mã kiểm JSON và giữ stdout/stderr theo từng mẫu. Run 01/10 đã dùng vòng cũ, ghi chung `rc` và ghi đè `quorum-current.*`; không ghi ngược cấu trúc mới cho run cũ.
 
 ```bash
+mkdir -p "$EVIDENCE/quorum-raw"
 while [[ ! -e "$EVIDENCE/stop-quorum" ]]; do
   at=$(date -u +%FT%TZ)
+  sample_id=$(date -u +%Y%m%dT%H%M%S.%NZ)
+  raw="$EVIDENCE/quorum-raw/$sample_id"
+  cli_rc=0
   c quorum_status --format json \
-    > "$EVIDENCE/quorum-current.json" \
-    2> "$EVIDENCE/quorum-current.err"
-  rc=$?
+    > "$raw.json" 2> "$raw.cli.err" || cli_rc=$?
+  end_at=$(date -u +%FT%TZ)
 
-  if (( rc == 0 )); then
-    jq -e '(.quorum_names | type)=="array" and
-           (.quorum_leader_name | type)=="string"' \
-      "$EVIDENCE/quorum-current.json" >/dev/null
-    rc=$?
+  json_rc=-1  # JSON chưa kiểm vì CLI lỗi
+  if (( cli_rc == 0 )); then
+    json_rc=0
+    jq -ce --arg at "$at" --arg end_at "$end_at" \
+      'if ((.quorum_names | type)=="array" and
+           (.quorum_leader_name | type)=="string") then
+         {at:$at,end_at:$end_at,ok:true,quorum_names,
+          quorum_leader_name,election_epoch,quorum_age,
+          monmap_epoch:.monmap.epoch}
+       else error("invalid quorum schema") end' \
+      "$raw.json" > "$raw.timeline.json" 2> "$raw.json.err" || json_rc=$?
   fi
 
-  if (( rc == 0 )); then
-    jq -c --arg at "$at" \
-      '{at:$at,ok:true,quorum_names,quorum_leader_name,
-        election_epoch,quorum_age,monmap_epoch:.monmap.epoch}' \
-      "$EVIDENCE/quorum-current.json" >> "$EVIDENCE/quorum-timeline.jsonl"
+  if (( cli_rc == 0 && json_rc == 0 )); then
+    cat "$raw.timeline.json" >> "$EVIDENCE/quorum-timeline.jsonl"
   else
-    jq -nc --arg at "$at" --argjson rc "$rc" \
-      '{at:$at,ok:false,rc:$rc}' >> "$EVIDENCE/quorum-timeline.jsonl"
+    jq -nc --arg at "$at" --arg end_at "$end_at" \
+      --arg sample_id "$sample_id" \
+      --argjson cli_rc "$cli_rc" --argjson json_rc "$json_rc" \
+      '{at:$at,end_at:$end_at,ok:false,sample_id:$sample_id,
+        cli_rc:$cli_rc,json_rc:$json_rc}' \
+      >> "$EVIDENCE/quorum-timeline.jsonl"
     {
-      printf '\n%s rc=%s\n' "$at" "$rc"
-      cat "$EVIDENCE/quorum-current.err"
+      printf '\n%s sample=%s cli_rc=%s json_rc=%s\n' \
+        "$at" "$sample_id" "$cli_rc" "$json_rc"
+      cat "$raw.cli.err"
+      test ! -f "$raw.json.err" || cat "$raw.json.err"
     } >> "$EVIDENCE/quorum-errors.log"
-    echo 'HOLD: mẫu quorum lỗi, cần đối chiếu log'
+    echo 'HOLD: mẫu quorum lỗi, đối chiếu file quorum-raw theo sample_id'
   fi
   sleep 5
 done
 ```
 
-Chu kỳ giữa hai mẫu gồm thời gian gọi CLI và khoảng nghỉ 5 giây; không mặc định chính xác 5 giây. Việc mất mẫu cần được phân biệt với việc MON mất quorum.
+Chu kỳ giữa hai mẫu gồm thời gian gọi CLI và khoảng nghỉ 5 giây; không mặc định chính xác 5 giây. `json_rc=-1` nghĩa là bước kiểm JSON không chạy vì CLI đã lỗi. File `quorum-raw` giữ dữ liệu gốc của từng mẫu để điều tra, kể cả khi lệnh lỗi hoặc parser lỗi. Việc mất mẫu cần được phân biệt với việc MON mất quorum.
 
 ### 7.3 Client xác thực RBD và RGW
 
@@ -414,12 +426,14 @@ Tăng `election_epoch` là dấu hiệu đã có bầu chọn. Nó không tự c
 
 | Thời gian UTC ngày 01/10/2026 | Kết quả | Kết luận từ ảnh |
 | --- | --- | --- |
-| 13:26:38Z | `ok=false, rc=1` | Lệnh truy vấn quorum lỗi |
-| 13:31:35Z | `ok=false, rc=1` | Lệnh truy vấn quorum lỗi |
-| 14:37:09Z | `ok=false, rc=1` | Lệnh truy vấn quorum lỗi |
-| 14:41:28Z | `ok=false, rc=1` | Lệnh truy vấn quorum lỗi |
+| 13:26:38Z | `ok=false, rc=1` | Observer không thu được mẫu quorum hợp lệ |
+| 13:31:35Z | `ok=false, rc=1` | Observer không thu được mẫu quorum hợp lệ |
+| 14:37:09Z | `ok=false, rc=1` | Observer không thu được mẫu quorum hợp lệ |
+| 14:41:28Z | `ok=false, rc=1` | Observer không thu được mẫu quorum hợp lệ |
 
-Chưa đủ căn cứ gán nguyên nhân cho bốn mẫu này. Đối chiếu `quorum-errors.log`, stderr còn giữ, journal ba MON và `auth.csv`, `rbd.csv`, `s3.csv` cùng thời gian. Không mặc định đây là lỗi keyring, lỗi observer hoặc mất quorum nếu chưa có log tương ứng.
+Đã đọc file gốc qua SSH ngày 02/10: `quorum-errors.log` có đúng bốn traceback cùng nội dung, dừng trong `cephadm` tại `_infer_config → list_daemons → with_units_to_int` với `ValueError: could not convert string to float: '--'`. Collector gọi `cephadm shell` thiếu `--config`, khiến cephadm tự quét daemon và parse giá trị memusage `--` từ `docker stats`. Đây là lỗi đường gọi CLI/observer trước khi lệnh `ceph quorum_status` hoàn tất, không phải bằng chứng MON mất quorum. File stderr không gắn timestamp cho từng traceback; đối chiếu bốn mẫu theo số lượng và thứ tự ghi.
+
+Cả bốn mốc trước yêu cầu redeploy đầu tiên (`14:51:27Z`). Timeline gốc có 2.083 bản ghi, trong đó 2.079 mẫu hợp lệ đều quorum 3/3; các mẫu liền kề bốn lỗi giữ leader `ceph-master`, epoch 542. RBD CSV bao phủ bốn mốc và không ghi lỗi. Auth chỉ bắt đầu `14:25:21Z`, S3 bắt đầu `13:52:49Z`, nên hai luồng này không quan sát hai mốc đầu. Hai khoảng trống lớn trước rollout vẫn cần ghi rõ khi đánh giá MG3. [Bảng đối chiếu chi tiết và SHA-256 evidence](./MON-20261001-QUORUM-VA-GATE-CLOSEOUT.md).
 
 ```bash
 # Truy xuất mẫu lỗi từ file gốc, không sửa nội dung file.
@@ -433,7 +447,7 @@ sudo journalctl -u "ceph-$FSID@mon.$MON_ID.service" \
   --utc --no-pager
 ```
 
-Nếu xác định lỗi nằm ở công cụ thu thập và nguồn độc lập chứng minh dịch vụ vẫn hoạt động, ghi rõ nguyên nhân và bằng chứng thay thế. Nếu log không còn, giữ HOLD cho kết luận tính liên tục của khoảng đó. Kiểm tra tốt ở thời điểm hiện tại không bù được log lịch sử đã thiếu.
+Nguyên nhân bốn mẫu observer đã xác định. Điều này chỉ đóng câu hỏi về `rc=1`; kết luận tính liên tục và MG6 cần đối chiếu đủ cửa sổ, journal, client và các nhánh áp dụng. Kiểm tra tốt ở thời điểm hiện tại không bù được log lịch sử đã thiếu.
 
 ```bash
 # MINH CHỨNG GT01 — Xử lý bốn mẫu observer lỗi
@@ -576,22 +590,22 @@ Muốn xác nhận khả năng failback, cần hồ sơ diễn tập riêng gồ
 | Hai follower đã nâng trước leader | Ảnh 17 | Đã xác nhận; quorum 3/3, epoch 550 |
 | Ba MON sau nâng chạy 16.2.15 | Ảnh 20 | Đã xác nhận |
 | Image ID rút gọn sau nâng | Ảnh 20 | Cả ba là f15b41add2c0 |
-| Có mẫu truy vấn quorum lỗi | Ảnh 16 | Bốn mẫu rc=1 cần phân loại |
+| Có bốn mẫu observer lỗi | Ảnh 16 và log gốc | Đã phân loại là lỗi `cephadm` parse memusage `--`; chưa thay kết luận MG6 |
 
 ### 13.2 Trạng thái nghiệm thu theo điểm kiểm tra
 
 | Mã | Đã có bằng chứng | Cần bổ sung để đóng điểm kiểm tra | Trạng thái hồ sơ |
 | --- | --- | --- | --- |
-| MG0 | Cụm, phiên bản, quorum baseline | Inventory chi tiết, MGR active/standby, trạng thái action và hồ sơ phục hồi | HOLD |
+| MG0 | Cụm, phiên bản, quorum baseline; MGR active/standby đã đối chiếu từ file gốc | Inventory chi tiết, service spec, trạng thái action và hồ sơ phục hồi | HOLD |
 | MG1 | Image đích đã xác định | Clock, dung lượng, endpoint và RepoDigest trên từng host | HOLD |
 | MG2 | Public network và image mong muốn | Diff cấu hình đầy đủ, mask/OSD và sổ thay đổi | HOLD |
 | MG3 | Ảnh thiết lập các luồng theo dõi | Chuỗi mẫu baseline đủ thời gian, corpus và manifest trước nâng | HOLD |
 | MG4 ceph-node2 | Canary target; ảnh ok-to-stop | Mốc stop/rejoin, runtime digest, journal và khoảng ổn định | HOLD |
-| MG5 | Tổ hợp một MON target, hai MON base | Log 15 phút, CSV và kết quả canary | HOLD |
+| MG5 | Tổ hợp một MON target, hai MON base; quorum và CSV client trong cửa sổ canary | Corpus cố định, journal/map/store, diff cấu hình và review kết quả canary | HOLD |
 | MG4 ceph-node3 | Đã target trước MON cuối | Mốc stop/rejoin, runtime digest và khoảng ổn định | HOLD |
 | MG4 ceph-master | Ảnh chọn MON, rc=0; ảnh cuối target | Quorum sau bước cuối, runtime digest và thời gian trở lại | HOLD |
-| MG6 | Epoch và quorum ở các mốc; bốn mẫu lỗi | Nguyên nhân mẫu lỗi, leader target, client/journal; T11 rotation chưa có evidence | HOLD |
-| MG7 | Ba MON running 16.2.15 | Quorum/health sau cuối, CSV, checksum, thời gian theo dõi cuối | HOLD |
+| MG6 | Epoch và quorum ở các mốc; bốn mẫu observer đã phân loại riêng khỏi lỗi MON | Journal rollout trên hai follower, MON store/map và nhánh T11 rotation nếu áp dụng | HOLD |
+| MG7 | Ba MON running 16.2.15; quorum và RBD tiếp tục sau MON cuối | Auth/S3 của run 01/10 chưa đủ 30 phút; còn thiếu reopen/checksum, corpus, inventory/config/host state sau nâng | HOLD |
 | MG8 | Chưa có ảnh kết thúc/cleanup | Dừng probe, tài nguyên thử, hoàn nguyên và bàn giao | HOLD |
 
 Bảng này phản ánh mức đầy đủ của tài liệu được cung cấp. Kết luận về phiên bản là **đã hoàn thành nâng ba MON**. Kết luận nghiệm thu toàn bộ điều kiện vận hành được cập nhật khi đính kèm đủ file gốc.

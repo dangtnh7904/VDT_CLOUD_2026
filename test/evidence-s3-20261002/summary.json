@@ -1,0 +1,11 @@
+{
+  "run_id": "mon-s3-smoke-20261002T042757Z-4cc3dedd",
+  "first": "2026-10-02T04:27:58Z",
+  "last": "2026-10-02T04:29:56Z",
+  "ended": "2026-10-02T04:29:58Z",
+  "elapsed_seconds": 120.716,
+  "samples": 58,
+  "failures": 0,
+  "reopen": "PASS",
+  "cleanup": "PASS"
+}

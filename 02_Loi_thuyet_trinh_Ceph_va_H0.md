@@ -1,374 +1,165 @@
-# Lời thuyết trình báo cáo Ceph và kế hoạch lab H0
+# Lời thuyết trình: nghiên cứu phương án nâng cấp Ceph
 
 **Ngày cập nhật:** 02/10/2026  
-**Dùng cùng:** [Báo cáo kết quả và kế hoạch đến 30/11/2026](./01_Bao_cao_Ceph_Ket_qua_va_Ke_hoach_den_30_11_2026.md)  
-**Thời lượng:** khoảng 15–16 phút trình bày, dành 3–4 phút hỏi đáp  
-**Đối tượng:** lãnh đạo và quản lý kỹ thuật nội bộ
+**Dùng cùng:** [Báo cáo kết quả và kế hoạch đến 01/11/2026](./01_Bao_cao_Ceph_Ket_qua_va_Ke_hoach_den_30_11_2026.md)
+**Thời lượng:** khoảng 15–16 phút trình bày, 3–4 phút hỏi đáp; tổng 17–20 phút
+**Đối tượng:** hội đồng quản lý nội bộ, chưa cần biết sâu Ceph
 
-Phần lời nói chính đi theo 18 slide. Phần giải thích kỹ thuật và hỏi đáp phía sau dùng khi cần trao đổi sâu. Các mốc tháng 10–11 là kế hoạch triển khai đề xuất. Trạng thái đã làm lấy từ hồ sơ trong workspace đến ngày cập nhật.
+Phần chính đi theo 15 slide. Nói rõ đâu là kết quả đã có, đâu là việc cần kiểm trong lab và đâu mới là thiết kế H0. Khi hội đồng hỏi sâu, dùng phụ lục kỹ thuật cuối file.
 
-## Slide 1 Tiến độ hiện tại và đầu ra cuối tháng 11
+## Slide 1 Nghiên cứu phương án nâng cấp Ceph
 
-**Thời gian: 30 giây**
+**Thời gian: 20 giây**
 
-Em báo cáo tiến độ nghiên cứu và lab nâng cấp Ceph, cùng kế hoạch đến cuối tháng 11. Hiện đã có bộ phân tích Pacific, đang tiếp tục diff lên Quincy, đã thực hiện một phần nâng lab và xây dựng web hỗ trợ kiểm thử RBD, RGW.
+Em xin báo cáo kết quả sau một tháng nghiên cứu phương án nâng cấp Ceph và kế hoạch thử trên lab đến 01/11. Mục tiêu của buổi này là thống nhất đường nâng, cách kiểm và đầu ra; chưa xin triển khai trên cụm production.
 
-Mục tiêu cuối tháng 11 là bàn giao MOP đã kiểm chứng trên lab qua các chặng đến 18.2.7, kèm hồ sơ kết quả và lab prototype H0. Em trình bày phần đã làm trước, sau đó đi vào trình tự nâng, phạm vi H0 và các mốc nghiệm thu.
+## Slide 2 Vì sao thử nâng lên Reef 18.2.7?
 
-## Slide 2 Kết quả phân tích Pacific
+**Thời gian: 75 giây**
 
-**Thời gian: 40 giây**
+Điểm xuất phát của lab là Pacific 16.2.5. Nhánh Pacific đã hết hỗ trợ, nên giữ bản cũ làm khoảng cách với bản vá ngày càng lớn. Nhưng nâng hệ lưu dữ liệu không thể chỉ thay image: còn phải chứng minh ứng dụng vẫn đọc ghi được và cụm vẫn phục hồi được khi từng daemon thay phiên bản.
 
-Với Pacific 16.2.5 đến 16.2.15, em đã hoàn thành inventory 2.665 file thay đổi và bộ báo cáo theo 15 nhóm thành phần. Bộ hồ sơ đã qua acceptance về partition, ledger và cross-reference.
+Lộ trình qua Quincy cho phép kiểm riêng thay đổi mClock. Profile `balanced` phân bổ tài nguyên OSD giữa client và recovery/backfill/scrub; em sẽ đo độ trễ client cùng tốc độ recovery, không mặc định profile mới tốt hơn mọi workload. Reef cập nhật RocksDB và compaction, có thể giảm write amplification ở một số bài RGW; tác động trên cụm mình phải đo lại. Reef còn có read balancer phân bố primary PG theo cách offline, chỉ nên bật sau khi kiểm tương thích client.
 
-Kết quả sử dụng cho MOP là các finding có điều kiện kích hoạt và bài kiểm tương ứng. Ví dụ, cần kiểm mixed-version, migration state của cephadm, định dạng metrics, config thay đổi và tương thích client. Em đưa các điểm này vào preflight hoặc acceptance của đúng pha nâng.
+18.2.7 là tag cố định của lab. Bản này sửa BlueStore regression nghiêm trọng của Reef 18.2.5/18.2.6; không phải nói Pacific mắc lỗi đó. Reef đã hết hỗ trợ và 18.2.8 đã phát hành. Kết quả lab .7 phục vụ MOP; bản production cần quyết định riêng. [Phân tích thay đổi](./ceph-analysis.md), [vòng đời Ceph](https://docs.ceph.com/en/latest/releases/), [release note 18.2.7](https://ceph.io/en/news/blog/2025/v18-2-7-reef-released/).
 
-Số file cho biết phạm vi nghiên cứu. Kết luận vận hành còn phụ thuộc inventory, artifact và kết quả lab của cụm thực tế.
-
-## Slide 3 Tiến độ phân tích Quincy
-
-**Thời gian: 45 giây**
-
-Hiện em đang diff Pacific 16.2.15 với Quincy 17.2.7. Inventory có 4.179 file và đã tạo 15 cặp báo cáo. Ledger hiện có 852 file affect, 522 trivial, còn 2.805 file cần đọc và phân loại tác động. Strict binary gate chưa đạt.
-
-Phần tiếp theo tập trung vào các owner còn mở, gồm MGR, client, CephFS, RGW, build và validation. Mỗi affect phải có finding, bằng chứng và test case phục vụ nâng cấp.
-
-Hai tag thuộc hai release branch khác nhau. Vì vậy em kiểm thêm các backport chỉ nằm ở Pacific, tránh suy rằng đổi major sẽ giữ toàn bộ bản sửa của endpoint cũ. Đầu ra của công việc này là checklist U2 đủ bằng chứng để chạy lab.
-
-## Slide 4 Kết quả lab và vấn đề monitoring
-
-**Thời gian: 50 giây**
-
-Phần lab đã nâng osd.1 lên 16.2.15 sau khi chuyển PG sang osd.3, có kết quả 16 trên 16 mẫu khớp checksum trong MOP PA1. Hồ sơ ngày 01/10 cập nhật thêm MGR đã lên 16.2.15, nên tiến độ đã đi tiếp so với bản báo cáo trước.
-
-Ở monitoring, Prometheus target UP và timestamp của sample tăng, cho thấy vẫn nhận dữ liệu mới. Tuy nhiên metrics còn duplicate HELP và TYPE của ceph_pool_objects_repaired, promtool trả lỗi định dạng. Em giữ finding này mở dù chưa quan sát outage monitoring trong bài lab đó.
-
-Bước tiếp theo là lấy inventory mới, xác nhận đủ active và standby MGR cùng gate còn thiếu, xử lý đường quan sát, rồi chạy MOP MON. Hiện chưa có hồ sơ nghiệm thu toàn bộ cluster.
-
-## Slide 5 Công cụ web kiểm thử RBD và RGW
-
-**Thời gian: 40 giây**
-
-Web hiện hỗ trợ workload RGW, điều khiển job và thu telemetry. Với RBD, đã có lifecycle, file browser, terminal, baseline và verify.
-
-Validation ngày 24/09 ghi 73 backend, 14 Node và 4 frontend tests PASS. Bài RBD live tạo baseline cho bốn file, phát hiện overwrite, sau khi phục hồi thì checksum khớp lại. Bài này đã kiểm lifecycle và remount, chưa đổi phiên bản Ceph.
-
-Phần em phát triển tiếp là chọn scope OSD và PG, capability H0, receipt và coverage. Web sẽ giúp điều khiển bài lab và tập hợp evidence cho từng gate.
-
-## Slide 6 Hồ sơ MOP hiện có và phần cần hoàn thành
-
-**Thời gian: 35 giây**
-
-Workspace hiện có PRE-MOP MGR, các MOP MGR, OSD, PA1 và MOP MON v2 đi cùng bộ gate MG0 đến MG8. Đây là cơ sở để hoàn thiện quy trình từng chặng.
-
-Công việc còn lại là thống nhất bản MOP điều hành, đồng bộ baseline, chạy các bước chưa thực hiện và thu evidence. Sau đó em hoàn thiện MOP Quincy và Reef từ findings của từng cặp phiên bản.
-
-Một bước MOP cần có thao tác, expected result, điều kiện đi tiếp và cách xử lý khi lỗi. Khi bàn giao, từng gate phải truy được về log của run.
-
-## Slide 7 Lộ trình lab đến 18.2.7
-
-**Thời gian: 40 giây**
-
-Lộ trình lab giữ ba chặng: hoàn tất Pacific 16.2.15, nâng sang Quincy 17.2.7, rồi Reef 18.2.7. Sau mỗi chặng, em nghiệm thu toàn cluster, dữ liệu và dịch vụ trước khi mở chặng tiếp theo.
-
-Preflight kiểm backend store, image digest và tương thích host/client. Các yêu cầu RocksDB trước Quincy và BlueStore trước Reef cần xác nhận trên inventory.
-
-18.2.7 là đích thực nghiệm đã chọn cho kế hoạch này. Reef hiện đã hết hỗ trợ upstream và có bản 18.2.8. Khi đề xuất production, em sẽ đánh giá lại release được hỗ trợ và artifact phù hợp. [Nguồn release](https://docs.ceph.com/en/latest/releases/), [Quincy](https://docs.ceph.com/en/latest/releases/quincy/), [Reef](https://docs.ceph.com/en/latest/releases/reef/).
-
-## Slide 8 Trình tự và gate trong MOP
-
-**Thời gian: 45 giây**
-
-Với cephadm, khung nâng đi từ MGR, MON, crash, OSD, rồi các dịch vụ có trong inventory. MGR cần giữ active/standby và failover. MON nâng theo lượt, kiểm quorum và auth/client trước daemon kế tiếp. Trong pha OSD, em áp dụng PA1 và canary.
-
-MOP MON v2 hiện chọn redeploy từng MON để giới hạn đúng daemon và tự áp gate. Các chặng sau cũng cần kiểm hành vi thật của đường thao tác đã chọn.
-
-Gate bao gồm native safety, client I/O, dữ liệu và QoS. Thiếu evidence thì HOLD. Kết thúc chặng còn phải kiểm runtime version, soak và hoàn nguyên cấu hình thuộc run. [Nguồn cephadm](https://docs.ceph.com/en/pacific/cephadm/upgrade/) và MOP MON v2.
-
-## Slide 9 PA1 trong pha nâng OSD
-
-**Thời gian: 55 giây**
-
-Trong PA1 theo MOP DOCX, X là OSD cần nâng và S là spare. Em giữ X online khi chuyển placement sang S theo batch. Bản Markdown cũ còn dùng stop-first, nên cần đồng bộ MOP trước chạy. Trước khi dừng X, phải xác nhận mapping hội tụ, đủ bản, capacity/QoS và native ok-to-stop đạt.
-
-Sau khi X chạy đúng image mới, em trả một batch nhỏ về X, kiểm dữ liệu và dịch vụ khi X tham gia replica, sau đó kiểm primary canary. Chỉ mở rộng return khi đủ gate, rồi hoàn nguyên các override của run.
-
-Thời gian PA1 gồm cả drain, restart và return. Spare phải đúng failure domain và mapping. Sau khi trả dữ liệu về X, S có thể không còn giữ bản cập nhật. Khi X lỗi, quyết định giữ dịch vụ hay phục hồi phải dựa vào acting set và dữ liệu đang có tại thời điểm đó.
-
-## Slide 10 Bài toán kiểm chứng của H0
-
-**Thời gian: 55 giây**
-
-H0 bắt đầu từ câu hỏi về nguồn reference và ranh giới kiểm. BlueStore đã có checksum, Ceph có scrub và recovery. Phần em muốn kiểm chứng thêm là payload tại một điểm trong đường xử lý có còn khớp nội dung mà client dự định ghi, và bản local trên target sau movement có đúng generation hay không.
-
-Ví dụ lab tạo reference cho ABC. Sau đó fault injection làm buffer thành AXC ở một ranh giới xác định. Em kiểm lớp native hoặc H0 nào phát hiện trước và protected success có bị chặn đúng hay không.
-
-Hồ sơ chưa có bằng chứng cụm đã gặp đúng lỗi này. Lab cần chứng minh coverage bổ sung và đo chi phí. Reference cũng phải đủ tin cậy, vì dữ liệu sai trước khi tạo reference vẫn có thể tự khớp digest. [Thiết kế H0](./h0-new.md), [BlueStore checksums](https://docs.ceph.com/en/pacific/rados/configuration/bluestore-config-ref/#checksums).
-
-## Slide 11 Reference và thành phần H0
+## Slide 3 Cách xây phương án: 5 bước
 
 **Thời gian: 65 giây**
 
-Với H0-W, client hoặc adapter tạo Hclient trước primary. Digest đi cùng descriptor gắn với cluster, pool, object, generation, offset, length, request và policy revision. Như vậy, digest khớp nhưng gắn nhầm object hoặc generation vẫn bị loại.
+Em chia công việc thành năm bước. Một là khảo sát phiên bản, thành phần và đường dùng dữ liệu của RBD, S3; từ source diff rút ra tình huống có thể ảnh hưởng khi nâng. Hai là chụp trạng thái lab và tạo dữ liệu mẫu có thể kiểm lại. Ba là viết MOP, tức trình tự thao tác kèm điều kiện dừng và bài kiểm. Bốn là chạy thử từng chặng, từ daemon hoặc canary nhỏ rồi mới mở toàn cụm. Năm là đối chiếu log, dữ liệu và tải với tiêu chí đã chốt để ghi PASS, HOLD hoặc FAIL.
 
-Primary verifier kiểm final buffer của operation. Implementation phải giữ binding từ buffer đã hash đến mutation được submit. Nếu hash một bản sao rồi submit một buffer khác thì phép kiểm mất ý nghĩa. Descriptor cũng cần bảo vệ tính toàn vẹn và quyền thay đổi reference.
+Đầu ra của mỗi bước phải dùng được cho bước tiếp. Một daemon hiện `running` mới chứng minh nó khởi động; chưa chứng minh dữ liệu đúng hay workload S3/RBD đã chịu được chặng nâng.
 
-Operation state và receipt ghi native completion, verification stage và client result để xử lý retry/crash. Web chọn policy, kiểm capability và hiển thị evidence. Gate H0-W nằm trong data path của build Ceph thử nghiệm.
+## Slide 4 Cụm Ceph lab
 
-Tài liệu đang có ví dụ source Pacific. Em sẽ rà lại đúng tag 18.2.7 để chọn hook, completion và duplicate path cho prototype. Các thành phần này hiện là thiết kế, chưa có kết quả implementation.
+**Thời gian: 65 giây**
 
-## Slide 12 H0-W L1 L2 L3 và điều kiện ACK
+Sơ đồ này là lab ba host, không phải production. Ba MON giữ thông tin cụm và quorum; hai MGR vận hành, quan sát; năm OSD giữ dữ liệu; ba RGW nhận yêu cầu S3. Bài RBD đi từ client block storage, bài S3 đi qua RGW, rồi cuối cùng đều tới các OSD lưu dữ liệu.
+
+Ảnh trước nâng MON ngày 01/10 cho thấy cụm đang pha phiên bản: hai MGR và một OSD canary đã lên 16.2.15, các thành phần còn lại vẫn 16.2.5. Ảnh cuối run MON ghi ba MON chạy 16.2.15. Đây là ảnh của đúng thời điểm đó; trước run mới phải chụp lại inventory, image digest, health, PG — nhóm dữ liệu Ceph phân bố lên OSD — và đường client. Chưa thể gọi toàn cụm hoàn tất U1 chỉ vì MON đã lên bản đích.
+
+Nếu cần giải thích nhanh: MON giữ bản đồ và thành viên; MGR quản trị; OSD giữ các bản dữ liệu. Payload của một write bình thường không đi qua MON.
+
+## Slide 5 Kế hoạch nâng toàn cụm
 
 **Thời gian: 80 giây**
 
-Ba level mở rộng phạm vi kiểm trên đường ghi.
+Kế hoạch có ba hop: U1 từ 16.2.5 lên 16.2.15, U2 sang Quincy 17.2.7, U3 tới Reef 18.2.7 trên lab. Mỗi hop bắt đầu bằng preflight: version và image thực chạy, backend store, dung lượng, PG, quorum và baseline dữ liệu/tải. Sau đó nâng theo vai trò của cephadm: MGR, MON, OSD rồi RGW; crash và MDS được xử lý theo inventory nếu triển khai.
 
-L1 so final buffer tại primary với Hclient trước submit. Khi buffer khớp, operation tiếp tục theo native path. Protected success chỉ được trả sau native durable completion và các điều kiện của hợp đồng đã đạt.
+Ở MON, nâng từng daemon và kiểm quorum giữa các lần. Ở OSD, dùng canary PA1: chuyển một ít PG khỏi OSD X sang spare S, nâng X, trả một batch về X và quan sát recovery, dữ liệu, QoS trước khi mở rộng. Sau từng hop, chạy RBD và S3: thao tác thực, checksum hoặc reopen dữ liệu mẫu. Nếu đo tải, em sẽ lập bài fio/Warp mới với cùng profile trước và sau nâng; các lượt thực hành tháng qua không thuộc bài kiểm này. `HEALTH_OK` hoặc version đúng chỉ là một phần gate.
 
-L2 thêm verifier tại mọi replica bắt buộc. Tập participant phải được xác định và có capability phù hợp. min_size của pool không thay số participant cần evidence theo hợp đồng H0.
+U2 chỉ mở sau acceptance U1 và strict gate Quincy; U3 chỉ mở khi U2 đạt. Thiếu bằng chứng thì HOLD chặng kế tiếp. Đây là plan toàn cụm, không lấy kết quả MON làm kết quả cuối. [Cephadm upgrade](https://docs.ceph.com/en/reef/cephadm/upgrade/).
 
-L3 thêm local read-back sau commit ở primary và các replica bắt buộc. Reader phải đọc đúng generation/range và có bằng chứng về cache path. Một lượt PUT rồi GET qua client chưa đủ để chứng nhận L3.
-
-Nếu timeout hoặc thiếu evidence, request giữ trạng thái lỗi hoặc cần reconcile. Một operation có thể đã commit nhưng chưa verify, nên mã lỗi không chứng minh chưa ghi gì. Retry cũng phải giữ identity, reference và kết quả kiểm.
-
-Cuối cùng, ACK gate chỉ kiểm soát protected success. Nếu yêu cầu read khác không nhìn thấy generation chưa verified thì cần publication contract riêng. Prototype phải công bố rõ ranh giới này.
-
-## Slide 13 H0-R tại checkpoint PA1
-
-**Thời gian: 70 giây**
-
-H0-R kiểm dữ liệu sau recovery hoặc backfill. Trước movement, em chốt corpus bất biến, generation và H0-static. Baseline lấy từ dữ liệu đã lưu chứng minh tính không đổi từ checkpoint. Bài đầu kiểm soát writer để reference không stale.
-
-Sau movement, em thu mapping, acting set và native evidence mới. Prototype kiểm local X sau return. Reader phải chứng minh thực sự đọc bản trên X. Client GET có thể được peer khác phục vụ, dù checksum khớp vẫn chưa chứng nhận local X. Nếu kiểm thêm S sau drain thì cần receipt local S riêng.
-
-RETURN_VERIFIED là nhãn receipt đề xuất của H0, chỉ cấp cho object, generation và target đã kiểm. Với PA1, gate này kết hợp native safety và QoS để quyết định mở primary canary hoặc mở rộng return.
-
-H0-R kiểm corpus cũ sau movement. H0-W kiểm các ghi mới thuộc protected workload. Hai kết quả cần receipt riêng. Local reader là phần phải nghiệm thu trong lab H0, trước khi công bố target đã được kiểm.
-
-## Slide 14 Phạm vi lab H0 cuối tháng 11
+## Slide 6 Sau một tháng, em học được gì?
 
 **Thời gian: 65 giây**
 
-Để có lab chạy được đến cuối tháng 11, em đề xuất replicated RADOS và full-object write, dùng object ID mới cùng pool/namespace riêng. Em kiểm soát writer, từ chối overwrite/delete/partial write trong protected scope. Build thử nghiệm lấy từ tag 18.2.7, có commit patch và image digest riêng.
+Điều thứ nhất em rút ra là thay đổi release phải dịch thành bài kiểm cụ thể. mClock liên quan độ trễ client khi cụm recovery; RocksDB/BlueStore liên quan đường ghi và metadata. Số file thay đổi không nói được workload sẽ ra sao.
 
-Prototype gồm L1 tại primary với protected ACK gate, cùng H0-R tại X sau return PA1. Scope này khóa generation để kiểm reference binding, final buffer, native completion và local target.
+Điều thứ hai là Ceph có nhiều lớp bằng chứng. Quorum cho biết MON còn điều phối, PG và recovery cho biết các bản dữ liệu đang hội tụ, còn RBD/S3 cho biết client thật vẫn làm việc. Bài kiểm phải đi qua cả ba lớp với timestamp và run ID nối được sự kiện.
 
-Gate 25/10 kiểm build, descriptor transport/capability, hook và reader trên đúng tag. Ngày 08/11 cần trace ACK và reader qualification. Đến 18/11, các ca crash/retry/failover và đọc nhầm target phải có kết quả. Gate chưa đạt giữ HOLD để review cách xử lý.
+Điều thứ ba là canary và gate giúp khoanh lỗi. Thử một OSD, một nhóm PG và một workload trước; không đạt thì giữ phạm vi để điều tra. Lỗi công cụ quan sát cũng phải tách khỏi lỗi dịch vụ bằng log gốc và tín hiệu độc lập.
 
-L2/L3, H0-READ, RGW/RBD tổng quát, EC và partial write được giữ trong thiết kế mở rộng. Lab dùng operation/profile đã khai báo, có admission và receipt để thấy chính xác đã kiểm tới đâu.
+## Slide 7 Sau một tháng, em đã làm được gì?
 
-## Slide 15 Kiểm thử và đo chi phí H0
+**Thời gian: 65 giây**
 
-**Thời gian: 45 giây**
+Về phân tích, em hoàn thành bộ so sánh Pacific 16.2.5 lên 16.2.15 theo 15 nhóm thành phần, và đang tiếp tục diff 16.2.15 lên Quincy 17.2.7. Phần Quincy chưa đóng strict gate nên chưa được xem là điều kiện đã đạt để mở U2.
 
-Bộ test gồm write đúng, fault trước primary verifier, identity sai, native failure, timeout, retry/crash và H0-R đọc sai target. Mỗi ca phải xác nhận đúng stage phát hiện và client result, giữ mọi failed attempt.
+Về lab, hai MGR và một OSD canary đã lên 16.2.15. Bài PA1 với OSD canary có 16/16 mẫu checksum khớp. Ba MON cũng chạy 16.2.15 sau phiên ngày 01/10. Các OSD và RGW còn lại cùng bài kiểm toàn cụm vẫn là phần việc của chặng đầu, nên em chưa gọi chặng 16.2.5 lên 16.2.15 là hoàn tất.
 
-Đối chứng gồm upstream, build H0-off và L1, cùng workload và topology. Em giữ native checks hoạt động, ghi lớp nào phát hiện trước, rồi đo latency, throughput, CPU, I/O, network và headroom.
+Web kiểm thử RBD/RGW và bài validation đã có, dùng làm nền chạy workload và thu log. Đến thời điểm này U1 chưa hoàn tất; U2/U3 chưa có kết quả lab để công bố.
 
-Budget được chốt trước run. Hiện chưa có số đo overhead H0, nên báo cáo tháng 11 sẽ đưa số liệu cùng coverage và giới hạn của bài thử.
+## Slide 8 Thử tải RBD và RGW để học cách đo
 
-## Slide 16 Kế hoạch tháng 10 và tháng 11
+**Thời gian: 65 giây**
 
-**Thời gian: 55 giây**
+Em chạy fio trên RBD và thử Warp trên RGW để học cách tạo workload, thu số đo và nhận diện tham số cần cố định. Đây là bài làm quen công cụ **trước kế hoạch nâng**, không phải phép đo nghiệm thu U1/U2/U3. Với RBD, bài fio ngày 01/09 chạy `4K randrw`, 70% read, `iodepth=4`, 60 giây. Run ghi khoảng 1.510 read IOPS và 645 write IOPS, lỗi bằng 0.
 
-Đầu tháng 10, em xác nhận baseline, hoàn tất các gate MGR và phần còn lại của U1. Đến 25/10, mục tiêu là đóng diff Quincy, chuẩn bị checklist và artifact, đồng thời có build H0 cùng phương án transport/hook/reader. Nếu strict gate Quincy chưa đạt, U2 giữ HOLD để review và điều chỉnh lịch.
+Hồ sơ trình bày hiện chưa kèm raw log và tham số Warp, nên em chưa đưa con số RGW lên slide. Kinh nghiệm rút ra là khi làm benchmark phục vụ gate nâng cấp sau này, phải giữ cùng workload, tool version, số client, bucket/image test và thời lượng giữa baseline với sau nâng. Em sẽ nhìn IOPS/throughput cùng latency p95/p99, lỗi và recovery throughput. Số fio 01/09 và lần thử Warp này **không dùng làm kết quả before/after hoặc bằng chứng upgrade**.
 
-Từ cuối tháng 10 đến 08/11, em chạy U2 và nghiệm thu Quincy. Từ 09 đến 18/11, chạy U3 lên 18.2.7 và hoàn thiện demo H0 trên lab riêng.
+## Slide 9 Luồng ghi dữ liệu bình thường của Ceph
 
-Tuần 19 đến 25/11 dành cho rehearsal, fault matrix, số đo và sửa lỗi. Từ 26 đến 30/11 chốt MOP, evidence và demo bàn giao.
+**Thời gian: 65 giây**
 
-Source review và build có thể làm trong thời gian chờ lab. Trên mỗi cluster, em giữ một luồng thay đổi và chỉ mở rộng khi gate đạt.
+Ứng dụng gửi write qua RBD, S3/RGW hoặc librados. Client dùng bản đồ cụm để tìm PG và primary OSD hiện tại; MON cung cấp bản đồ nhưng không nằm giữa đường payload. Primary kiểm operation và điều phối ghi local cùng các replica. Mỗi OSD dùng BlueStore, có checksum ở local store. Các nhánh local và replica có thể tiến triển đồng thời, nên sơ đồ là luồng logic chứ không cam kết thứ tự callback cố định.
 
-## Slide 17 Phụ thuộc và xử lý khi gate không đạt
+Primary chỉ trả kết quả thành công khi điều kiện hoàn tất bền của native path đã đạt cho operation. Ceph đã bảo vệ nhiều loại lỗi; không nên mô tả nó như hệ thống chưa kiểm dữ liệu. Sơ đồ này là nền để đặt câu hỏi H0 ở slide sau. [Kiến trúc Ceph](https://docs.ceph.com/en/reef/architecture/), [luồng PA1–H0](./H0_Feature_Ket_hop_PA1_va_Web_Canary%20%283%29.md).
 
-**Thời gian: 45 giây**
+## Slide 10 Luồng đọc và phục hồi dữ liệu của Ceph
 
-Các phụ thuộc ảnh hưởng tiến độ gồm phần Quincy chưa phân loại, monitoring còn finding, capacity/failure domain của spare và môi trường build H0. Em đặt chúng vào gate sớm để xử lý trước lượt nâng hoặc demo.
+**Thời gian: 65 giây**
 
-Nếu hook, reader hoặc fault test H0 chưa đạt, em giữ verdict chưa đủ evidence, lưu state/reference và điều tra. Với nâng cấp, khi gate không đạt thì HOLD mở rộng và xử lý theo mapping, dữ liệu cùng rehearsal đã có.
+Ở đường đọc, client tìm PG và nhận dữ liệu từ OSD phục vụ request; BlueStore kiểm checksum local theo đường đọc của nó. Nếu một OSD vắng mặt hoặc placement đổi, Ceph dùng các bản còn lại để recovery/backfill sang nơi cần có bản sao. Sau hội tụ, PG có thể về `active+clean`; scrub/deep-scrub kiểm thêm tính nhất quán theo cơ chế native.
 
-Nguồn lực cần bố trí là lab ổn định, máy build, clone hoặc snapshot phục hồi và review kỹ thuật ở các mốc. Các điều kiện này quyết định khả năng giữ lịch cuối tháng 11.
+Trong PA1, em gọi OSD cần nâng là X và spare là S. PG chuyển khỏi X sang S; X được nâng; sau đó trả một batch nhỏ về X. Một GET từ client có thể do peer khác trả lời, nên dù GET khớp cũng chưa chứng minh chính bản local X sau return đã được đọc. Khác biệt này là lý do ý tưởng H0-R đặt sau recovery, trước khi mở primary canary của X.
 
-## Slide 18 Bộ đầu ra và tiêu chí bàn giao
+## Slide 11 Ý tưởng H0: ba mức kiểm trên đường ghi
 
-**Thời gian: 40 giây**
+**Thời gian: 80 giây**
 
-Đến 30/11, em đặt mục tiêu bàn giao bốn nhóm đầu ra: MOP lab đủ ba chặng đến 18.2.7, kết quả nâng lab, prototype H0 chạy lại được và báo cáo đánh giá.
+H0-W là **thiết kế đề xuất**. Trước khi write vào OSD, client hoặc adapter tạo `Hclient` từ payload dự định ghi, gắn với object, generation, range và request. Đây là reference từ trước ranh giới xử lý để so ở các điểm sau.
 
-MOP đi cùng log version/image, gate dịch vụ/dữ liệu, soak và xử lý lỗi. Lab H0 đi cùng mã nguồn, build, reference/receipt, demo L1 và H0-R trong scope đã chốt, cùng số đo đối chứng.
+Mức 1 so `Hclient` với final buffer ở primary ngay trước submit. Mức 2 thêm phép so ở buffer của từng replica bắt buộc. Mức 3 kế thừa hai mức trước, chờ native durable completion rồi đọc lại đúng bản local ở primary và replica bắt buộc **trước success ACK**. Mức cao hơn đòi hỏi nhiều điểm kiểm và chi phí hơn; không thể chỉ bật tùy chọn web là có L2/L3.
 
-Em đề xuất thống nhất phạm vi lab và nguồn lực, review tại 25/10, 08/11 và 25/11. Mỗi mốc review kiểm artifact và evidence để quyết định công việc kế tiếp.
+Ở cả ba mức, success của request được bảo vệ chỉ trả khi native completion và các phép kiểm của mức đã chọn đều đạt. Timeout hoặc thiếu evidence thì không báo success giả; operation có thể đã commit nên cần state và reconcile. Web/controller chọn scope, policy và thu evidence; ACK gate phải ở data path. [Ba mức và ACK](./H0_Feature_Ket_hop_PA1_va_Web_Canary%20%283%29.md).
 
-## Phụ lục A Giải thích kỹ thuật H0
+## Slide 12 Ceph hiện có gì, phần kiểm thêm nhằm làm gì?
 
-### Reference từ client và baseline của dữ liệu cũ
+**Thời gian: 70 giây**
 
-`Hclient` là digest của payload dự định ghi, tạo trước primary. Nó giúp kiểm sai lệch sau điểm tạo reference. Nếu client đã tạo payload sai theo nghiệp vụ rồi mới hash, digest không xác nhận được nội dung nghiệp vụ đúng.
+Ceph đã có replication, BlueStore checksum, recovery và scrub. H0 không thay các cơ chế này. Câu hỏi nghiên cứu là: nếu payload đổi sau khi client xác định nội dung mong muốn nhưng trước khi một điểm kiểm native tạo checksum, ta có thể đối chiếu nó với reference ban đầu ở đúng operation hay không?
 
-`H0-static` dùng cho corpus ổn định trước movement. Nếu baseline lấy bằng cách đọc dữ liệu đã lưu, nó chứng nhận trạng thái quan sát tại thời điểm lấy baseline. Receipt cần ghi rõ `reference_origin`, object/generation/range và thời điểm. Trạng thái dữ liệu cũ chưa có reference phải được hiển thị riêng.
+H0 đề xuất reference xuyên ranh giới client–primary–replica và receipt ghi rõ đã kiểm object/generation nào ở đâu. Đây là **giả thuyết coverage bổ sung**, chưa có bằng chứng cụm từng gặp đúng kiểu lỗi ấy và chưa có số đo lợi ích/chi phí. Lab cần fault injection ở vị trí khai báo, đối chiếu detector native với H0 và đo overhead. Nếu native phát hiện trước thì ghi native detection; không lấy kết quả đó làm thành tích H0.
 
-Điểm cần kiểm ở implementation là binding: reference, mutation identity và buffer được submit phải thuộc cùng operation. Digest đúng cho object A không xác nhận object B. Reference của generation cũ không chứng nhận generation mới. Một partial write chỉ có scope range đã khai báo, trừ khi hợp đồng kiểm còn bao gồm trạng thái kết quả toàn object.
+## Slide 13 Kiểm dữ liệu sau khi OSD hồi phục
 
-### Điều kiện protected success
+**Thời gian: 70 giây**
 
-Theo thiết kế [h0-new.md, mục 9](./h0-new.md):
+H0-R là nhánh khác H0-W. Nó kiểm corpus cũ sau khi PG recovery/backfill về OSD X trong PA1. Trước movement, controller chốt object, generation và `H0-static` của corpus ổn định. Sau return, đợi mapping và recovery hội tụ, chạy native scrub phù hợp rồi đọc **đúng bản local trên X** để so reference. Kết quả chỉ chứng nhận object/generation/target đã kiểm, không tự chứng nhận cả pool.
 
-```text
-C = reference, identity, policy, capability và recoverable state hợp lệ
-N = native durable completion đạt
-B = final primary buffer khớp reference
-V = buffer của mỗi replica bắt buộc khớp reference
-D = local read-back sau commit khớp reference, đúng generation/range
+Nếu chỉ chạy client GET, request có thể do peer phục vụ nên không được cấp nhầm receipt cho X. Nếu checksum không khớp hoặc reader không chứng minh local target, giữ gate return HOLD để điều tra. H0-R là ý tưởng bổ sung bằng chứng tại checkpoint PA1; nó không thay native recovery, không giữ payload tốt để tự repair. Đây là thiết kế cần kiểm chứng. [H0-R tại PA1](./H0_Feature_Ket_hop_PA1_va_Web_Canary%20%283%29.md).
 
-L1 success: C AND N AND B
-L2 success: C AND N AND B AND V tại mọi replica bắt buộc
-L3 success: C AND N AND B AND V AND D tại primary và replica bắt buộc
-```
+## Slide 14 Kế hoạch đến 01/11 và đầu ra
 
-Các nhánh có thể tiến triển đồng thời. Gate không giả định primary luôn commit trước replica. Implementation phải gắn evidence với participant/PG interval và giữ các điều kiện native. H0 error sau khi một nhánh tiến triển không đồng nghĩa mutation đã bị hủy ở mọi participant.
+**Thời gian: 75 giây**
 
-### Coverage và chi phí của từng level
+Từ 02–11/10, em chốt inventory và phần thiếu gate U1, hoàn thiện phân loại Quincy và MOP. Chỉ khi U1 cùng strict gate Quincy đạt mới mở U2 trong 12–18/10. Nếu U2 nghiệm thu được thì 19–25/10 chạy U3 tới 18.2.7. Từ 26–31/10, chạy lại RBD/S3, recovery, checksum, fio/Warp và thu log, số đo theo đúng profile. Ngày 01/11 review kết quả và demo; mốc này không biến hạng mục thiếu evidence thành PASS.
 
-| Level | Điểm kiểm | Phần cần nghiên cứu tiếp | Chi phí dự kiến cần đo |
-| --- | --- | --- | --- |
-| L1 | Final buffer primary so reference trước submit | Sai lệch sau điểm kiểm, replica/store và metadata ngoài scope | Hash, descriptor, state và gate |
-| L2 | Thêm buffer từng replica bắt buộc | Sai lệch store sau buffer check | Hash ở peer, protocol/result và coordination |
-| L3 | Thêm local read-back sau commit | Reader/cache contract, lỗi xuất hiện sau lần kiểm | Read I/O, hash, queue/memory và thời gian chờ |
+Đầu ra đề nghị là MOP lab ba hop có gate, inventory/version/image, log và bài kiểm dữ liệu/tải, cùng demo hướng H0 tại PA1 trên build thử nghiệm: H0-W L1, H0-R và Web/controller thu evidence. H0 là track thiết kế và thử nghiệm song song; L2/L3 chỉ mở khi có implementation và gate riêng. Để giữ lịch cần lab ổn định, máy build, clone hoặc snapshot phục hồi và người review mốc 11, 18, 25, 31/10. Em xin phê duyệt **phạm vi lab và nguồn lực**; chọn release production sẽ quyết định sau khi có evidence và đánh giá vòng đời hỗ trợ.
 
-Một bài fault cần khai báo vị trí so với cả native checks và H0 verifier. Nếu native đã phát hiện trước thì kết quả phải ghi native detection. Để chứng minh giá trị thêm của L2 hoặc L3, cần chỉ ra coverage riêng so với level thấp hơn và số đo chi phí tương ứng.
+## Slide 15 Cảm ơn các anh chị đã lắng nghe
 
-### Read-back đủ điều kiện cho L3
+**Thời gian: 15 giây**
 
-Reader phải chứng minh native durable completion đã đạt, đọc đúng local participant, đúng object/generation/range và không chỉ lấy lại buffer của request vừa kiểm. Phải công bố đường cache được dùng, cách ngăn kiểm nhầm generation khi overwrite và giới hạn quan sát của store/hardware.
+Em xin hết. Em mong hội đồng góp ý vào gate toàn cụm và phạm vi demo cần đạt ngày 01/11. Phần nào chưa đủ kết quả, em sẽ giữ đúng trạng thái HOLD trong hồ sơ bàn giao.
 
-Một GET qua client có thể đọc primary/peer phù hợp theo native path. Nó kiểm dữ liệu tại ranh giới client nhưng thiếu chứng cứ local read-back của từng participant. L3 cần evidence riêng tại primary và mọi replica bắt buộc. Reader chưa đủ hợp đồng thì giữ `READBACK_UNSUPPORTED` hoặc trạng thái thiếu evidence theo schema prototype.
+## Phụ lục A — Các điểm cần nói chính xác khi hỏi sâu
 
-### Commit verification visibility và ACK
+### Gate MON hiện tại
 
-| Trạng thái | Điều phải biết |
-| --- | --- |
-| Commit | Native storage completion đã xảy ra chưa? |
-| Verification | Các check của level đã đủ và match chưa? |
-| Visibility | Read khác có thể quan sát generation mới chưa? |
-| ACK | Client đã nhận kết quả operation nào? |
+Run 01/10 đã đưa ba MON lên 16.2.15; raw timeline có các mẫu quorum hợp lệ 3/3. Bốn `rc=1` xảy ra trước redeploy đầu tiên và traceback chỉ tới `cephadm` parse memusage `--` khi observer gọi CLI. Kết luận này không đóng MG0–MG8: còn thiếu preflight, journal và digest từng host, auth/S3 không đủ 30 phút sau MON cuối, cùng reopen/checksum và cleanup. Không dùng trạng thái hiện tại để điền lại evidence còn thiếu của run cũ. [MOP MON](./MOP/MOP-MON-16.2.5-to-16.2.15%20%281%29.md), [GATE MON](./test/GATE-MON-16.2.5-to-16.2.15%20%281%29.md), [đối chiếu observer](./test/MON-20261001-QUORUM-VA-GATE-CLOSEOUT.md).
 
-ACK gate của H0-W giữ protected success đến khi đủ điều kiện. Dữ liệu đã commit có thể đã visible theo native semantics trong thời gian chờ verify. Nếu workload yêu cầu chỉ phục vụ generation đã verified thì cần verified publication với version pointer có thể phục hồi và mọi read path tuân thủ. RBD ghi đè tại chỗ sẽ cần hợp đồng khác với object bất biến.
+### Bản chất kết quả fio/Warp
 
-Prototype tháng 11 công bố success gate của operation được hỗ trợ. Mọi tuyên bố về visibility cần evidence riêng. Nếu fault xảy ra sau commit, có thể phải giữ `COMMITTED_UNVERIFIED` hoặc `COMMITTED_MISMATCH` và reconcile, tùy kết quả đã biết.
+Bài fio 01/09 và lần thử Warp là để học cách chạy công cụ và dựng workload, không phải test/evidence của quá trình nâng cấp. Fio chạy RBD 4K randrw, 70% read, iodepth 4, 60 giây, 1.510 read IOPS, 645 write IOPS, error 0. Chưa có cặp số cùng workload trước/sau nâng nên không suy ra cải thiện hiệu năng. Warp đã được thử theo thông tin người thực hiện; raw log và tham số run chưa nằm trong bộ evidence hiện có, vì vậy không nêu throughput hoặc latency RGW. Bài acceptance tương lai phải pin tool version, command, topology, dataset/bucket test, thời lượng và cửa sổ so sánh.
 
-### Retry crash và failover
+### H0-W: điều kiện success theo mức
 
-Điểm khó của H0 nằm cả ở duplicate/completion path. Nếu request đã commit, mất reply rồi client retry, native duplicate state chưa đủ chứng nhận các check H0 đã đạt. Primary mới cần receipt bền hợp lệ, khả năng tiếp tục verification hoặc reverify đúng generation còn được giữ.
+`Hclient` phải tạo trước primary và bind đúng operation, object, generation, range, policy. Native durable completion luôn bắt buộc. L1 thêm final primary buffer match; L2 thêm replica buffer match ở mọi participant bắt buộc; L3 thêm local read-back sau durable completion ở primary và các replica bắt buộc. Reader phải chứng minh target/generation và công bố cache path. Client PUT/GET không đủ làm L3. Timeout/duplicate/failover cần trạng thái có thể reconcile; lỗi trả client không chứng minh mutation chưa commit. Các mức hiện là thiết kế, không gắn PASS khi chưa có build và test đúng điểm kiểm.
 
-Retry phải giữ logical request identity và expected payload. Cùng identity nhưng khác payload là xung đột cần phát hiện. Evidence từ acting set cũ không tự chứng nhận participant mới. Admission, deadline, maximum in-flight và reconcile budget cần được chốt để tránh giữ operation không giới hạn.
+### H0-R: reference và local target
 
-Nếu prototype chưa hỗ trợ một nhánh retry/failover, phải fence protected workload hoặc trả trạng thái chưa giải quyết theo hợp đồng. Bài lab vẫn phải chứng minh không false success trong nhánh đó. Chỉ có happy-path ACK chưa đủ nghiệm thu L1.
+`H0-static` dùng cho corpus ổn định trước movement; nó không thay `Hclient` của write mới. Receipt sau return chỉ có giá trị cho object/generation/range và OSD X mà reader đã kiểm. Nếu baseline được tạo bằng cách đọc bản đã lưu, nó chứng nhận trạng thái quan sát ở thời điểm tạo, không chứng minh dữ liệu nghiệp vụ vốn đúng. Native scrub và local verify phải ghi riêng. H0 không chứa payload nguồn để tự khôi phục; mismatch cần xác định peer/backup tốt theo evidence và dùng runbook phục hồi đã thử.
 
-### H0-R trong PA1
+### Vì sao giữ hop Quincy và tag lab 18.2.7?
 
-Trình tự đề xuất cho corpus bất biến:
+Release note 18.2.8 không còn khuyến nghị nâng trực tiếp Pacific lên Reef do xung đột feature bit có thể báo `OSD_UPGRADE_FINISHED` sớm; tài liệu không coi đó là bằng chứng data corruption. Quincy 17.2.7 là hop lab để quan sát riêng mClock, memory, backend và mixed-version compatibility. Reef 18.2.7 sửa BlueStore regression của Reef .5/.6, nhưng Reef đã EOL và .8 mới hơn. Đích 18.2.7 phục vụ bài lab tái lập, không mặc nhiên là version production. [Reef 18.2.8](https://ceph.io/en/news/blog/2026/v18-2-8-reef-released/), [vòng đời Ceph](https://docs.ceph.com/en/latest/releases/).
 
-1. Lưu manifest/reference, generation, object range và scope nguồn/đích.
-2. Thực hiện PA1/native movement theo MOP.
-3. Chờ mapping và native state phù hợp, thu evidence sau movement.
-4. Dùng reader đã nghiệm thu đọc local target.
-5. So với reference, ghi participant, PG interval, số byte và kết quả.
-6. Cấp `RETURN_VERIFIED` cho đúng scope nếu đủ điều kiện.
-7. Kết hợp gate dịch vụ/QoS trước canary hoặc mở rộng return.
+## Phụ lục B — Nguồn kỹ thuật
 
-H0-R mismatch làm dừng mở rộng và điều tra. Reference chỉ có digest/metadata nên nguồn phục hồi vẫn phải là payload tốt từ peer hoặc backup theo evidence. Repair/downgrade cần quyết định và rehearsal riêng.
-
-### Capability policy và web
-
-Ceph version và H0 capability là hai thuộc tính cần inventory riêng. Một primary chạy build H0 không khiến replica upstream tự có verifier. L2/L3 cần capability phù hợp trên toàn bộ participant bắt buộc. Request đã nhận L3 không được tự chuyển thành L1 success vì chậm hoặc thiếu peer.
-
-Policy revision áp dụng cho admission mới, còn operation đang dở giữ hợp đồng đã nhận. Web có thể hiển thị trạng thái chưa triển khai, có capability, đã cấu hình, đang kiểm, PASS, mismatch hoặc thiếu evidence. Đóng tab không được làm data path bỏ verification của request đã nhận.
-
-### Receipt và coverage
-
-Receipt tối thiểu giữ policy/revision, requested/satisfied level, reference origin/ID, request/attempt, object/generation/range, participant/role, PG interval, native state, stage/result, client result, build và timestamp. Với reader, thêm qualification. Payload nghiệp vụ không cần nằm trong log thường.
-
-Coverage phải ghi số operation/byte, participant, generation, khoảng thời gian, operation bị từ chối hoặc ngoài scope. Một lần verify sau đó PASS vẫn giữ mismatch và lịch sử attempt trước. Sampling cần thể hiện phần đã đọc và phần chưa đọc.
-
-### Lý do thu hẹp prototype
-
-RADOS object mặc định có thể bị overwrite. Prototype áp dụng pool/namespace riêng, object ID mới cho mỗi logical write và writer được kiểm soát. Protected scope từ chối overwrite/delete/partial write, retry giữ logical identity. Trong cửa sổ H0-R, corpus/generation được giữ bất biến. Phạm vi full-object write giúp nghiệm thu source hook, reference binding, native completion và trạng thái lỗi trước khi tích hợp các operation khác.
-
-RGW cần mapping logical object sang head/tail, multipart và version ID. RBD cần cache/flush, extent/snapshot và ordering. EC cần reference logical cùng shard/codeword, gồm cả parity, profile và reconstruction. Hash trực tiếp các representation khác nhau không tạo ra một hợp đồng kiểm đúng.
-
-Phạm vi tháng 11 là đề xuất kỹ thuật cho prototype. Kết quả của nó dùng quyết định mở rộng level/workload và đánh giá production sau này.
-
-## Phụ lục B Câu hỏi kỹ thuật dự kiến
-
-### Cuối tháng 11 sẽ nhận được những gì
-
-MOP lab đủ ba chặng đến 18.2.7, log và gate nghiệm thu, demo H0-W L1 và H0-R trong scope replicated RADOS đã chốt, cùng source/build/test report. Báo cáo ghi coverage, overhead, cách xử lý lỗi và các phần chưa hỗ trợ. Các đầu ra này có mốc review trước bàn giao để kiểm chứng tiến độ.
-
-### Tại sao vẫn chọn 18.2.7 khi Reef đã có 18.2.8
-
-18.2.7 là mốc lab đã chọn trong phạm vi dự án. Hồ sơ giữ nguyên mốc để nghiên cứu và tái lập. Quyết định production cần kiểm release được hỗ trợ, bản vá và tương thích thực tế. Reef hiện EOL upstream từ 20/03/2026. [Ceph release lifecycle](https://docs.ceph.com/en/latest/releases/).
-
-### Vì sao đi qua Quincy
-
-Chia chặng giúp kiểm tương thích và xác định lỗi theo từng release. Tài liệu Reef hiện cũng không còn khuyến nghị nâng trực tiếp Pacific sang Reef. Trước U2/U3, kiểm các điều kiện backend, client và artifact của đúng release. [Quincy upgrade](https://docs.ceph.com/en/latest/releases/quincy/), [Reef upgrade](https://docs.ceph.com/en/latest/releases/reef/).
-
-### Đã nâng MGR thì đã xong U1 chưa
-
-Hồ sơ 01/10 ghi MGR và một OSD đã nâng. U1 còn cần hoàn tất MON, crash, các OSD còn lại và dịch vụ trong inventory, rồi acceptance cuối chặng. Active MGR ở target cũng chưa thay bằng chứng đủ active/standby, module, failover và monitoring gate.
-
-### Monitoring đang UP thì có cần giữ finding mở
-
-Có. Mẫu mới chứng minh functional ingestion trong lần kiểm. promtool vẫn báo lỗi duplicate HELP/TYPE nên format compliance còn FAIL. MOP phải giữ lỗi này và kiểm parser/observer thực tế. Nếu dùng đường quan sát thay thế để tiếp tục lab, đường đó cần đủ signal, có evidence và guardrail. Nguồn: [test-gate.md](./test-gate.md), [MOP MON v2](./MOP/MOP-MON-16.2.5-to-16.2.15-v2.md).
-
-### Ceph đã có checksum thì H0 bổ sung gì
-
-H0 đề xuất mang reference từ trước ranh giới cần bảo vệ vào phép kiểm đúng operation/generation. Lab phải chứng minh coverage thêm ở primary, replica hoặc local target mà native evidence hiện tại chưa trả lời được cho workload đó. Giá trị nằm ở ranh giới, nguồn reference và evidence. Việc đổi thuật toán hash tự nó chưa chứng minh lợi ích.
-
-### Có bằng chứng cụm đã gặp payload sai nhưng checksum nội bộ vẫn khớp chưa
-
-Chưa có trong hồ sơ được cung cấp. Đây là mô hình lỗi nghiên cứu. Fault injection chỉ chứng minh detector và gate hoạt động trong điều kiện thử. Cần thêm pain point, nhu cầu workload và số đo để quyết định có nên mở rộng H0.
-
-### 16 trên 16 checksum có phải kết quả H0 không
-
-Đó là kết quả kiểm toàn vẹn của bài lab trước. H0-W cần reference binding, verifier trong data path, ACK gate và receipt của implementation. H0-R cần thêm bằng chứng local target. Kết quả checksum cũ vẫn giữ đúng giá trị trong phạm vi bài kiểm đã chạy.
-
-### Chỉ xây web có đủ làm H0-W không
-
-Web hỗ trợ cấu hình, capability và evidence. H0-W theo thiết kế mới cần tích hợp client/adapter, verifier, native completion và retry/duplicate path. Một công cụ ngoài Ceph làm PUT/GET có thể kiểm ở lớp client nhưng chưa chứng nhận primary/replica buffer gate.
-
-### L3 có chứng minh bytes đã nằm đúng trên media vật lý không
-
-L3 theo thiết kế kiểm local read-back dưới reader, cache, durability và phần cứng đã công bố. Tuyên bố chỉ đến mức đường đọc đó quan sát được. Phải có evidence về generation/range và cache path, không suy một kết quả read-back thành bảo đảm mọi tầng media hoặc lỗi tương lai.
-
-### H0 báo lỗi sau commit thì rollback dữ liệu được ngay không
-
-Commit và verification có thể khác trạng thái. Sau commit, mismatch cần giữ generation/reference, áp dụng visibility policy và reconcile. H0 không lưu payload để tự restore. Phục hồi phải chọn nguồn tốt bằng evidence và dùng runbook đã thử.
-
-### L1 đã ACK thì dữ liệu được bảo vệ mãi về sau không
-
-Receipt L1 chứng nhận các check tại operation đó. Lỗi sau lần kiểm cần cơ chế native, H0-READ hoặc H0-R theo reference còn được giữ. Mỗi hợp đồng phải công bố ranh giới thời gian và scope.
-
-### Làm thế nào chứng minh đúng OSD X sau PA1
-
-Giữ mapping/PG interval, generation và local-reader evidence của X. Bài F20 kiểm trường hợp client đọc peer khác và match để chắc chắn hệ thống không cấp nhầm RETURN_VERIFIED cho X. active+clean hoặc client checksum khớp là một phần evidence, chưa đủ target-local certification.
-
-### H0 có thể làm availability thấp đi không
-
-Có thể. Hash, read-back, coordination và reference dependency tăng tài nguyên và thời gian chờ. Strict participant policy có thể từ chối protected operation khi peer/verifier thiếu capability. Bài đo phải ghi timeout/rejection, throughput và headroom, cùng latency. Level chỉ được mở rộng khi lợi ích phù hợp chi phí workload.
-
-### Nếu tiến độ H0 trượt thì xử lý mốc cuối tháng 11 thế nào
-
-Gate 25/10 kiểm sớm build, descriptor transport/capability, hook và reader. Khi một hạng mục chưa đạt, em giữ HOLD, ghi dependency, patch/PoC đã có và phương án xử lý để review lịch. Track MOP upstream có gate riêng. Mục tiêu lab H0 giữ scope prototype đã chốt, các phần RGW/RBD/EC tổng quát nằm trong giai đoạn mở rộng.
-
-## Phụ lục C Chuẩn bị trước buổi trình bày
-
-- Cập nhật snapshot ledger Quincy nếu công việc diff tiến thêm sau ngày 02/10.
-- Lấy inventory mới: runtime version, image digest từng daemon, MGR active/standby, quorum, PG và upgrade status.
-- Chuẩn bị log version của OSD/MGR đã nâng, corpus và thời điểm của checksum run.
-- Mang evidence Prometheus target/sample mới và lỗi parser cùng lần kiểm.
-- Dùng ảnh web thật, giữ ngày validation và phạm vi chức năng đã chạy.
-- Thống nhất workload/budget lab, nguồn lực build/clone và người review kỹ thuật tại từng mốc.
-
-## Phụ lục D Nguồn sử dụng
-
-Trạng thái công việc và số liệu xem bản đồ nguồn trong [file báo cáo, Phụ lục C](./01_Bao_cao_Ceph_Ket_qua_va_Ke_hoach_den_30_11_2026.md). Thiết kế H0 dùng [h0-new.md](./h0-new.md), phần Việt v3.0 đầu tài liệu. Lịch triển khai, scope prototype và mốc review là đề xuất của bản báo cáo này.
+- [Báo cáo trạng thái và kế hoạch](./01_Bao_cao_Ceph_Ket_qua_va_Ke_hoach_den_30_11_2026.md) — số liệu nội bộ và mốc đề xuất.
+- [Phân tích thay đổi phiên bản](./ceph-analysis.md) — mClock, RocksDB, BlueStore, read balancer, lựa chọn tag.
+- [Thiết kế H0-W/H0-R kết hợp PA1](./H0_Feature_Ket_hop_PA1_va_Web_Canary%20%283%29.md) — ba mức, ACK gate và local return gate.
+- [Ceph Reef release notes](https://docs.ceph.com/en/latest/releases/reef/), [Ceph architecture](https://docs.ceph.com/en/reef/architecture/) và [Cephadm upgrade](https://docs.ceph.com/en/reef/cephadm/upgrade/) — cơ chế nền.

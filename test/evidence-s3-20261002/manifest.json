@@ -1,0 +1,8 @@
+{
+  "run_id": "mon-s3-smoke-20261002T042757Z-4cc3dedd",
+  "at_utc": "2026-10-02T04:27:58Z",
+  "bucket": "rgw-lab-data",
+  "endpoint": "http://10.20.20.11:8080",
+  "key": "mon-current/mon-s3-smoke-20261002T042757Z-4cc3dedd/probe.bin",
+  "scope": "current S3 smoke only; not 30-minute MON gate"
+}
