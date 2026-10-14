@@ -142,6 +142,7 @@ def runtime_config(request: Request):
     settings = get_settings()
     return {
         "console_read_only": settings.console_read_only,
+        "ceph_mutations_enabled": settings.upgrade_mutations_enabled,
         "application_version": os.environ.get("APP_VERSION", "3.0.0"),
         "environment": settings.app_env,
         "deployment_scope": os.environ.get("APP_DEPLOYMENT_SCOPE", ""),

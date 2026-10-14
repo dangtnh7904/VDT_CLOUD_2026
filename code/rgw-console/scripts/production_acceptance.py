@@ -387,8 +387,11 @@ class Harness:
                 or payload.get("deployment_id") != self.args.staging_project
                 or payload.get("console_read_only") is not True):
             raise AcceptanceError("TARGET_IS_NOT_EXPLICIT_PRODUCTION_READONLY_STAGING")
-        if any(payload.get("features", {}).get(key) is not False
-               for key in ("upgrade", "lab", "legacy_rgw", "legacy_rbd")):
+        # FEATURE_UPGRADE is the legacy internal name for enabling collectors,
+        # not authority to execute a Ceph upgrade. Check the real mutation gate.
+        if (payload.get("ceph_mutations_enabled") is not False or
+            any(payload.get("features", {}).get(key) is not False
+                for key in ("lab", "legacy_rgw", "legacy_rbd"))):
             raise AcceptanceError("MUTATION_FEATURES_NOT_DISABLED")
         role = payload.get("console_role")
         if role is not None and role != self.account.role:
