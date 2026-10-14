@@ -4,10 +4,10 @@ Cài thử nhanh trên Windows: xem [code/README.md](../../README.md). Lý thuy�
 
 ## Image sử dụng
 
-Bản tải từ Docker Hub là `5.1.1-rc.1`, Linux AMD64:
+Bản phát hành là `5.1.2-rc.1`, Linux AMD64:
 
 ```text
-dang7904/storage-lab-console@sha256:49f5284d27fd4defe2e2804e3b4eb06eaa3ac19352026622de3eae6c417fbe1f
+dang7904/storage-lab-console@sha256:35dd7b3d32b05ae6d726b1fe6b5875d47edbcf94f0481aebc25f83d81c9f79ee
 ```
 
 Dependency đã pin trong [.env.production.example](.env.production.example):
@@ -17,7 +17,7 @@ postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5
 nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
 ```
 
-Bản localhost `5.1.2-preview.1` chưa đăng Hub. Không dùng `latest`, không tự thay digest khi cài đặt. Kiểm image bằng `docker run --rm --network none <image-ref> version`.
+Không dùng `latest`, không tự thay digest khi cài đặt. Kiểm image bằng `docker run --rm --network none <image-ref> version`. Cài sạch localhost với `.env` đã giữ dùng `start-image-readonly.ps1` theo [README chính](../../README.md#cài-localhost-bằng-cấu-hình-đã-giữ); script không phụ thuộc container cũ.
 
 ## Cài vào hệ thống thật
 

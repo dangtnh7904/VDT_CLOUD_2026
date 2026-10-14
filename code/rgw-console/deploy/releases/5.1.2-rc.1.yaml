@@ -1,0 +1,49 @@
+schema_version: 1
+status: published_fresh_install_verification_pending
+validated_on: "2026-10-14"
+timezone: Asia/Saigon
+application:
+  version: 5.1.2-rc.1
+  reference: dang7904/storage-lab-console@sha256:35dd7b3d32b05ae6d726b1fe6b5875d47edbcf94f0481aebc25f83d81c9f79ee
+  linux_amd64_manifest: sha256:a743d5c4a89ab2e5803c383e373c5398d38ce9958150f63250a443597a7b6236
+  configuration_digest: sha256:fd729c1fcffd297eaac2c11e5ee32fe82dbe2d79bd1f363442be13c79e21377d
+  built_at: "2026-10-14T03:48:26Z"
+  source_revision: 9525d864d6da53641f3064fb451d11b8e1459535
+  published: true
+  database_schema: 21
+  collector_version: 1.0.5
+worker:
+  reference: dang7904/storage-lab-osdmap@sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  version: 16.2.15-minimal-preview.2
+  unchanged_from_previous_release: true
+  scope: lab_offline_only
+changes:
+  - Published daemon selection actions, compact source warnings, mixed-collection filters and cooperative cancellation from 5.1.2-preview.1.
+  - Added image-only localhost bootstrap using retained runtime configuration and secret files, without dependency on old containers.
+  - Installation-only README is separate from the theory document.
+  - Removed real deployment identity and SSH addresses from published example instructions.
+tests:
+  backend: {passed: 319, failed: 0, skipped: 0}
+  backend_environment: isolated_PostgreSQL_16_schema_21
+  backend_log: ../dist/5.1.2-rc1-backend.log
+  frontend: {passed: 31, failed: 0, skipped: 0}
+  typescript: PASS
+  ssr_component_contracts: {passed: 10, browser_acceptance: false}
+  executor: {passed: 31, failed: 0}
+  collector_helper: {passed: 26, failed: 0}
+  worker_guard_and_diagnostics: {passed: 43, failed: 0}
+  bootstrap_configuration: PASS
+security:
+  scanner: Docker_Scout_1.20.4
+  packages_indexed: 167
+  application_findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
+  report: ../dist/5.1.2-rc1-final-cves.md
+  scanner_note: Scan succeeded; Windows locked a temporary scanner archive during cleanup.
+acceptance:
+  docker_hub_publication: PASS
+  fresh_install_from_pulled_image: PENDING
+  full_production_acceptance: NOT_PASSED
+limitations:
+  - Worker residual security findings and the unresolved historical integration stability gate remain open.
+  - Second-cluster acceptance, ARM64, signing and long-duration concurrent load are not certified.
+  - Missing telemetry remains visibly partial; no synthetic performance values or Ceph mutation permission were added.

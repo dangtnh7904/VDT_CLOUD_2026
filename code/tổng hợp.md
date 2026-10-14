@@ -74,7 +74,7 @@ Số 0 có thể là giá trị hợp lệ, ví dụ PG count bằng 0. Nó khá
 
 Danh mục nhẹ phục vụ nhận diện, lọc, phân trang và chọn daemon. Thu sâu đọc thêm evidence/ngữ cảnh chi tiết, đặc biệt cho OSD; chi phí và thời gian cao hơn.
 
-Ở bản local 5.1.2-preview.1:
+Từ bản 5.1.2 (preview.1 và rc.1):
 
 - Mở Inventory đọc danh mục nhẹ, không tự thu sâu tất cả OSD.
 - Chọn daemon trong Chỉ số cụm có nút xem/xuất riêng. Kết quả mới nằm cạnh thao tác; danh mục toàn bộ không bị thu hẹp.
@@ -113,7 +113,7 @@ osd.2
 osd.5
 ```
 
-Trong bản local 5.1.2-preview.1, lọc OSD vẫn tìm thấy collection này nhưng chỉ hiện osd.2 và osd.5, kèm “2/3 daemon trong bộ gốc”. Lọc tiếp osd.2 chỉ hiện một daemon.
+Trong bản 5.1.2, lọc OSD vẫn tìm thấy collection này nhưng chỉ hiện osd.2 và osd.5, kèm “2/3 daemon trong bộ gốc”. Lọc tiếp osd.2 chỉ hiện một daemon.
 
 Đây là projection của bộ gốc, không sửa payload hoặc checksum của collection:
 
@@ -231,13 +231,13 @@ Tình trạng ngày 14/10/2026, Asia/Saigon:
 
 | Phạm vi | Phiên bản / trạng thái |
 |---|---|
-| Application đã đăng Docker Hub | 5.1.1-rc.1; dùng cho hướng dẫn cài máy mới |
+| Application đã đăng Docker Hub | 5.1.2-rc.1; dùng cho hướng dẫn cài máy mới |
 | Application localhost | 5.1.2-preview.1; chưa đăng Hub |
 | Worker lab/offline đã đăng Hub | 16.2.15-minimal-preview.2 |
 | Database schema | 21 |
 | Nghiệm thu production toàn bộ | Chưa đạt |
 
-Các nút xem/xuất daemon riêng, cảnh báo thu gọn, filter nội bộ collection hỗn hợp và cancellation mới mô tả ở trên là cải tiến của local preview; không coi việc pull Hub RC1 là đã có các cải tiến đó.
+Các nút xem/xuất daemon riêng, cảnh báo thu gọn, filter nội bộ collection hỗn hợp và cancellation mô tả ở trên có trong image Hub 5.1.2-rc.1. Bản 5.1.1-rc.1 cũ không có đầy đủ các cải tiến này.
 
 Bản local mới đã có 319 backend test với PostgreSQL không skip, 31 frontend test, TypeScript/build và 10 kiểm tra render component SSR đạt. SSR không thay thế kiểm Browser. Kiểm trực tiếp Browser theo phạm vi bản sửa đã đạt: xem/xuất hai daemon mới, lọc OSD trong bộ hỗn hợp, tải riêng osd.2 và so sánh đúng osd.2; dữ liệu gốc không đổi. Một smoke test hủy hai request rồi đọc lại trả 200 không phải kiểm tải dài hạn.
 

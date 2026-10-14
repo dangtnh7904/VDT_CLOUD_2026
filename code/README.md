@@ -27,7 +27,7 @@ Chạy trong `deploy`; thay đường dẫn key bằng file thật của máy:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$AppImage = 'dang7904/storage-lab-console:5.1.2-rc.1'
+$AppImage = 'dang7904/storage-lab-console@sha256:35dd7b3d32b05ae6d726b1fe6b5875d47edbcf94f0481aebc25f83d81c9f79ee'
 $SshKeyFile = 'C:/path/to/your/ssh_private_key'
 ./start-image-readonly.ps1 -Image $AppImage -SshKeyFile $SshKeyFile -ValidateOnly
 ./start-image-readonly.ps1 -Image $AppImage -SshKeyFile $SshKeyFile
@@ -58,7 +58,7 @@ Chạy từ thư mục `code`:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$AppImage = 'dang7904/storage-lab-console:5.1.2-rc.1'
+$AppImage = 'dang7904/storage-lab-console@sha256:35dd7b3d32b05ae6d726b1fe6b5875d47edbcf94f0481aebc25f83d81c9f79ee'
 docker pull --platform linux/amd64 $AppImage
 if ($LASTEXITCODE -ne 0) { throw 'Không tải được image' }
 docker run --rm --network none $AppImage version
