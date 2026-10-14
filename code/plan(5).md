@@ -822,6 +822,8 @@ Người dùng chọn staging trên máy hiện tại trước; chưa có SLO/RP
 
 ### Cập nhật sau khởi động lại Docker
 
+**Chốt RC staging:** đã phát hành `dang7904/storage-lab-console:5.2.0-rc.1`, index `98994c2ae671d70613bb33bc3932dff1058af52b016b13e0767c4682b6ae1342`, source `d1d43a28a644f8d079dec48d3c280d8377525ea8`; staging 8446 đã pin/pull đúng digest. Backend đóng gói Linux/PostgreSQL 446/446, executor đóng gói Node22 42/42, không skip; harness cuối 8/8, tải 40/40/p95 25.781s/error và 429=0. Giới hạn SSH chung 4 exec/32 chờ sửa channel pressure tái hiện 15/48 lỗi, kiểm lại 48/48 đạt. Ba fault cuối đạt; backup/restore riêng 6 As-is/audit/schema21/9 checksum đạt, restore 11.466s. SBOM/provenance trên Hub đúng revision, Scout 0 finding. Không thay tag cũ/latest hoặc localhost 8080; `.env`/DB cũ giữ nguyên. Chưa ký/chưa approve production; hai kết quả partial ở lượt tải đầu giữ FAIL, không gán nguyên nhân chưa được chứng minh. Các bullet dưới đây giữ checkpoint trung gian trước bản RC cuối.
+
 - Staging riêng HTTPS 8446 đã chạy production readonly flags, 3 account/RBAC và DB runtime role hạn chế; Linux + PostgreSQL **444/444 tests PASS, 0 skip**. Frontend 33/executor 31 đạt; Browser UAT/certificate tin cậy trên đích vẫn mở.
 - Smoke đọc/xuất mới/lưu As-is/lọc bộ hỗn hợp/so sánh cùng loại/actor/SHA đạt. Tải dài 2×20 đang chạy; các ngưỡng p95≤60s/error=0/429=0 vẫn là đề xuất.
 - Fault executor/DB/API thực đạt, hash collection/audit không đổi. Đã sửa nguyên nhân DB outage 500 plaintext: pool acquire/connect 5s, 503 JSON DATABASE_UNAVAILABLE, không che lỗi schema/lập trình; kiểm thật sau sửa history 503 trong 7.109s. Không fault daemon Ceph.

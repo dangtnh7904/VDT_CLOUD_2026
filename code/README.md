@@ -2,7 +2,41 @@
 
 README này chỉ hướng dẫn cài đặt, cấu hình và cập nhật image. Phần giải thích hệ thống nằm trong [tổng hợp.md](<tổng hợp.md>).
 
-Hướng dẫn dùng application `5.1.2-rc.1`, Linux AMD64. Không cần build lại source. Bản cài localhost chỉ đọc Ceph; bộ cài TLS cho môi trường khác ở phần bên dưới.
+Không cần build lại source; các image dưới đây dùng Linux AMD64. Mục đầu cài RC `5.2.0-rc.1` cho staging HTTPS/phân quyền; hướng dẫn lab `5.1.2-rc.1` đã có được giữ ở phần sau.
+
+## Cài RC 5.2.0 với HTTPS và ba tài khoản riêng
+
+Bản `5.2.0-rc.1` dành cho staging chỉ đọc, **chưa được chấp thuận production**. Không thay bộ cài 8080 hoặc `.env` đang có. Cần Docker Linux AMD64/containerd image store, Compose 2.30+, PowerShell 7.2+ và OpenSSL trên PATH. Chọn thư mục/project/cổng mới:
+
+```powershell
+git clone --branch codex/console-production-readonly https://github.com/dangtnh7904/VDT_CLOUD_2026.git storage-lab-console-staging-install
+Set-Location storage-lab-console-staging-install/code/rgw-console/deploy
+$ErrorActionPreference = 'Stop'
+$AppImage = 'dang7904/storage-lab-console@sha256:98994c2ae671d70613bb33bc3932dff1058af52b016b13e0767c4682b6ae1342'
+docker pull --platform linux/amd64 $AppImage
+if ($LASTEXITCODE -ne 0) { throw 'Không tải được image RC' }
+docker run --rm --network none $AppImage version
+if ($LASTEXITCODE -ne 0) { throw 'Không kiểm tra được image' }
+$DeploymentDirectory = 'D:/deploy/storage-lab-console-staging-new'
+./prepare-production-staging.ps1 -OutputDirectory $DeploymentDirectory -ApplicationImage $AppImage -SourceLabEnvFile 'D:/config/cluster.env' -SshPrivateKey 'C:/path/to/ssh_private_key' -PrometheusUrl 'http://mgr-active.lab.example:9283/metrics' -ProjectName storage-lab-console-staging-new -Port 8446
+if (-not $?) { throw 'Không tạo được cấu hình staging' }
+Set-Location $DeploymentDirectory
+docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly config --quiet
+if ($LASTEXITCODE -ne 0) { throw 'Cấu hình Compose chưa hợp lệ' }
+docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly pull
+if ($LASTEXITCODE -ne 0) { throw 'Không tải được dependency' }
+docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly up -d
+if ($LASTEXITCODE -ne 0) { throw 'Không khởi động được staging' }
+docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly ps -a
+curl.exe --cacert ./client/staging-ca.crt --user staging-viewer https://localhost:8446/api/ready
+if ($LASTEXITCODE -ne 0) { throw 'TLS/auth/readiness chưa đạt' }
+```
+
+Thay tất cả đường dẫn/hostname mẫu trước khi chạy. `cluster.env` là cấu hình riêng có FSID, SSH host/user, fingerprint đã xác minh và allowlist; có thể dùng `.env.local-readonly` hiện tại **chỉ cho cùng cluster lab**. Với cluster khác, tạo cấu hình riêng từ mẫu, không sao chép FSID/key/secret lab. Điền URL exporter từ MGR active đã xác minh, không dùng endpoint standby cũ. SSH/helper cần được cài đúng trước bước này; quyền production theo [hướng dẫn SSH](rgw-console/docs/PRODUCTION_SSH.md).
+
+Kết quả cần version `5.2.0-rc.1`, schema 21, `migrate`/`database-permissions` exit 0 và API/executor healthy. Tài khoản: `staging-viewer`, `staging-operator`, `staging-admin`; mật khẩu trong `client/viewer.password`, `client/operator.password`, `client/admin.password`. Xem riêng bằng editor, không gửi lên chat/Git hoặc đưa vào command line; `curl` hỏi mật khẩu. CA chỉ thử localhost, không được script cài vào trust store; browser/máy đích cần certificate được quản trị viên tin cậy, không bỏ kiểm TLS. Không bật profile `collectors` hoặc OSDMap worker trong bộ cài RC này.
+
+Trước cập nhật, chạy `backup-production.ps1` và `verify-production-backup.ps1` với thư mục output mới; chỉ đổi digest trong `.env` sau khi backup/restore đạt. Dừng bằng đúng lệnh Compose ở trên với `down`, **không thêm `--volumes`**. File `client`/`secrets`, backup và `.env` phải giữ private. Lý thuyết và giới hạn nghiệm thu nằm ngoài README, trong [tổng hợp.md](<tổng hợp.md>) và [biên bản nghiệm thu](rgw-console/docs/PRODUCTION_ACCEPTANCE_STATUS.md).
 
 ## Cài localhost bằng cấu hình đã giữ
 
