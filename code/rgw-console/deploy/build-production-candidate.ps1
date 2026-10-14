@@ -44,8 +44,14 @@ if ($Load) {
     if ([Version]::new([int]$Matches[1],[int]$Matches[2],[int]$Matches[3]) -lt [Version]::new(0,13,0)) { throw 'Buildx 0.13+ is required for OCI plus local-image exporters' }
     $driverStatusJson = & docker info --format '{{json .DriverStatus}}'
     if ($LASTEXITCODE -ne 0) { throw 'Docker Engine is not ready for local image loading' }
-    $driverStatus = $driverStatusJson | ConvertFrom-Json
-    if (-not @($driverStatus | Where-Object { $_[0] -eq 'driver-type' -and $_[1] -eq 'io.containerd.snapshotter.v1' })) { throw '-Load requires the containerd image store to retain attached attestations' }
+    # Keep the nested pair arrays intact; pipeline enumeration flattens them
+    # and incorrectly rejects a working containerd Docker Desktop store.
+    $driverStatus = ConvertFrom-Json -InputObject $driverStatusJson -NoEnumerate
+    $hasContainerdStore = $false
+    foreach ($driverPair in $driverStatus) {
+        if ($driverPair[0] -eq 'driver-type' -and $driverPair[1] -eq 'io.containerd.snapshotter.v1') { $hasContainerdStore = $true }
+    }
+    if (-not $hasContainerdStore) { throw '-Load requires the containerd image store to retain attached attestations' }
 }
 $outputPath = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $outputPath) { throw 'Output exists; refusing to replace a previous candidate' }
