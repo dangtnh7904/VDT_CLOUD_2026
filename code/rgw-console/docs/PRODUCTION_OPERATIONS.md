@@ -34,7 +34,17 @@ SSH exec của tất cả lượt xem/xuất/collector dùng chung admission: m�
 
 Đề xuất ban đầu: backup mỗi ngày 02:00, kiểm vận hành mỗi 5 phút, alert dung lượng host ≥85%, checkpoint backup quá 26 giờ; RPO ≤24 giờ và RTO ≤30 phút chỉ là mục tiêu đề xuất. Thời gian restore đo được và tuổi checkpoint không tự chứng minh toàn bộ RPO/RTO. Chưa tự xóa backup cũ; cần chốt dung lượng/retention và encryption/offsite.
 
-`run-production-maintenance.ps1` khóa chống hai lượt đồng thời, chọn Backup hoặc Check. `scripts/production_ops.py` kiểm HTTPS/auth/marker, trạng thái container, readiness, dung lượng host, tuổi backup và tùy chọn một fresh-read. Chỉ xuất JSON/exit code, không tự restart hoặc sửa Ceph. Host disk không đo được dung lượng Docker VM; cần alert riêng cho đĩa DB/evidence trên host đích.
+`run-production-maintenance.ps1` khóa chống hai lượt đồng thời, chọn Backup hoặc Check. `scripts/production_ops.py` kiểm HTTPS/auth/marker, trạng thái container, readiness, ổ chứa deployment/backup, tuổi backup đúng `source_project` và tùy chọn một fresh-read. Tuổi backup chỉ xét metadata format 1/COMPLETE; không thay kiểm checksum archive hoặc restore. Chỉ xuất JSON/exit code, không tự restart hoặc sửa Ceph.
+
+Probe filesystem xác minh project/container ID và nhãn named-volume `postgres-data`, `evidence`, `executor-state`, rồi chỉ chạy `df -Pk` tại đường dẫn cố định trong đúng container ID. Thiếu/sai nhãn/bind mount/đọc lỗi trả `UNAVAILABLE`, không coi như 0%/PASS. PostgreSQL và evidence bắt buộc; executor-state là NOT_RUN nếu chưa bật executor. Phần trăm báo cáo của `df` được giữ riêng; alert dùng giá trị lớn hơn giữa phần trăm đó và `ceil(used/(used+available)×100)` để không bỏ qua reserved blocks. Các volume có thể chung filesystem: không cộng tổng/free của các hàng.
+
+Trên Docker Desktop, filesystem Linux có thể là thin-provisioned: còn nhiều GB ảo không chứng minh ổ vật lý chứa VHD còn đủ chỗ. Thêm đường dẫn thư mục chứa đĩa Docker **đã xác minh trên máy** vào `-AdditionalHostStoragePath` của lượt Check, hoặc `--host-storage-path` của Python (có thể lặp, tối đa 8). Probe chỉ đọc dung lượng filesystem chứa thư mục; không di chuyển/compact/xóa VHD. Ví dụ kiểm riêng, không đăng ký scheduler:
+
+```powershell
+& ./run-production-maintenance.ps1 -Mode Check -DeploymentDirectory 'D:/deploy/storage-lab-console-staging-new' -BackupRoot 'D:/deploy/storage-lab-console-staging-new/backups' -Python 'C:/path/to/python.exe' -CaFile 'D:/deploy/storage-lab-console-staging-new/client/staging-ca.crt' -AuthUserFile 'D:/deploy/storage-lab-console-staging-new/client/accounts.json' -AdditionalHostStoragePath 'C:/path/to/verified/docker-disk-directory'
+```
+
+Task wrapper nhận alert và trả lỗi/nonzero có chủ đích; không hạ ngưỡng hoặc bỏ kiểm để tạo PASS. Chưa đo quota riêng của volume/inode, không tự tìm được mọi đĩa Docker ở host khác. Scheduler hiện không tự thêm đường dẫn storage bổ sung; phải cấu hình và kiểm thực đường dẫn trên host đích trước nghiệm thu.
 
 Windows: `register-production-maintenance.ps1` mặc định chỉ chuẩn bị; chỉ `-Install` mới đăng ký task current-user limited, không ghi password vào command line. Cần Docker Desktop và user đang đăng nhập. Trên Linux dùng scheduler của đơn vị gọi `pwsh -NoProfile -NonInteractive -File run-production-maintenance.ps1` với đường dẫn private config; service account chỉ cần quyền vận hành deployment riêng. Docker socket tương đương quyền mạnh trên host, không cấp cho tài khoản web. Kênh email/webhook/monitoring nhận JSON/exit code phải được chọn và thử gửi cảnh báo; chưa có kênh thì gate cảnh báo còn mở.
 

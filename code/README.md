@@ -12,6 +12,7 @@ Bản `5.2.0-rc.1` dành cho staging chỉ đọc, **chưa được chấp thu�
 git clone --branch codex/console-production-readonly https://github.com/dangtnh7904/VDT_CLOUD_2026.git storage-lab-console-staging-install
 Set-Location storage-lab-console-staging-install/code/rgw-console/deploy
 $ErrorActionPreference = 'Stop'
+$DeployScripts = (Get-Location).Path
 $AppImage = 'dang7904/storage-lab-console@sha256:98994c2ae671d70613bb33bc3932dff1058af52b016b13e0767c4682b6ae1342'
 docker pull --platform linux/amd64 $AppImage
 if ($LASTEXITCODE -ne 0) { throw 'Không tải được image RC' }
@@ -23,12 +24,12 @@ if (-not $?) { throw 'Không tạo được cấu hình staging' }
 Set-Location $DeploymentDirectory
 docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly config --quiet
 if ($LASTEXITCODE -ne 0) { throw 'Cấu hình Compose chưa hợp lệ' }
-docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly pull
+docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly pull --policy always
 if ($LASTEXITCODE -ne 0) { throw 'Không tải được dependency' }
 docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly up -d
 if ($LASTEXITCODE -ne 0) { throw 'Không khởi động được staging' }
 docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly ps -a
-curl.exe --cacert ./client/staging-ca.crt --user staging-viewer https://localhost:8446/api/ready
+curl.exe --fail --show-error --cacert ./client/staging-ca.crt --user staging-viewer https://localhost:8446/api/ready
 if ($LASTEXITCODE -ne 0) { throw 'TLS/auth/readiness chưa đạt' }
 ```
 
@@ -36,7 +37,19 @@ Thay tất cả đường dẫn/hostname mẫu trước khi chạy. `cluster.env
 
 Kết quả cần version `5.2.0-rc.1`, schema 21, `migrate`/`database-permissions` exit 0 và API/executor healthy. Tài khoản: `staging-viewer`, `staging-operator`, `staging-admin`; mật khẩu trong `client/viewer.password`, `client/operator.password`, `client/admin.password`. Xem riêng bằng editor, không gửi lên chat/Git hoặc đưa vào command line; `curl` hỏi mật khẩu. CA chỉ thử localhost, không được script cài vào trust store; browser/máy đích cần certificate được quản trị viên tin cậy, không bỏ kiểm TLS. Không bật profile `collectors` hoặc OSDMap worker trong bộ cài RC này.
 
-Trước cập nhật, chạy `backup-production.ps1` và `verify-production-backup.ps1` với thư mục output mới; chỉ đổi digest trong `.env` sau khi backup/restore đạt. Dừng bằng đúng lệnh Compose ở trên với `down`, **không thêm `--volumes`**. File `client`/`secrets`, backup và `.env` phải giữ private. Lý thuyết và giới hạn nghiệm thu nằm ngoài README, trong [tổng hợp.md](<tổng hợp.md>) và [biên bản nghiệm thu](rgw-console/docs/PRODUCTION_ACCEPTANCE_STATUS.md).
+Lệnh `pull --policy always` tải cả application, PostgreSQL và Nginx đã pin; giữ `RELEASE_PULL_POLICY=never` cho bước khởi động. Nếu đổi cổng ở tham số `-Port`, đổi URL kiểm tra tương ứng. Docker Linux containers trên Windows khác với Docker Engine trên host Linux; với host Linux, phải làm [bước quyền file secret](rgw-console/deploy/README.md#quyền-file-trên-host-linux) trước khi `up`.
+
+Trước cập nhật, gọi script từ thư mục repo đã lưu (script không được chép vào deployment):
+
+```powershell
+$BackupDirectory = Join-Path $DeploymentDirectory ('backups/backup-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
+& (Join-Path $DeployScripts 'backup-production.ps1') -DeploymentDirectory $DeploymentDirectory -OutputDirectory $BackupDirectory
+if (-not $?) { throw 'Backup chưa đạt; không cập nhật image' }
+& (Join-Path $DeployScripts 'verify-production-backup.ps1') -BackupDirectory $BackupDirectory -OutputDirectory ($BackupDirectory + '-restore-check')
+if (-not $?) { throw 'Diễn tập restore chưa đạt; không cập nhật image' }
+```
+
+Chỉ đổi digest trong `.env` sau khi backup/diễn tập restore đạt. `verify-production-backup.ps1` kiểm phục hồi vào DB/volume tạm riêng rồi dọn các đối tượng do nó tạo; **không phục hồi vào production**. Config/secret/role DB phải được sao lưu và phục hồi theo quy trình riêng. Dừng bằng đúng lệnh Compose ở trên với `down`, **không thêm `--volumes`**. File `client`/`secrets`, backup và `.env` phải giữ private. Lý thuyết và giới hạn nghiệm thu nằm ngoài README, trong [tổng hợp.md](<tổng hợp.md>) và [biên bản nghiệm thu](rgw-console/docs/PRODUCTION_ACCEPTANCE_STATUS.md).
 
 ## Cài localhost bằng cấu hình đã giữ
 

@@ -231,7 +231,7 @@ Tình trạng ngày 14/10/2026, Asia/Saigon:
 
 | Phạm vi | Phiên bản / trạng thái |
 |---|---|
-| Application đã đăng Docker Hub | 5.1.2-rc.1; dùng cho hướng dẫn cài máy mới |
+| Application đã đăng Docker Hub | 5.2.0-rc.1 cho staging HTTPS/phân quyền; chưa nghiệm thu production |
 | Application localhost | 5.1.2-rc.1; cài sạch bằng image tải lại từ Hub |
 | Worker lab/offline đã đăng Hub | 16.2.15-minimal-preview.2 |
 | Database schema | 21 |
@@ -268,3 +268,5 @@ Endpoint có HTTP 200 chưa chắc có metric: MGR standby có thể trả body 
 Staging có production flags không đồng nghĩa đã nghiệm thu production. Cần kiểm secret/DB role, HTTPS và tài khoản thật, tải/cancellation/restart, restore checksum/audit/evidence, scheduler/cảnh báo và image supply chain trên môi trường nhận. CA localhost, SSH account lab, unit test/mock, test bị skip hoặc file script chưa chạy đều không đóng gate môi trường đích. Worker OSDMap có phạm vi và gate riêng.
 
 Sau khi Docker chạy lại ngày 14/10/2026, staging HTTPS/auth/DB role, Linux tests, fresh metric/export/comparison, fault executor/DB/API và restore payload/audit đã kiểm thực tế. Đây vẫn không phải chấp thuận production: cần authority SSH tối thiểu, certificate/metric/backup/cảnh báo/SLO và signer policy của hệ thống đích. Provenance phải đọc đúng checkout sạch, không chỉ tin label VCS_REF. Backup/restore cần đối chiếu dữ liệu và audit, không chỉ thành công ở lệnh dump; volume rỗng không chứng minh đã kiểm linkage non-empty. [Biên bản cụ thể](rgw-console/docs/PRODUCTION_ACCEPTANCE_STATUS.md) giữ kết quả/giới hạn và report lỗi lịch sử; [quy trình vận hành](rgw-console/docs/PRODUCTION_OPERATIONS.md) mô tả tải/backup/phát hành. README chỉ dùng cho cài image.
+
+Dung lượng cần phân biệt ba lớp: filesystem chứa DB/evidence trong container, ổ vật lý chứa VHD Docker và ổ lưu backup. Thin provisioning có thể báo nhiều free ảo trong Linux trong khi ổ host đã gần đầy. Các volume chung filesystem không có ba phần dung lượng độc lập để cộng. Monitor kiểm nhãn/ID trước khi đọc, giữ phần trăm `df` gốc và tính ngưỡng bảo thủ từ used/available; thiếu nguồn/sai số liệu là UNAVAILABLE, không phải 0. Tuổi backup phải đúng project, nhưng vẫn không chứng minh checksum/khả năng restore. Kiểm thực hiện tại: volume báo 6% (ngưỡng bảo thủ 7%), ổ C chứa VHD 90.40%, ổ D deployment/backup 86.26%; gate dung lượng còn HOLD với ngưỡng đề xuất 85%, không tự xóa dữ liệu để tạo PASS.

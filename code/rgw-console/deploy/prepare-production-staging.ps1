@@ -133,4 +133,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Staging certificate signing failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Staging certificate verification failed' }
 Write-Host "Prepared isolated staging (not started): $outputPath"
 Write-Host "URL: https://localhost:$Port"
+if (-not $IsWindows) {
+    Write-Warning 'Linux host: generated file secrets retain host ownership; Compose uid/gid/mode does not fix bind-mounted secret permissions. Before starting, apply and verify the Linux file-permission procedure in deploy/README.md. Do not make secrets world-readable.'
+}
 Write-Host 'No source .env changes, no global certificate trust installation. Reused lab SSH authority is NOT least-privilege acceptance.'

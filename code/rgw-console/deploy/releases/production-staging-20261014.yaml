@@ -107,10 +107,20 @@ checks:
   operations_probe:
     status: ALERT
     alerts: [HOST_DISK_HIGH]
-    host_disk_used_percent: 86.24
+    host_disk_used_percent: 86.26
+    docker_backing_host_disk_used_percent: 90.40
     proposed_alert_percent: 85
     latest_backup_healthy: true
-    docker_vm_disk_measured: false
+    docker_vm_volume_filesystem_measured: true
+    docker_vm_volume_df_reported_percent: 6
+    docker_vm_volume_conservative_alert_percent: 7
+    named_volume_and_full_container_identity_verified: true
+    shared_filesystem_values_not_summed: true
+    volume_quota_and_inode_measured: false
+    backup_age_source_project_verified: true
+    backup_age_is_not_archive_integrity_or_restore_verification: true
+    operations_units: {windows_python_3_10: 21, linux_python_3_12: 21, status: PASS}
+    capacity_acceptance: HOLD_BOTH_BACKING_AND_BACKUP_HOST_STORAGE_ABOVE_PROPOSED_85_PERCENT
     scheduler_registered: false
     alert_delivery_channel: NOT_CONFIGURED
   retained_historical_failures:
@@ -149,6 +159,7 @@ release:
   source_commit_for_new_candidate: d1d43a28a644f8d079dec48d3c280d8377525ea8
   dirty_user_checkout_and_index_preserved: true
 pending:
+  - resolve_host_storage_capacity_without_unauthorized_data_deletion
   - run_actual_slow_or_lost_SSH_drills_and_sustained_approved_load
   - rehearse_nonempty_evidence_and_config_secret_role_recovery
   - install_and_verify_dedicated_SSH_account_key_and_readonly_CephX_caps
@@ -162,6 +173,8 @@ evidence:
   ssh_guard: ../../docs/PRODUCTION_SSH.md
   private_runtime_reports: retained_locally_not_committed
   receipts_sha256:
+    latest_filesystem_and_backing_host_probe: 9ddee3f089475af6b544102e0e4b86e90434399c5ee3fe33d07de02d7be8f66c
+    linux_operations_filesystem_units: 9f6a78c3dce70ecabe2da3d3a361832c890ecf3da73942661b59448f410c7c23
     latest_fault_drill: acb740b812274654f8a7cbe4c026aab3c7e475933ac7ca65e8c1da827f1cb854
     final_backup_metadata: fc1a0f14ee561b13c986ad0429e4917b7a38ce37e7f83cf8e00a13df860681a5
     final_restore: 04a3832da5bd1b22e016026f2775fbbbc5faad061ca3b1edd60af2f9a4da73c4

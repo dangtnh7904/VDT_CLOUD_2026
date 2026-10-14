@@ -7,7 +7,8 @@ param(
     [string]$Python = 'python',
     [string]$CaFile,
     [string]$AuthUserFile,
-    [string]$DaemonKey
+    [string]$DaemonKey,
+    [string[]]$AdditionalHostStoragePath = @()
 )
 $ErrorActionPreference = 'Stop'
 $deploymentPath = (Resolve-Path -LiteralPath $DeploymentDirectory).Path
@@ -29,6 +30,7 @@ try {
         if (-not $CaFile -or -not $AuthUserFile) { throw 'Check requires CA and client account file paths, not inline credentials' }
         $arguments = @((Join-Path $PSScriptRoot '../scripts/production_ops.py'), '--deployment-directory', $deploymentPath, '--backup-root', $backupPath, '--ca-file', $CaFile, '--auth-user-file', $AuthUserFile, '--report', (Join-Path $backupPath "ops-$run.json"))
         if ($DaemonKey) { $arguments += @('--daemon-key', $DaemonKey) }
+        foreach ($storagePath in $AdditionalHostStoragePath) { $arguments += @('--host-storage-path', $storagePath) }
         & $Python @arguments
         if ($LASTEXITCODE -ne 0) { throw 'Operations alert: inspect the JSON report; no services were restarted' }
     }

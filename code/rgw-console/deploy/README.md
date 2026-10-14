@@ -4,10 +4,10 @@ Cài thử nhanh trên Windows: xem [code/README.md](../../README.md). Lý thuy�
 
 ## Image sử dụng
 
-Bản phát hành là `5.1.2-rc.1`, Linux AMD64:
+Bản RC staging chỉ đọc hiện tại là `5.2.0-rc.1`, Linux AMD64, **chưa được chấp thuận production**:
 
 ```text
-dang7904/storage-lab-console@sha256:35dd7b3d32b05ae6d726b1fe6b5875d47edbcf94f0481aebc25f83d81c9f79ee
+dang7904/storage-lab-console@sha256:98994c2ae671d70613bb33bc3932dff1058af52b016b13e0767c4682b6ae1342
 ```
 
 Dependency đã pin trong [.env.production.example](.env.production.example):
@@ -18,6 +18,8 @@ nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545a
 ```
 
 Không dùng `latest`, không tự thay digest khi cài đặt. Kiểm image bằng `docker run --rm --network none <image-ref> version`. Cài sạch localhost với `.env` đã giữ dùng `start-image-readonly.ps1` theo [README chính](../../README.md#cài-localhost-bằng-cấu-hình-đã-giữ); script không phụ thuộc container cũ.
+
+Bộ cài localhost cũ `5.1.2-rc.1`/digest `35dd7b…` vẫn được giữ riêng, không tự cập nhật. Khi tạo deployment mới từ `.env.production.example`, thay `STORAGE_LAB_CONSOLE_IMAGE` bằng digest RC ở trên; không dùng binary cũ cho overlay ba tài khoản. Để cài staging ba tài khoản, làm theo [mục RC trong README chính](../../README.md#cài-rc-520-với-https-và-ba-tài-khoản-riêng); ví dụ cấu hình thủ công bên dưới là một tài khoản nếu chưa thêm `compose.access-control.yml` và `console_users.json`.
 
 ## Cài vào hệ thống thật
 
@@ -55,6 +57,26 @@ Với bundled DB, URL migration trỏ tới database `storage_lab_console` tại
 
 Trên Linux, bind-mounted secret phải đọc được bởi UID/GID app `10001:10001`, TLS key bởi ingress `101:101`, nhưng không world-readable. Trường `uid/gid/mode` của Compose không tự đổi quyền file host. Kiểm ánh xạ quyền nếu dùng rootless/user namespace. Trên Windows, giới hạn ACL thư mục secret. SSH private key chỉ mount vào executor.
 
+### Quyền file trên host Linux
+
+Chỉ áp dụng cho **deployment mới** do `prepare-production-staging.ps1` tạo, Docker Engine rootful không remap UID. Script chỉ giới hạn thư mục ngoài; quản trị viên phải đặt quyền file thật trước `up`. Từ đúng thư mục deployment đã xác minh, chạy các đường dẫn cố định sau; không dùng chmod/chown đệ quy hoặc áp lên thư mục source/DB đang chạy:
+
+```bash
+chmod 700 ./client ./secrets
+chmod 600 ./.env ./client/accounts.json ./client/viewer.password ./client/operator.password ./client/admin.password ./client/staging-ca.key
+chmod 755 ./config ./config/profiles ./nginx
+chmod 644 ./config/profiles/production.yaml ./nginx/production.conf
+sudo chown 10001:10001 ./secrets/database_url ./secrets/migration_database_url ./secrets/database_runtime_password ./secrets/console_users.json ./secrets/console_password_hash ./secrets/executor_token ./secrets/ssh_private_key ./secrets/ssh_known_hosts
+sudo chmod 400 ./secrets/database_url ./secrets/migration_database_url ./secrets/database_runtime_password ./secrets/console_users.json ./secrets/console_password_hash ./secrets/executor_token ./secrets/ssh_private_key ./secrets/ssh_known_hosts
+sudo chown 101:101 ./secrets/tls_private_key.pem ./secrets/tls_certificate.pem
+sudo chmod 400 ./secrets/tls_private_key.pem
+sudo chmod 444 ./secrets/tls_certificate.pem
+sudo chown 70:70 ./secrets/postgres_password
+sudo chmod 400 ./secrets/postgres_password
+```
+
+UID 70 dành cho image PostgreSQL Alpine đã pin ở trên; kiểm lại nếu thay image. Không áp numeric UID trên rootless/user namespace hoặc Windows bind mounts; phải có ánh xạ đã kiểm riêng. Trước khởi động, dùng đúng image/overlay để thử `test -r` từng secret trong container theo UID thực, không `cat` secret; mọi file bắt buộc phải đọc được, không world-readable trên host Linux. Nếu một bước thất bại, dừng cài đặt, không nới thành `chmod 777`. CA thử nghiệm không phải certificate production tin cậy. [Giới hạn quyền file secret của Compose](https://docs.docker.com/reference/compose-file/services/#secrets).
+
 Chạy từ thư mục deployment:
 
 ```powershell
@@ -85,7 +107,9 @@ Trong `.env` và profile:
 - Giữ `CONSOLE_READ_ONLY=true`, `UPGRADE_MUTATIONS_ENABLED=false`, `LAB_ALLOW_WRITE=false`; tắt legacy RGW/RBD, terminal và Lab.
 - Sau preflight, đặt `FEATURE_UPGRADE=true`.
 
-Chuẩn bị management host có Python 3.6+, Ceph CLI/config/keyring được phép đọc. Cấp SSH key riêng đúng phạm vi; xác minh host key qua kênh tin cậy rồi ghi vào `secrets/ssh_known_hosts`. Không bỏ strict host-key checking, không coi `ssh-keyscan` chưa đối chiếu là xác minh.
+Với RC staging/production, quản trị viên cài tài khoản/key/CephX riêng, forced-command guard và helper root-owned theo [PRODUCTION_SSH.md](../docs/PRODUCTION_SSH.md), cần Python 3.10+. Không dùng helper do SSH user sửa được, sudo Ceph rộng hoặc key lab làm bằng chứng quyền tối thiểu. Xác minh host key qua kênh tin cậy; không coi `ssh-keyscan` chưa đối chiếu là xác minh.
+
+Các bước helper trong home và profile `collectors` bên dưới là **luồng lab cũ**, không thay quy trình quyền production ở trên. Lab helper cần Python 3.6+ và quyền đọc Ceph phù hợp.
 
 Lấy helper từ chính image đã pin, từ thư mục deployment:
 
