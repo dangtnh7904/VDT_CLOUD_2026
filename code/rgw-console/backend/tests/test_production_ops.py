@@ -42,5 +42,22 @@ class ProductionOpsTests(unittest.TestCase):
         rows[0]['Config']['Labels']['com.docker.compose.project']='other'
         with patch('production_ops.run_docker',side_effect=['abcde0123456',json.dumps(rows)]), self.assertRaises(AcceptanceError): container_checks(project)
 
+    def test_powershell_utc_z_checkpoint_is_supported_on_python_310(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = root/'backup-powershell'; item.mkdir()
+            stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + '0Z'
+            (item/'backup-metadata.json').write_text(json.dumps({'status':'COMPLETE','started_at':stamp}))
+            self.assertTrue(backup_age(root,26)['healthy'])
+
+    def test_malformed_checkpoint_shape_does_not_crash_monitor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = root/'backup-invalid'; item.mkdir()
+            for row in ([], None, {'status':'COMPLETE','started_at':42},
+                        {'status':'COMPLETE','started_at':'not-a-timestamp'}):
+                (item/'backup-metadata.json').write_text(json.dumps(row))
+                self.assertFalse(backup_age(root,26)['healthy'])
+
 
 if __name__ == '__main__': unittest.main()

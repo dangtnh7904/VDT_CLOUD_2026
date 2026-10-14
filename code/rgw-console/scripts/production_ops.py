@@ -77,10 +77,16 @@ def backup_age(root: Path, maximum_hours: float) -> dict:
             continue
         try:
             row = json.loads(path.read_bytes())
-            if row.get('status') != 'COMPLETE':
+            if (not isinstance(row, dict) or row.get('status') != 'COMPLETE'
+                    or not isinstance(row.get('started_at'), str)):
                 continue
             # started_at is conservative: completed_at is not a data checkpoint.
-            stamp = datetime.fromisoformat(row['started_at'])
+            # PowerShell emits Z and seven fractional digits. Python 3.10
+            # accepts +00:00 and at most six digits; conservatively discard
+            # sub-microsecond precision, never a timezone or whole second.
+            iso = row['started_at'].replace('Z', '+00:00')
+            iso = re.sub(r'(\.\d{6})\d+(?=[+-]\d{2}:\d{2}$)', r'\1', iso)
+            stamp = datetime.fromisoformat(iso)
             if stamp.tzinfo is None:
                 continue
             latest = max(latest, stamp) if latest else stamp

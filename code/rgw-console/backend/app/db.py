@@ -4,17 +4,27 @@ from typing import Any, Iterator
 from uuid import UUID
 
 from psycopg.rows import dict_row
+from psycopg import InterfaceError, OperationalError
 from psycopg_pool import ConnectionPool
 
 from .config import get_settings
 from .migrations.runner import assert_schema_current
+from .platform.database_errors import DatabaseUnavailableError, is_connection_unavailable
+
+
+# Bound waiting for a connection, not execution time of a valid SQL statement.
+# The production fault drill previously inherited psycopg_pool's 30s default,
+# which produced an unhandled plaintext HTTP 500 when PostgreSQL was stopped.
+DATABASE_ACQUIRE_TIMEOUT_SECONDS = 5.0
+DATABASE_CONNECT_TIMEOUT_SECONDS = 5
 
 
 pool = ConnectionPool(
     conninfo=get_settings().database_url,
     min_size=1,
     max_size=10,
-    kwargs={"row_factory": dict_row},
+    timeout=DATABASE_ACQUIRE_TIMEOUT_SECONDS,
+    kwargs={"row_factory": dict_row, "connect_timeout": DATABASE_CONNECT_TIMEOUT_SECONDS},
     open=False,
 )
 
@@ -44,10 +54,16 @@ def initialize() -> None:
     ``python -m app.migrate`` before starting either process.
     """
 
-    pool.open(wait=True)
+    conn = None
     try:
-        with pool.connection() as conn:
+        pool.open(wait=True, timeout=DATABASE_ACQUIRE_TIMEOUT_SECONDS)
+        with pool.connection(timeout=DATABASE_ACQUIRE_TIMEOUT_SECONDS) as conn:
             assert_schema_current(conn)
+    except (OperationalError, InterfaceError) as exc:
+        pool.close()
+        if is_connection_unavailable(exc, conn, acquiring=conn is None):
+            raise DatabaseUnavailableError() from None
+        raise
     except Exception:
         pool.close()
         raise
@@ -55,10 +71,16 @@ def initialize() -> None:
 
 @contextmanager
 def connection() -> Iterator[Any]:
-    if pool.closed:
-        initialize()
-    with pool.connection() as conn:
-        yield conn
+    conn = None
+    try:
+        if pool.closed:
+            initialize()
+        with pool.connection(timeout=DATABASE_ACQUIRE_TIMEOUT_SECONDS) as conn:
+            yield conn
+    except (OperationalError, InterfaceError) as exc:
+        if is_connection_unavailable(exc, conn, acquiring=conn is None):
+            raise DatabaseUnavailableError() from None
+        raise
 
 
 def _rgw_target_id(bucket: str, object_key: str | None) -> str:

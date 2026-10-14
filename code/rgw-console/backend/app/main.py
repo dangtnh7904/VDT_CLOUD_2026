@@ -26,6 +26,7 @@ from .api.performance import router as performance_router
 from .api.health import router as health_router
 from .config import get_settings
 from .platform.security.middleware import ConsoleSecurityMiddleware
+from .platform.database_errors import DatabaseUnavailableError
 from .corpus import CATEGORY_ALIASES, choose_random, classify, describe, resolve_corpus_path
 from .db import connection, initialize, json_ready, pool, record_operation
 from .models.domain import IdempotencyClaimRequest, IdempotencyDisposition, IdempotencyState
@@ -183,6 +184,19 @@ async def invalid_scope_handler(request: Request, exc: InvalidScopeError):
             }
         },
     )
+
+
+@app.exception_handler(DatabaseUnavailableError)
+async def database_unavailable_handler(request: Request, exc: DatabaseUnavailableError):
+    # A single contract applies to history, saved export, comparison and local
+    # collection metadata operations. Do not turn DB failures into empty data.
+    return JSONResponse(status_code=503, headers={"Cache-Control": "no-store", "Retry-After": "2"},
+        content={"detail": {
+            "request_id": getattr(request.state, "request_id", None),
+            "code": exc.code,
+            "message": exc.message,
+            "retryable": True,
+        }})
 
 
 @app.exception_handler(IdempotencyError)

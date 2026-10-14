@@ -13,6 +13,17 @@ $ErrorActionPreference = 'Stop'
 $backupPath = [IO.Path]::GetFullPath($BackupDirectory)
 $metadata = Get-Content -LiteralPath (Join-Path $backupPath 'backup-metadata.json') -Raw | ConvertFrom-Json
 if ($metadata.format_version -ne 1 -or $metadata.status -ne 'COMPLETE' -or $metadata.schema_version -lt 1 -or $metadata.schema_version -gt 9999) { throw 'Unsupported or incomplete backup metadata' }
+# PowerShell 7.5+ materializes JSON ISO timestamps as DateTime by default.
+# Re-parsing their culture-dependent string representation breaks on hosts
+# whose date order differs; retain an existing typed instant, parse strings
+# only with an explicit invariant ISO-compatible format.
+if ($metadata.started_at -is [DateTime]) {
+    $backupStartedAt = $metadata.started_at.ToUniversalTime()
+} elseif ($metadata.started_at -is [DateTimeOffset]) {
+    $backupStartedAt = $metadata.started_at.UtcDateTime
+} else {
+    $backupStartedAt = [DateTimeOffset]::Parse([string]$metadata.started_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).UtcDateTime
+}
 $operationId = [guid]::NewGuid().ToString('N')
 $restoreTimer = [Diagnostics.Stopwatch]::StartNew()
 $restoreStartedAt = [DateTime]::UtcNow
@@ -110,6 +121,7 @@ print(json.dumps({'role':name,'files_verified':len(observed),'registry_links_ver
 '@
 $volumeResults = @()
 $registryCount = 0
+$failureStage = 'CREATE_ISOLATED_RESTORE_TARGETS'
 try {
     foreach ($role in @('db') + @($metadata.volumes | Where-Object status -eq 'BACKED_UP' | ForEach-Object role)) {
         if ($role -notin @('db', 'evidence', 'executor-state')) { throw 'Unexpected volume role in backup metadata' }
@@ -118,6 +130,7 @@ try {
         $createdVolumes += $volumeName
     }
     Invoke-Docker @('run', '-d', '--name', $dbContainer, '--label', "storage-lab-console.rehearsal=$operationId", '--network', 'none', '-e', 'POSTGRES_USER=storage_lab_console', '-e', 'POSTGRES_DB=storage_lab_console', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', '--mount', "type=volume,source=$prefix-db,target=/var/lib/postgresql/data", $metadata.postgres_image_id) | Out-Null
+    $failureStage = 'WAIT_FOR_ISOLATED_DATABASE'
     $ready = $false
     for ($attempt=0; $attempt -lt 60; $attempt++) {
         & docker exec -u postgres $dbContainer pg_isready -U storage_lab_console -d storage_lab_console *> $null
@@ -125,11 +138,13 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Fresh rehearsal PostgreSQL did not become ready' }
+    $failureStage = 'RESTORE_DATABASE_DUMP'
     Invoke-Docker @('cp', (Join-Path $backupPath 'database.dump'), "${dbContainer}:/tmp/database.dump") | Out-Null
     Invoke-Docker @('exec', '-u', '0', $dbContainer, 'chown', 'postgres:postgres', '/tmp/database.dump') | Out-Null
     Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'pg_restore', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '--exit-on-error', '--no-owner', '--no-acl', '/tmp/database.dump') | Out-Null
     $schema = [int](Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '-c', 'SELECT max(version) FROM schema_migrations'))
     if ($schema -ne [int]$metadata.schema_version) { throw 'Restored schema version does not match the source checkpoint' }
+    $failureStage = 'VERIFY_AS_IS_AND_AUDIT_CHECKPOINTS'
     if ($schema -ge 21) {
         if ($metadata.audit_checkpoint) {
             if ($metadata.audit_checkpoint -ne 'as-is-audit.jsonl' -or -not ($metadata.artifacts | Where-Object name -eq 'as-is-audit.jsonl')) { throw 'Missing bounded audit checkpoint' }
@@ -146,6 +161,7 @@ try {
         Invoke-Docker @('rm', $helperName) | Out-Null
         Remove-Item -LiteralPath $asIsCheckpointPath
     }
+    $failureStage = 'VERIFY_MIGRATION_AND_EVIDENCE_REGISTRIES'
     $migrationsSql = "SELECT json_agg(x ORDER BY x.version)::text FROM (SELECT version, name, checksum FROM schema_migrations) x"
     $migrations = @(Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '-c', $migrationsSql) | ConvertFrom-Json)
     $expectedMigrations = @(Get-Content -LiteralPath (Join-Path $backupPath 'migrations.json') -Raw | ConvertFrom-Json)
@@ -160,12 +176,14 @@ try {
     [IO.File]::WriteAllText((Join-Path $outputPath 'restored-evidence-registry.json'), (ConvertTo-Json -InputObject $registry -Depth 10) + "`n", $utf8)
     foreach ($volume in $metadata.volumes | Where-Object status -eq 'BACKED_UP') {
         $role = $volume.role
+        $failureStage = "RESTORE_AND_VERIFY_VOLUME_$($role.ToUpperInvariant().Replace('-','_'))"
         # Two read-only mounts: the archive set and restored DB's registry. The
         # helper writes only the new rehearsal volume, with no network access.
         $result = Invoke-Docker @('run', '--name', $helperName, '--label', "storage-lab-console.rehearsal=$operationId", '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--cap-add', 'CHOWN', '--cap-add', 'DAC_OVERRIDE', '--security-opt', 'no-new-privileges:true', '--user', '0:0', '--mount', "type=volume,source=$prefix-$role,target=/restored", '--mount', "type=bind,source=$backupPath,target=/backup,readonly", '--mount', "type=bind,source=$outputPath,target=/checkpoint,readonly", '--entrypoint', 'python', $metadata.application_image_id, '-c', $restoreCode, $role)
         $volumeResults += ($result | ConvertFrom-Json)
         Invoke-Docker @('rm', $helperName) | Out-Null
     }
+    $failureStage = 'WRITE_SUCCESS_RECEIPT'
     $report = @{
         status='PASS'; operation_id=$operationId; checked_at=[DateTime]::UtcNow.ToString('o'); source_backup=$backupPath
         archive_hashes_verified=@($metadata.artifacts).Count; restored_schema_version=$schema; migration_checksums_verified=$migrations.Count; registry_rows_verified=$registryCount
@@ -173,7 +191,7 @@ try {
         as_is_integrity=$asIsSummary
         audit_checkpoint_verified=[bool]$metadata.audit_checkpoint
         restore_duration_seconds=[math]::Round($restoreTimer.Elapsed.TotalSeconds,3)
-        checkpoint_age_at_restore_seconds=($restoreStartedAt - [DateTime]::Parse($metadata.started_at).ToUniversalTime()).TotalSeconds
+        checkpoint_age_at_restore_seconds=($restoreStartedAt - $backupStartedAt).TotalSeconds
         recovery_objectives_status='MEASURED_REHEARSAL_ONLY_SLO_NOT_APPROVED'
         limitations=@('Bundled PostgreSQL only', 'Synthetic/local rehearsal does not validate site RPO/RTO', 'Credentials/config and database role recovery must be rehearsed separately')
     }
@@ -184,7 +202,7 @@ try {
 } catch {
     # Keep a failed rehearsal report too. Raw driver/Docker errors may reveal
     # local configuration, so only a stable code is exported here.
-    $failure = @{status='FAIL'; operation_id=$operationId; checked_at=[DateTime]::UtcNow.ToString('o'); error_code='RESTORE_REHEARSAL_FAILED'; restore_duration_seconds=[math]::Round($restoreTimer.Elapsed.TotalSeconds,3); source_modified=$false; not_a_production_signoff=$true}
+    $failure = @{status='FAIL'; operation_id=$operationId; checked_at=[DateTime]::UtcNow.ToString('o'); error_code='RESTORE_REHEARSAL_FAILED'; failure_stage=$failureStage; exception_type=$_.Exception.GetType().Name; script_line_number=$_.InvocationInfo.ScriptLineNumber; restore_duration_seconds=[math]::Round($restoreTimer.Elapsed.TotalSeconds,3); source_modified=$false; not_a_production_signoff=$true}
     [IO.File]::WriteAllText((Join-Path $outputPath 'restore-report.json'), ($failure | ConvertTo-Json -Depth 10) + "`n", $utf8)
     throw 'Restore rehearsal failed; inspect its private report and local diagnostics'
 } finally {
