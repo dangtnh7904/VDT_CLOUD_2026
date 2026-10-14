@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -7,6 +9,14 @@ from app.config import Settings
 
 def settings(**overrides):
     values = {
+        # Docker runtime defaults are deliberately read-only. Tests that
+        # exercise optional legacy validation must opt into their lab policy.
+        "app_env": "test",
+        "execution_environment": "lab",
+        "console_read_only": False,
+        "console_auth_username": "",
+        "console_auth_password_hash": None,
+        "console_auth_password_hash_file": None,
         "rgw_endpoint_url": "http://rgw.invalid",
         "rgw_access_key": "test-access",
         "rgw_secret_key": "test-secret",
@@ -103,6 +113,70 @@ class SettingsTests(unittest.TestCase):
                 ceph_expected_fsid="11111111-2222-3333-4444-555555555555",
                 performance_source="prometheus",
                 performance_prometheus_url="http://user:secret@prometheus.invalid:9283",
+            )
+
+    def test_upgrade_mutations_require_upgrade_feature(self):
+        with self.assertRaises(ValidationError):
+            settings(upgrade_mutations_enabled=True, feature_upgrade=False)
+
+    def test_upgrade_feature_dependency_check_is_fail_closed(self):
+        configured = settings(feature_upgrade=True, feature_legacy_rgw=False)
+
+        with self.assertRaisesRegex(ValueError, "CLUSTER_ID"):
+            configured.validate_feature_dependencies()
+
+    def test_upgrade_only_configuration_does_not_require_rgw(self):
+        configured = settings(
+            feature_upgrade=True,
+            feature_legacy_rgw=False,
+            feature_legacy_rbd=False,
+            cluster_id="lab-a",
+            ceph_expected_fsid="11111111-2222-3333-4444-555555555555",
+            ceph_executor_token="executor-token-with-at-least-thirty-two-characters",
+            rgw_endpoint_url=None,
+            rgw_access_key=None,
+            rgw_secret_key=None,
+        )
+
+        configured.validate_feature_dependencies()
+
+    def test_enabled_legacy_rbd_requires_executor_identity(self):
+        configured = settings(
+            feature_upgrade=False,
+            feature_legacy_rgw=False,
+            feature_legacy_rbd=True,
+            ceph_expected_fsid=None,
+            ceph_executor_token=None,
+            rbd_executor_token=None,
+        )
+
+        with self.assertRaisesRegex(ValueError, "CEPH_EXPECTED_FSID"):
+            configured.validate_feature_dependencies()
+
+    def test_upgrade_allowlists_reject_wildcards(self):
+        with self.assertRaises(ValidationError):
+            settings(upgrade_allowed_osds="0,*")
+
+    def test_upgrade_inventory_freshness_is_positive_and_bounded(self):
+        self.assertEqual(settings().upgrade_inventory_max_age_seconds, 45)
+        with self.assertRaises(ValidationError):
+            settings(upgrade_inventory_max_age_seconds=0)
+        with self.assertRaises(ValidationError):
+            settings(upgrade_inventory_max_age_seconds=86401)
+
+    def test_executor_token_file_overrides_inline_compatibility_token(self):
+        with tempfile.TemporaryDirectory() as root:
+            token_file = Path(root) / "executor-token"
+            token_file.write_text("file-token-with-at-least-thirty-two-characters", encoding="utf-8")
+
+            configured = settings(
+                ceph_executor_token="inline-token-with-at-least-thirty-two-characters",
+                ceph_executor_token_file=token_file,
+            )
+
+            self.assertEqual(
+                configured.effective_executor_token.get_secret_value(),
+                "file-token-with-at-least-thirty-two-characters",
             )
 
 

@@ -1,0 +1,129 @@
+schema_version: 1
+status: deployed_local_lab_only_not_production_approved
+superseded_by_local_deployment_manifest: 5.1.1-preview.2.yaml
+changed_on: "2026-10-13"
+timezone: Asia/Saigon
+application_started_at: "2026-10-13T13:51:53+07:00"
+scope:
+  url: http://127.0.0.1:8080
+  user_requested_configuration_change: true
+  docker_hub: unchanged_published_rc1
+  production_test_8443: unchanged
+  ceph_mutations: none
+configuration_path: ../local-images.preview.json
+images:
+  application:
+    version: 5.1.1-preview.1
+    ref: storage-lab-console@sha256:8fee0b7383ceb64a4b464ff0dadaad7f8fc6b52a9f132d42eb83123b60eea3cc
+    release_manifest: 5.1.1-preview.1.yaml
+  worker:
+    version: 16.2.15-minimal-preview.2
+    ref: storage-lab-osdmap@sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+    release_manifest: osdmap-16.2.15-minimal-preview.2.yaml
+  published: false
+  platform: linux/amd64
+data_preservation:
+  private_checkpoint_directory: ../../runtime/local-preview-switch-20261013
+  checkpoint_acl: current_windows_user_system_and_administrators_only
+  database_backup: database-before.dump
+  database_backup_sha256: 453ad31ca9af87f18bb05a34cccf7b9a9cbafdbba4e05f30c2e23ea46117c805
+  backup_archive_toc_read: PASS
+  backup_restore_rehearsal_for_this_checkpoint: NOT_RUN
+  postgres_container_id: 31012d35a236c3233376934d2d8bbab4a08e225dfa54d0c5fb6852d5d9aa871a
+  postgres_volume: storage-lab-console-local-postgres-data
+  postgres_identity_and_volume_preserved: true
+  schema_version_before_and_after: 21
+  pending_migrations: 0
+  as_is_collections: 4
+  as_is_events: 8
+  collection_ids_sha256_deletion_state_and_events_unchanged: PASS
+  existing_evidence_files: 8
+  existing_evidence_paths_sizes_and_sha256_unchanged: PASS
+  final_evidence_file_count: 9
+  new_evidence_files_from_offline_preview_smoke: 1
+  ssh_config_secret_and_state_mounts_preserved: PASS
+rollback:
+  previous_containers_retained_stopped: true
+  previous_container_suffix: before-v5-20261013-135150
+  volumes_deleted: false
+  automatic_rollback: false
+runtime:
+  application_roles: [api, executor, capacity, performance]
+  user: "10001:10001"
+  root_filesystem_read_only: true
+  cap_drop: [ALL]
+  no_new_privileges: true
+  console_read_only: true
+  upgrade_mutations_enabled: false
+  feature_lab: false
+  feature_legacy_rgw: false
+  feature_legacy_rbd: false
+  api_binding: "127.0.0.1:8080:8000"
+  worker_network: none
+  worker_mounts: [storage-lab-console-local-osdmap-spool]
+  worker_cpu: 1
+  worker_memory_mib: 1536
+  worker_pids_limit: 32
+  all_five_services_running_zero_restarts_and_no_oom_at_check: PASS
+smoke:
+  readiness: PASS
+  runtime_version_and_read_only_policy: PASS
+  strict_worker_capability_parser_version_and_tool_hashes: PASS
+  live_observe:
+    daemon_keys: [mon.ceph-master, osd.2]
+    fsid: 17c77e12-a16a-11f1-838e-cf68e9c001d8
+    started_at: "2026-10-13T13:54:29.260513+07:00"
+    completed_at: "2026-10-13T13:54:37.021081+07:00"
+    freshness_mode: READ_ON_REQUEST
+    quality: PARTIAL
+    limitation: orchestrator_container_cpu_and_memory_samples_were_stale
+    saved_as_new_collection: false
+  offline_no_op:
+    id: 3bbf5ed1-3e62-490e-89b1-463042c5c5d2
+    osd_id: 2
+    crush_weight: 0.029296875
+    pool_id: 13
+    pg_count: 1
+    base_epoch: 3888
+    current_epoch: 3888
+    changed_pgs: 0
+    membership_changes: 0
+    order_changes: 0
+    primary_changes: 0
+    candidate_persisted: false
+    mapping_quality: VALID
+    failure_domain_checked: false
+    source_map_sha256: 104eb0e9b24b11f568e1d017fc45045422617ef90073d2b3c69e653415cb6fe6
+    export_http_status: 200
+    export_sha256_verified: 6f3c17471592cbd7d53eb91af387e2cb000266d86a2b453ea8a6365be3ebad6c
+  browser:
+    visible_version: 5.1.1-preview.1
+    comparison_type: rgw
+    collection_a: 145fce08-867e-5691-9d73-89d0a46ee086
+    collection_b: 8d09923c-4a7c-55a9-9fa9-35c47f933518
+    common_daemons: 3
+    comparison_and_download: PASS
+    comparison_export_bytes: 10795
+    comparison_export_sha256: 08a5340cd95b83532c1003b0c1ca24bc951310e96a53950c8da97ed0e28240a3
+    matches_pre_swap_export: true
+    screenshot: ../../runtime/local-preview-switch-20261013/local-version.png
+  readonly_denials:
+    http_status: 403
+    code: CONSOLE_READ_ONLY
+    empty_body_post_paths:
+      - /api/v1/benchmarks
+      - /api/rbd/images
+      - /api/v1/osdmap-previews/apply
+      - /api/v1/upgrade/apply
+  production_test_api_id_unchanged: f39ad4811630464ae6f8f44b049d589ccce6ccad42c4152befff411a69af2e41
+  production_test_api_state_unchanged: exited
+acceptance:
+  localhost_configuration_switch: PASS_LAB_ONLY
+  referenced_artifact_checksums_verified: 20
+  live_cluster_smoke: PARTIAL_NOT_FULL_SITE_ACCEPTANCE
+  first_synthetic_run_failure_stability_review: OPEN
+  residual_vendor_affected_findings: 3
+  production_security_and_promotion_gate: NOT_PASSED
+  docker_hub_publish: NOT_RUN
+  production_deployment: NOT_RUN
+  limitation: local_smoke_does_not_resolve_first_synthetic_failure_or_approve_production

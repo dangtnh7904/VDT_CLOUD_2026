@@ -1,0 +1,22 @@
+# Non-secret cluster profile. Copy to lab.yaml (ignored by Git), fill values,
+# then set CLUSTER_CONFIG_PATH=config/profiles/lab.yaml.
+lab_profile: lab-a
+cluster_id: lab-a
+cluster_profile_revision: lab-a-v1
+policy_revision: default-v1
+execution_environment: lab
+ceph_expected_fsid: 11111111-2222-3333-4444-555555555555
+ceph_cluster_name: ceph
+ceph_transport: executor
+ceph_executor_url: http://rbd-console:3001
+upgrade_allowed_osds: "0,1,2"
+upgrade_allowed_hosts: "ceph-a,ceph-b,ceph-c"
+upgrade_allowed_pools: "rbd-lab"
+upgrade_allowed_device_classes: "hdd"
+telemetry_provider: disabled
+telemetry_max_age_seconds: 45
+telemetry_clock_skew_max_seconds: 5
+evidence_store: filesystem
+evidence_root: ./runtime/evidence
+evidence_retention_days: 30
+evidence_max_artifact_bytes: 67108864

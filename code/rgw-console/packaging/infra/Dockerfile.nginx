@@ -1,0 +1,17 @@
+# TLS/basic-auth reverse proxy only. Keep the official entrypoint and nginx
+# binary; modules that parse XML, images, JavaScript, or ACME are not used here.
+ARG NGINX_BASE=nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+FROM ${NGINX_BASE}
+
+LABEL org.opencontainers.image.title="Storage Lab Console reverse proxy" \
+      org.opencontainers.image.version="1.30.5-rc.1" \
+      org.opencontainers.image.description="Official nginx with unused dynamic modules removed and available Alpine security updates applied"
+
+RUN set -eux; \
+    apk del --no-network nginx-module-acme nginx-module-geoip \
+        nginx-module-image-filter nginx-module-njs nginx-module-xslt; \
+    apk upgrade --no-cache; \
+    nginx -t; \
+    ! apk info -e libxml2; \
+    ! apk info -e libexpat
+

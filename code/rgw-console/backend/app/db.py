@@ -1,6 +1,7 @@
 import json
 from contextlib import contextmanager
 from typing import Any, Iterator
+from uuid import UUID
 
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -102,7 +103,9 @@ def record_operation(**values: Any) -> None:
 def json_ready(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
     for key, value in result.items():
-        if hasattr(value, "isoformat"):
+        if isinstance(value, UUID):
+            result[key] = str(value)
+        elif hasattr(value, "isoformat"):
             result[key] = value.isoformat()
     if isinstance(result.get("config"), str):
         result["config"] = json.loads(result["config"])

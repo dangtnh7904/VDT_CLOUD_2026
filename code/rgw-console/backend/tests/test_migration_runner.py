@@ -37,17 +37,65 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         first = migrate(self.conn)
         second = migrate(self.conn)
 
-        self.assertEqual(first.applied_versions, (1, 2, 3, 4, 5, 6, 7, 8))
+        latest_version = load_migrations()[-1].version
+        self.assertGreaterEqual(latest_version, 21)
+        self.assertEqual(first.applied_versions, tuple(range(1, latest_version + 1)))
         self.assertEqual(first.stamped_versions, ())
         self.assertEqual(second.applied_versions, ())
-        self.assertEqual(second.current_version, 8)
-        self.assertEqual(assert_schema_current(self.conn), 8)
+        self.assertEqual(second.current_version, latest_version)
+        self.assertEqual(assert_schema_current(self.conn), latest_version)
         self.assertEqual(
             self.conn.execute("SELECT count(*) AS count FROM schema_migrations").fetchone()[
                 "count"
             ],
-            8,
+            latest_version,
         )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT to_regclass('config_snapshots') AS name"
+            ).fetchone()["name"]
+        )
+        for table_name in (
+            "evidence_artifacts",
+            "outbox_events",
+            "resource_leases",
+            "action_jobs",
+            "upgrade_batches",
+            "upgrade_runs",
+            "placement_plans",
+            "cluster_capabilities",
+            "phase_events",
+            "placement_entries",
+            "return_groups",
+            "pg_role_observations",
+            "scrub_runs",
+            "affinity_restores",
+            "rollback_runs",
+            "replacement_sources",
+            "replacement_rebuild_groups",
+            "upgrade_waves",
+            "spare_registry",
+            "spare_chains",
+            "handoff_groups",
+            "rotation_steps",
+            "end_state_handoffs",
+            "qos_runs",
+            "qos_segments",
+            "qos_metric_windows",
+            "qos_benchmark_attempts",
+            "osd_inventory_collections",
+            "osd_inventory_records",
+            "upgrade_inventory_bindings",
+            "as_is_collections",
+            "as_is_collection_events",
+        ):
+            with self.subTest(table_name=table_name):
+                self.assertIsNotNone(
+                    self.conn.execute(
+                        "SELECT to_regclass(%s) AS name",
+                        (table_name,),
+                    ).fetchone()["name"]
+                )
         self.assertEqual(
             self.conn.execute(
                 "SELECT desired_state FROM control_state WHERE id = true"
@@ -85,7 +133,7 @@ class MigrationRunnerIntegrationTests(unittest.TestCase):
         result = migrate(self.conn)
 
         self.assertEqual(result.stamped_versions, (1,))
-        self.assertEqual(result.applied_versions, (2, 3, 4, 5, 6, 7, 8))
+        self.assertEqual(result.applied_versions, tuple(range(2, load_migrations()[-1].version + 1)))
         job = self.conn.execute(
             "SELECT * FROM stream_jobs WHERE id = %s",
             ("11111111-1111-1111-1111-111111111111",),

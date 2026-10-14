@@ -1,1329 +1,798 @@
-# Kế hoạch phát triển RGW/RBD Storage Lab Console
-
-**Dự án:** PRJ GD2 — công cụ tạo tải và quản lý dữ liệu thử nghiệm cho Ceph RGW/RBD  
-**Ngày lập:** 21/09/2026  
-**Trạng thái:** đặc tả để phát triển; chưa phải bằng chứng đã triển khai hoặc chạy thành công trên lab  
-**Code hiện có:** [`code/rgw-console`](./rgw-console/)  
-**Tài liệu upgrade liên quan:** [`comparison/ceph-osd-upgrade-lab-production-plan(1)(1).md`](../comparison/ceph-osd-upgrade-lab-production-plan%281%29%281%29.md)
-
-## 1. Mục tiêu
-
-Mở rộng console RGW hiện có thành một **Storage Lab Console** có bốn nhóm chức năng dùng chung một cơ chế kiểm soát dung lượng:
-
-1. **RGW Object Console**
-   - Xem danh sách bucket và object.
-   - Xem metadata, preview, Range GET và download.
-   - Tạo object, ghi đè/update object, sửa metadata và xóa object.
-   - Chạy workload liên tục gồm `PUT`, `GET`, `HEAD/LIST`, `UPDATE` và `DELETE`.
-
-2. **RBD Volume Console**
-   - Tạo RBD image thử nghiệm.
-   - Map image thành block device, format `ext4`, mount và cung cấp đường truy cập riêng cho từng volume.
-   - Cho phép đọc/ghi/xóa file trong volume thử nghiệm.
-   - Unmount, unmap và xóa volume theo đúng thứ tự.
-   - Có workload lifecycle tạo → dùng → xóa volume.
-
-3. **Capacity Guard**
-   - Không dùng phần trăm trung bình của toàn cluster làm điều kiện.
-   - Theo dõi OSD đầy nhất trong tập OSD có thể phục vụ các pool RGW/RBD liên quan.
-   - Mốc `70%` là **application admission ceiling/SLO**: công cụ phải dừng cấp thao tác tăng dung lượng từ trước mốc này.
-   - Đây không phải invariant vật lý mà polling có thể bảo đảm khi Ceph đang recovery/backfill, OSDMap đổi hoặc có writer ngoài ledger; các trường hợp đó phải pause mutation và báo breach nếu OSD vẫn vượt 70%.
-   - Khi gần hoặc vượt ngưỡng, ưu tiên thao tác đọc và cleanup đã được phân loại/đặt maintenance budget.
-
-4. **Performance Monitor**
-   - Hiển thị IOPS đọc/ghi/tổng, throughput đọc/ghi/tổng và latency hiện tại của cluster Ceph.
-   - Cho phép xem lịch sử ngắn theo cluster, participating OSD và pool khi nguồn telemetry thực sự cung cấp đúng scope.
-   - Hiển thị riêng số liệu workload do console tạo; không gắn nhãn số request của ứng dụng là IOPS vật lý của cluster.
-   - Công bố nguồn, cửa sổ lấy mẫu, độ mới và trạng thái reset/mất mẫu trên mọi biểu đồ.
-
-Đây là công cụ **lab-only, quyền cao**. Không triển khai hệ thống login/RBAC trong MVP. Tuy nhiên, vẫn phải giới hạn pool, bucket, image prefix và mount root để một lỗi phần mềm không format hoặc xóa nhầm tài nguyên ngoài phạm vi bài thử.
-
-## 2. Kết quả cần đạt
-
-MVP được coi là hoàn thành khi đáp ứng đồng thời các điều kiện sau:
-
-- Có thể duyệt, xem, download, overwrite và xóa object trong các bucket lab được cấu hình.
-- Có thể chạy một RGW CRUD job dài hạn với tỷ lệ thao tác cấu hình được và có pause/resume/stop.
-- Có thể tạo một RBD image mới, map exclusive, format ext4, mount, ghi/đọc kiểm tra, unmount, unmap và xóa image từ console.
-- Mỗi volume có trạng thái, device, mount path và lịch sử thao tác riêng.
-- RGW và RBD dùng chung một Capacity Guard và một sổ reservation, không tự tính dung lượng riêng rẽ.
-- Khi telemetry thiếu/cũ hoặc dự báo thao tác kế tiếp có thể vượt trần, thao tác tăng dung lượng bị chặn. `GET`, `HEAD`, `LIST`, hard-delete exact version/unversioned cleanup, `unmount` và `remove` được ưu tiên nhưng vẫn phải chừa maintenance metadata budget và tuân theo khả năng thực tế của cluster.
-- Backend/SSH reconnect hoặc restart không làm lặp `rbd create`, format lại filesystem, map trùng hoặc xóa nhầm volume.
-- Dashboard hiển thị được OSD đầy nhất, participating OSD, reservation, trạng thái guard và nguyên nhân job bị pause.
-- Dashboard hiển thị IOPS/throughput đọc-ghi hiện tại, latency và lịch sử ngắn; phân biệt rõ telemetry `application`, `ceph` và `device` (nếu có).
-- Không có secret/keyring/access key bị ghi vào operation log, API response hoặc tài liệu.
-
-## 3. Phạm vi MVP và ngoài phạm vi
-
-### 3.1. Trong phạm vi
-
-- Mọi pool RGW/RBD mà mutation chạm tới trong MVP phải là replicated pool; cấu hình mẫu hiện tại là `size=3`, `min_size=2`. Nếu phát hiện bất kỳ affected pool nào là EC, Capacity Guard phải fail closed cho mutation cho tới khi có phép tính EC riêng.
-- Ceph Pacific 16.2.5 là baseline đầu tiên; code không được giả định chỉ chạy trên output của Reef.
-- RGW S3 API và RGW Admin Ops/radosgw-admin cho tài nguyên lab.
-- RBD format 2, kernel RBD (`krbd`) và filesystem ext4.
-- RBD được quản lý trên một Linux Ceph/client host qua SSH; host này thực hiện `rbd map`, `mkfs.ext4`, `mount` và file I/O.
-- Một RBD image chỉ có một client RW tại một thời điểm.
-- Bucket/versioning được phát hiện và hiển thị rõ.
-- Streaming workload do chính console tạo.
-- Theo dõi IOPS, throughput và latency gần thời gian thực; số liệu Ceph lấy từ endpoint metrics read-only hoặc adapter đã được capability-test trên Pacific 16.2.5.
-- PostgreSQL là state store và journal của console.
-- SSE cho telemetry và trạng thái job theo thời gian gần thực.
-
-### 3.2. Ngoài phạm vi MVP
-
-- Dùng công cụ trên bucket, pool hoặc image production không có allowlist.
-- EC pool cho bất kỳ data/index/metadata path RGW hoặc RBD nào mà console sẽ mutation; phép tính `k+m`, chunk/alignment và overwrite của EC để giai đoạn sau.
-- RBD snapshot, clone, flatten, mirroring, live migration và multi-writer filesystem.
-- RBD resize và force-purge snapshot/clone trong MVP.
-- RGW multipart workload trong MVP; nếu endpoint multipart được thêm sau này thì phải reserve toàn expected size và cleanup part trước khi bật.
-- Mount một ext4 image RW đồng thời trên nhiều host.
-- Multi-user terminal, terminal production hoặc cơ chế sandbox shell mạnh. MVP chỉ có một web terminal lab qua SSH vào host đã cấu hình.
-- Tự sửa CRUSH map, tự reweight OSD hoặc tự đổi `nearfull/backfillfull/full` ratio.
-- Cam kết physical hard cap khi OSDMap không ổn định, có recovery/backfill, hoặc còn writer ngoài controller mà không có reservation đầy đủ.
-- Tự động xóa object/volume không thuộc job hoặc không nằm trong allowlist để lấy lại dung lượng.
-- Thay thế công cụ benchmark chuyên dụng như Warp hoặc fio; có thể tích hợp các công cụ đó ở giai đoạn sau.
+# Storage Lab Console — Kế hoạch v5: Chỉ số trực tiếp, As-is và so sánh daemon
 
-## 4. Hiện trạng console
+**Phiên bản:** 5.1
 
-Console hiện có các thành phần:
+**Cập nhật:** 13/10/2026
 
-- React/Vite frontend và Nginx.
-- FastAPI backend dùng boto3/S3.
-- Một Python worker cho streaming job.
-- PostgreSQL lưu operation, metrics và job.
-- SSE gửi metrics mỗi giây.
+**Trạng thái:** bản chỉ đọc `5.1.0-rc.1` đã phát hành Docker Hub ngày 12/10/2026. Localhost 8080 đang chạy bản sửa app `5.1.1-preview.2` và worker `16.2.15-minimal-preview.2`, chỉ lab/chỉ đọc. Giới hạn ở mục 21, release Hub ở mục 22, lịch sử đổi cấu hình ở mục 26, bản sửa hiện tại ở mục 27. Worker vẫn chưa đạt security/stability gate production.
 
-Chức năng đã có:
+Đây là plan console hiện hành, thay thế các yêu cầu sản phẩm của v4.2. Không dùng phần kế hoạch cũ trong bản lưu trữ để bổ sung lại chức năng đã bị loại bỏ.
 
-- `GET /api/health` và `GET /api/buckets`.
-- Upload từ corpus Ubuntu, upload từ browser và random upload.
-- ListObjectsV2 có pagination/filter.
-- HEAD object.
-- Streaming/Range GET, preview và download.
-- Streaming job có pause/resume/stop.
+## 1. Quyết định sản phẩm
 
-Khoảng trống cần xử lý:
+Console tập trung vào việc đọc trạng thái và chỉ số của cụm Ceph, lấy hiện trạng **As-is** cho các daemon được chọn trước/trong/sau một đợt nâng cấp, xuất dữ liệu về máy và so sánh hai lần thu thập.
 
-- Worker hiện chỉ thực hiện `PUT`.
-- Mọi upload hiện tạo key timestamp/UUID mới, chưa có overwrite cùng key.
-- Chưa có object delete, bulk delete hoặc metadata update.
-- Bảng `operations` chỉ chấp nhận `PUT` và `GET`.
-- Chưa có migration framework.
-- Chưa đọc OSD/CRUSH/pool capacity.
-- Backend container không có Ceph CLI, `/dev/rbd`, keyring hoặc quyền mount.
-- Chưa có RBD SSH execution layer, web terminal, file browser/SFTP và state tracking cho map/mount.
-- Worker chưa có lease bền vững; không được scale worker trước khi sửa cơ chế claim job.
+Các quyết định bắt buộc:
 
-Các file cần đọc trước khi bắt đầu:
+1. Bỏ toàn bộ chức năng Benchmark fio/Warp khỏi sản phẩm và backlog hiện hành: menu, màn hình, runner, API điều khiển, cấu hình asset/workload và hướng dẫn sử dụng liên quan.
+2. Bỏ màn hình và quy trình Dry-run planning. Người dùng không cần tạo plan/run nâng cấp để lấy dữ liệu.
+3. **Chỉ số cụm và daemon** đọc dữ liệu mới tại thời điểm bấm **Xem** hoặc **Xuất dữ liệu mới**, cho từng daemon và toàn hệ thống.
+4. Danh sách daemon hiển thị **10 dòng mỗi trang**. Không giới hạn cluster, phạm vi thu thập hoặc export còn 10 daemon.
+5. **Thu thập hiện trạng (As-is)** thay OSD inventory: hỗ trợ nhiều loại daemon, chọn một hoặc nhiều daemon, thu mới khi bấm; OSD có bộ thông tin chuyên sâu hơn.
+6. Có ba nhãn giai đoạn **Trước nâng cấp / Trong nâng cấp / Sau nâng cấp**. Nhãn do người dùng chọn, không phải chứng nhận nâng cấp đã chạy.
+7. Bỏ tên **Evidence & Comparison**, thay bằng **So sánh**. Người dùng chọn **Collection A / Collection B**, không bị bắt buộc Before→After.
+8. So sánh chỉ giữa daemon **cùng loại, cùng cluster FSID**, ghép theo daemon ID. Có lọc ngày, loại daemon, daemon được chọn và giai đoạn.
+9. Bỏ trường **Upgrade session** và bước tạo/chọn session khỏi luồng sử dụng mới.
+10. Có thể xóa collection qua thao tác có xác nhận và khả năng khôi phục; không xóa dữ liệu hoặc daemon trên Ceph.
+11. Việt hóa toàn bộ giao diện, trạng thái, validation, thông báo lỗi và nội dung hướng dẫn.
+12. Giữ đóng gói OCI image portable, SSH key/host-key pinning, FSID verification, quyền đọc, bảo mật export và dữ liệu bền vững ngoài image.
+13. Thêm **Xem trước thay đổi OSDMap** bằng `osdmaptool`: lấy map hiện tại, mô phỏng thay đổi trên bản cục bộ và hiển thị chênh lệch placement trước khi người vận hành thay đổi thật. Chỉ dự đoán các thay đổi đã có adapter được kiểm thử; không gửi map/lệnh giả định vào cluster.
 
-- [`rgw-console/backend/app/main.py`](./rgw-console/backend/app/main.py)
-- [`rgw-console/backend/app/storage.py`](./rgw-console/backend/app/storage.py)
-- [`rgw-console/backend/app/worker.py`](./rgw-console/backend/app/worker.py)
-- [`rgw-console/backend/app/db.py`](./rgw-console/backend/app/db.py)
-- [`rgw-console/backend/app/config.py`](./rgw-console/backend/app/config.py)
-- [`rgw-console/frontend/src/App.tsx`](./rgw-console/frontend/src/App.tsx)
-- [`rgw-console/docker-compose.yml`](./rgw-console/docker-compose.yml)
+**Phạm vi nâng cấp:** chọn nhiều daemon để thu thập/theo dõi các daemon dự định nâng cấp. Không có nút tự nâng cấp, redeploy, stop OSD hoặc thay đổi placement trong phạm vi v5. Việc nâng cấp vẫn do người vận hành thực hiện qua quy trình riêng. Plan chiến lược PA2 ở tài liệu dự án không trở thành lệnh mà console tự thực thi.
 
-## 5. Các quyết định thiết kế bắt buộc
+### 1.1. Phạm vi triển khai
 
-### 5.1. RBD chạy trên Linux host qua SSH, không chạy trong Windows/FastAPI container
+- Một deployment nối một cluster tại một thời điểm; đổi cluster qua cấu hình runtime.
+- Loại daemon đích: MON, MGR, OSD, RGW, MDS, theo capability và dữ liệu thực tế của cluster.
+- Host, pool và tổng quan hệ thống là **tài nguyên/ngữ cảnh**, không được tính thành daemon.
+- MON/MGR/OSD là lát cắt đầu tiên; RGW/MDS phải hiện rõ chưa hỗ trợ nếu adapter chưa có, không giả là đã triển khai.
+- Công cụ RGW/RBD cũ giữ trong nhóm **Công cụ cũ**, không xuất hiện trong luồng As-is chính.
+- Chỉ số hiệu năng của application/workload cũ không được trình bày như chỉ số Ceph/system thật.
 
-Windows chỉ chạy browser/web service. Mọi thao tác Ceph/RBD thực tế chạy trên **Linux Ceph/client host** đã có `ceph-common`, `rbd`, kernel RBD và keyring.
+## 2. Hiện trạng và khoảng trống
 
-Backend RBD dùng kết nối SSH cố định tới host lab:
+### 2.1. Đã kiểm tra trên localhost
 
-- `ssh2.exec()` cho lệnh có cấu trúc như `ceph -s`, `rbd ls/info/create`, `rbd device map/unmap`, `blkid`, `mkfs.ext4`, `mount`, `umount`.
-- `ssh2.shell()` cho web terminal tương tác qua WebSocket + `xterm.js`.
-- `ssh2.sftp()` cho file browser: list, upload, stream preview/download, mkdir và delete trong mountpoint ext4.
-- Windows chỉ cần browser/Node.js cho web console; không cài Ceph client hoặc RBD block-device driver trên Windows.
+Ngày 12/10/2026, localhost đã nối Ceph thật bằng SSH key, kiểm FSID và có dữ liệu:
 
-SSH layer vẫn phải validate `pool`, image prefix và mount root trước destructive command. Command do REST API sinh ra phải dùng argument đã validate/escape; không ghép trực tiếp input người dùng thành shell command. Web terminal là ngoại lệ có chủ đích cho **lab-only interactive testing** và phải được hiển thị rõ là shell thật trên host.
+- Cluster, MON/MGR, 6 OSD, 3 host, 12 pool.
+- OSD collector lấy thông tin thiết bị, topology, phiên bản, PG/primary PG và cluster context.
+- Baseline OSD đã lưu trong database/evidence; export ZIP thực đã tải xuống máy và đối chiếu checksum.
+- Nguồn Prometheus MGR đã có IOPS/throughput cluster và từng OSD.
+- Deployment hiện read-only; các thao tác ghi vào Ceph bị khóa.
 
-Để giảm rủi ro credential, ưu tiên SSH key. Tài khoản SSH có thể là user lab có `sudo -n` cho tập lệnh RBD/mount cần thiết; không bắt buộc phải dùng `root` nếu sudo đã cấu hình phù hợp.
+Chi tiết lần kiểm tra nằm trong [VALIDATION.md](rgw-console/VALIDATION.md) và [hướng dẫn SSH local](rgw-console/docs/LOCAL_SSH_READONLY.md). Các tài liệu này ghi hiện trạng cũ, cần cập nhật cùng lát cắt triển khai v5.
 
-### 5.2. Không dùng cluster average cho ngưỡng 70%
+### 2.2. Khoảng trống ghi nhận trước triển khai v5
 
-Nguồn quyết định chính là `ceph osd df --format=json` theo từng OSD. `ceph df detail`, `rados df`, RGW bucket stats và `rbd du` chỉ dùng để đối chiếu hoặc hiển thị, không được dùng một mình để cấp phép ghi.
+Danh sách dưới là mốc trước triển khai; kết quả đã làm và phần còn thiếu hiện tại được cập nhật ở mục 21.
 
-`participating_osds` của một workload là hợp của:
+- Cluster & Metrics hiện đọc collection lưu gần nhất; nút xem/export hiện chưa luôn thu mới.
+- OSD collection còn phụ thuộc session và chỉ hỗ trợ OSD.
+- Comparison hiện có ràng buộc cùng session/config snapshot và Before→After; không đáp ứng A/B bất kỳ.
+- Chưa có collection As-is đa loại daemon, xóa/khôi phục và phân trang 10 daemon hoàn chỉnh.
+- Nguồn CPU/RAM/process/network cho host/daemon chưa có adapter đầy đủ.
+- UI còn tiếng Anh và còn các màn hình cần gỡ.
+- Chưa có tính năng xem trước OSDMap trong console. Việc có hướng dẫn mô phỏng trong MOP không có nghĩa UI/API đã triển khai.
 
-- OSD eligible theo CRUSH rule/device class của mọi pool workload chạm tới.
-- OSD trong current `up`/`acting` set của các PG liên quan.
-- OSD đang là backfill/recovery target nếu có.
+**Không đánh dấu hoàn tất bằng việc đổi tài liệu.** Cần sửa source, kiểm thử, build image và cập nhật localhost trước khi tuyên bố v5 đã chạy. Image Docker Hub đã phát hành không tự thay đổi theo source local.
 
-Với RGW, phải inventory data pool, index pool và các metadata/log pool bị thao tác sử dụng. Với RBD, phải xét cả metadata pool và data pool nếu image dùng data pool riêng.
+## 3. Luồng sử dụng mới và navigation
 
-### 5.3. Mốc 70% là admission SLO, không phải target chính xác
+Navigation chính, theo thứ tự:
 
-Không cố giữ từng OSD đúng 70%. CRUSH, kích thước OSD, rebalance, recovery/backfill, BlueStore overhead, telemetry lag và external write khiến một controller polling không thể duy trì physical invariant tuyệt đối. Contract mạnh nhất của MVP chỉ áp dụng khi mọi writer thuộc ledger, OSDMap/placement ổn định và không có recovery/backfill. Ngoài contract này, controller phải dừng cấp mutation, chuyển sang `PAUSED_REMAP`/`RECONCILING`, và báo nếu physical usage vẫn vượt 70%; không được tuyên bố đã ngăn được breach.
-
-Thứ tự ưu tiên state là `EMERGENCY_CAPACITY` → `PAUSED_REMAP/RECONCILING` → `BLOCKED_TELEMETRY` → `PAUSED_CAPACITY` → `THROTTLED` → `NORMAL`. Chính sách ban đầu:
+1. **Tổng quan**
+2. **Chỉ số cụm và daemon**
+3. **Thu thập hiện trạng**
+4. **So sánh**
+5. **Công cụ cũ** — nhóm thu gọn
 
-| Điều kiện của OSD đầy nhất trong scope | Trạng thái | Hành động |
-| --- | --- | --- |
-| `< 67%` | `NORMAL` | Cho phép thao tác tăng dung lượng nếu reservation fit |
-| `67% đến < 68%` | `THROTTLED` | Giảm RPS/concurrency; không tăng batch |
-| `68% đến < 70%` | `PAUSED_CAPACITY` | Không cấp PUT/update/RBD create/file-write mới; multipart/resize chưa thuộc MVP bị reject |
-| `>= 70%` | `EMERGENCY_CAPACITY` | Dừng producer; chỉ chạy operation nằm trong emergency maintenance policy |
-| Telemetry stale/mất | `BLOCKED_TELEMETRY` | Fail closed cho thao tác tăng dung lượng |
-| OSDMap epoch đổi | `RECONCILING` | Dừng cấp mới, tính lại scope và reservation |
-| Degraded/remapped/recovery/backfill | `PAUSED_REMAP` | Dừng mutation tăng dung lượng; quan sát và reconcile placement |
-
-Giá trị trên là mặc định để bắt đầu đo, phải cấu hình được. Không tự đổi `mon_osd_full_ratio` thành 0,70. Ceph full/backfillfull có thể chặn cả ghi và recovery; application guard phải dừng sớm hơn.
-
-### 5.4. Mọi mutation phải qua một Capacity Guard dùng chung
-
-Guard không chỉ chạy khi tạo job hoặc ở UI. Nó phải được gọi ngay trước từng operation có thể tăng raw usage:
-
-- RGW `PUT` object mới.
-- RGW overwrite/update.
-- Multipart initiation/batch nếu được bổ sung sau MVP; cho tới lúc đó API/job config phải từ chối mode multipart.
-- RBD create ở chế độ `reserved-logical`; reserve trước worst-case của toàn logical size.
-- RBD resize tăng nếu được bổ sung sau MVP; hiện tại không expose API resize.
-- File write qua SFTP/terminal bên trong volume `reserved-logical` không tạo reservation cho từng syscall; chúng tiêu thụ phần logical capacity đã reserve khi tạo volume.
-
-Không dùng `new_size - old_size` làm reservation cho overwrite. RGW có thể phải giữ đồng thời bản mới và dữ liệu cũ chờ GC; reserve toàn bộ kích thước bản mới cộng margin.
-
-### 5.5. Xóa không đồng nghĩa dung lượng đã được trả ngay
-
-- RGW versioned delete có thể chỉ tạo delete marker.
-- RGW overwrite/delete có dữ liệu chờ garbage collection.
-- Multipart bị bỏ dở có thể còn part cần abort/cleanup.
-- RBD snapshot/clone có thể giữ dữ liệu.
-- Xóa file trong ext4 không trả block về RBD nếu discard/TRIM chưa chạy.
-
-Do đó phải phân loại delete:
-
-- DELETE không có `VersionId` trên bucket versioned có thể tạo delete marker; đây là metadata-increasing mutation, không phải cleanup thuần túy.
-- Hard-delete exact version hoặc unversioned delete là cleanup intent nhưng vẫn có thể ghi bucket index/log/metadata và vẫn có thể thất bại khi cluster full.
-- Cleanup chỉ được chạy khi còn **emergency maintenance budget** nhỏ, cấu hình riêng; không bypass admission vô điều kiện.
-- Nếu RGW ops/usage logging được bật, cả read/delete cũng có thể phát sinh metadata/log. P0 phải inventory cấu hình này và giữ headroom tương ứng.
-- Reservation không được credit ngay khi API delete trả thành công.
-- Chỉ chuyển guard sang resume khi telemetry OSD thật sự giảm và ổn định qua số mẫu cấu hình được.
-
-### 5.6. ext4 là single-writer trong MVP
-
-Image phải bật/verify feature `exclusive-lock` và được map bằng `rbd device map --exclusive`. Tùy chọn này tắt cooperative lock transition nhưng không bảo đảm syscall map của một external client luôn thất bại ngay. RBD SSH service phải kiểm tra mapping cục bộ và `rbd status`/watcher, từ chối mapping thứ hai do console quản lý, và acceptance test phải chứng minh writer thứ hai không acquire/write được. Contract không bao phủ client ngoài controller.
-
-Nếu cần multi-node RW trong tương lai, phải dùng clustered filesystem hoặc thiết kế khác; không dùng ext4.
-
-## 6. Kiến trúc mục tiêu
-
-```text
-Browser
-  │
-  ├── RGW/Capacity/Performance UI ───────────────┐
-  │                                              │
-  └── RBD UI + File Browser + Web Terminal       │
-                                                 ▼
-Existing FastAPI backend                  Node.js RBD service
-  ├── RGW router → boto3/RGW              ├── REST → ssh2.exec()
-  ├── Capacity Guard / reservation        ├── Files → ssh2.sftp()
-  ├── Performance collector               └── Terminal WS → ssh2.shell()
-  └── PostgreSQL                                  │
-                                                   │ SSH :22
-                                                   ▼
-                                           Linux Ceph/client host
-                                             ├── ceph / rbd CLI
-                                             ├── /dev/rbdX
-                                             └── /mnt/rbd/<volume>/ (ext4)
-                                                   │
-                                                   ▼
-                                               Ceph cluster
-```
-
-RBD service có thể chạy cùng máy Windows với frontend trong lab. Nếu muốn một cổng duy nhất, Nginx/dev proxy route `/api/rbd/*`, `/api/rbd-files/*` và `/ws/terminal` sang Node.js service; RGW/capacity/performance tiếp tục đi FastAPI.
-
-Capacity Guard vẫn giữ vai trò cấp phép trước `RBD_CREATE`. Vì web terminal có thể ghi trực tiếp vào filesystem ngoài từng API write, volume dùng terminal phải chạy mode **`reserved-logical`**: reserve trước worst-case của toàn logical size. Như vậy shell/SFTP có thể ghi tự do trong dung lượng image đã được budget, thay vì giả vờ kiểm soát từng `write()`.
-
-### 6.1. Thành phần backend đề xuất
-
-Giữ backend RGW hiện có và thêm một RBD service nhỏ:
-
-```text
-rgw-console/
-  backend/app/                  # FastAPI hiện có
-    api/
-      rgw.py
-      jobs.py
-      capacity.py
-      performance.py
-    services/
-      rgw_service.py
-      capacity_guard.py
-      capacity_collector.py
-      performance_collector.py
-      reservation_service.py
-    workers/
-      rgw_crud_worker.py
-
-  rbd-console/                  # Node.js
-    src/
-      server.js                 # Express + WebSocket
-      ssh.js                    # connection/reconnect/exec
-      rbd.js                    # create/map/mount/unmount/delete
-      files.js                  # SFTP list/read/upload/delete/mkdir
-      terminal.js               # ssh2.shell() ↔ WebSocket
-      state.js                  # observed image/device/mount state
-      validators.js             # pool/image/mount-root guard
-```
-
-### 6.2. Nguyên tắc thực thi SSH/RBD
-
-- REST action phải có timeout và command log đã redact.
-- Sau timeout/reconnect, đọc observed state trước khi retry; timeout không đồng nghĩa command chưa chạy.
-- Không format image cũ chỉ vì đang `MAPPED`; trước `mkfs.ext4` phải kiểm tra `wipefs -n`/`blkid` và chỉ format image vừa tạo, chưa có signature.
-- Mountpoint luôn được sinh bên dưới `RBD_MOUNT_ROOT`, ví dụ `/mnt/rbd/<safe-name>`.
-- File browser chỉ được truy cập bên dưới mountpoint của volume đã biết. Dùng SFTP `realpath/lstat` để chặn `..`, absolute path ngoài root và symlink escape.
-- Preview file không yêu cầu copy file sang Windows: backend stream bytes từ SFTP. Ảnh dùng `Content-Type` phù hợp và `Content-Disposition: inline`; text/PDF có thể xem inline; file khác dùng download.
-- Web terminal là shell thật trên Linux host. Không dùng terminal làm backend API implementation; create/mount/delete vẫn đi qua action REST có validation và audit.
-
-## 7. Capacity Guard chi tiết
-
-### 7.1. Cấu hình ban đầu
-
-```yaml
-capacity_policy:
-  observe_only: true
-  hard_ceiling_ratio: 0.70
-  admission_stop_ratio: 0.68
-  throttle_start_ratio: 0.67
-  resume_ratio: 0.67
-  collector_interval_seconds: 2
-  metrics_max_age_seconds: 5
-  resume_consecutive_samples: 3
-  operation_lease_seconds: 30
-  settlement_consecutive_samples: 3
-  settlement_min_seconds: 10
-  raw_overhead_factor: 1.10
-  fixed_metadata_bytes_per_object: null
-  safety_margin_ratio_per_osd: 0.01
-  safety_margin_min_bytes_per_osd: null
-  emergency_maintenance_bytes: null
-  fail_closed_on_osdmap_change: true
-  pause_on_degraded_or_remapped: true
-  require_clean_for_rbd_format: true
-  failure_reserve_mode: none   # none | one_osd | one_host
-```
-
-Các giá trị này là policy của ứng dụng, không phải config Ceph.
-
-### 7.2. Công thức quyết định
-
-Ledger không cộng nguyên một reservation đã được phản ánh vào `observed_used` mãi mãi. Với mỗi participating OSD `i`:
-
-```text
-projected_used_i = observed_used_i
-                 + pending_unobserved_increase_i
-                 + remaining_persistent_commitment_i
-                 + new_operation_worst_case_i
-                 + safety_margin_i
+Không còn mục Benchmark, Dry-run planning hoặc Evidence & Comparison.
 
-projected_ratio_i = projected_used_i / total_bytes_i
-```
+### 3.1. Luồng lấy chỉ số trực tiếp
 
-Operation chỉ được admit nếu:
+1. Mở **Chỉ số cụm và daemon**.
+2. Chọn toàn hệ thống, một loại daemon, một daemon hoặc nhiều daemon.
+3. Bấm **Xem** để đọc lại nguồn; hiển thị thời điểm thực thu và chất lượng dữ liệu.
+4. Bấm **Xuất dữ liệu mới** để đọc lại nguồn một lần nữa rồi tạo file.
+5. Nếu muốn giữ hiện trạng phục vụ so sánh, chuyển lựa chọn sang **Thu thập hiện trạng** và bấm **Lấy As-is**.
 
-```text
-telemetry_is_fresh
-AND osdmap_epoch_is_current
-AND all required pools/rules are known
-AND max(projected_ratio_i) < admission_stop_ratio
-AND no relevant OSD is full/backfillfull
-AND no relevant PG is degraded/remapped/recovering/backfilling
-```
+### 3.2. Luồng As-is trước/trong/sau
 
-`safety_margin_i` là giá trị lớn hơn giữa `total_i × safety_margin_ratio_per_osd` và `safety_margin_min_bytes_per_osd`; không để một ký hiệu chưa cấu hình đi vào quyết định. `new_operation_worst_case_i` phải gồm replica amplification của từng affected pool, placement skew/conservative bound, object allocation rounding và fixed metadata budget đã hiệu chỉnh bằng lab. Không credit compression/dedup dự kiến vào admission.
+1. Mở **Thu thập hiện trạng**, danh sách daemon được đọc mới.
+2. Chọn các daemon sẽ theo dõi/nâng cấp, có thể chọn nhiều daemon qua nhiều trang.
+3. Chọn nhãn **Trước / Trong / Sau nâng cấp**, tùy chọn ghi chú.
+4. Bấm **Lấy As-is**: hệ thống thu **mới tại lần bấm này**, tạo collection riêng.
+5. Xem dữ liệu từng daemon và lỗi nếu có; xuất collection hoặc lấy lần mới.
+6. Sang **So sánh**, lọc và chọn hai collection A/B phù hợp.
 
-Nếu không xác định được participating OSD, affected pools, per-pool replication, safety margin hoặc raw amplification, trả `BLOCKED_UNKNOWN_CAPACITY`, không giả định còn chỗ.
+Không cần Upgrade session, upgrade run, target image, spare OSD, plan revision hoặc xác nhận dry-run để đọc/thu dữ liệu.
 
-#### 7.2.1. Per-OSD bound cho MVP
+### 3.3. Ý nghĩa “Upgrade session” và cách bỏ
 
-Không lấy aggregate raw rồi chia đều theo số OSD. MVP dùng hai mức:
+Hiện session là nhóm kỹ thuật dùng để gắn FSID, bản cấu hình và lịch sử; nó **không tự thực hiện nâng cấp**. Người dùng bị yêu cầu chọn session do API/foreign key cũ, không phải vì đọc Ceph cần session.
 
-1. **Exact/known mapping:** khi biết được RADOS object/PG và acting set đúng epoch, phân bổ payload + allocation/metadata budget cho đúng OSD trong acting set.
-2. **Candidate-wide conservative bound:** khi RGW chưa cho biết internal RADOS object name/PG trước PUT, charge maximum single-replica bytes của operation cộng fixed metadata budget lên **mọi** eligible OSD của affected pool; aggregate raw (`logical × replica size`) chỉ dùng báo cáo và pool-level check. Một OSD không nhận hai replica của cùng object trong topology hợp lệ, nên single-replica bound là conservative cho một operation dưới stable CRUSH. Với nhiều object/chunk, cộng toàn bộ bytes có thể rơi vào cùng OSD. Cách này có thể over-reserve mạnh nhưng không được thay bằng average share nếu chưa có simulator được kiểm chứng.
+Thiết kế mới:
 
-Optimization sau MVP có thể mô phỏng/object-map theo OSDMap và phân bố PG, nhưng phải so với candidate-wide bound trong test. Bất kỳ remap/recovery nào cũng làm binding cũ mất hiệu lực và chuyển controller sang `PAUSED_REMAP`.
+- Mỗi collection tự giữ cluster ID, FSID, người thu, phạm vi daemon, thời gian, nguồn, schema và bản cấu hình đã redact/hash.
+- UI không có selector hoặc nút tạo session.
+- Có thể có tên đợt/ghi chú tùy chọn để dễ tìm, nhưng không phải điều kiện bắt buộc.
+- Lớp tương thích có thể tạo ngữ cảnh nội bộ cho collector cũ trong giai đoạn chuyển tiếp. Ngữ cảnh này không được tái xuất hiện thành bước người dùng phải thao tác.
+- Không xóa bảng/session/config snapshot cũ hoặc sửa migration đã áp dụng để né foreign key.
 
-### 7.3. Reservation
+### 3.4. Xem trước tác động trước khi thay đổi
 
-Reservation phải có:
+Trong phần OSD của **Thu thập hiện trạng**, có nút **Xem trước thay đổi OSDMap**:
 
-- `reservation_id`.
-- `owner_type`: request/job/volume.
-- `owner_id`.
-- FSID, OSDMap epoch và danh sách affected pools.
-- Logical bytes và estimated raw bytes.
-- Child rows `(reservation_id, pool_id, osd_id, estimated_bytes)` hoặc conservative bound cho mọi pool/OSD bị ảnh hưởng; một reservation multi-pool phải commit nguyên tử.
-- `lease_owner`, `lease_generation`, `heartbeat_at` và `lease_expires_at` cho operation ngắn hạn.
-- `created_at` và state.
-- `PENDING`, `IN_FLIGHT`, `LEASE_EXPIRED_UNRECONCILED`, `SETTLING`, `PERSISTENT_COMMITMENT`, `RELEASED`.
-
-Tách hai loại charge:
-
-- **Transient operation reservation:** có lease được heartbeat khi request/upload/multipart còn chạy. Lease hết không tự release; chuyển `LEASE_EXPIRED_UNRECONCILED` và vẫn bị tính cho tới khi reconciler biết outcome.
-- **Persistent volume commitment:** không có TTL tự hết. Charge bằng `max(0, worst_case_full_allocation - conservatively_attributed_actual_allocation)` trong toàn bộ lifetime volume. Nếu không đo/attribution đủ tin cậy, giữ nguyên full commitment; chấp nhận over-reserve thay vì overbook.
-
-Flow chuẩn:
+1. Chọn OSD, pool/phạm vi PG và thông số dự định thay đổi qua form có kiểu dữ liệu.
+2. Bấm **Tính tác động**: thu OSDMap mới, tạo kịch bản cục bộ và so sánh map gốc với map giả định.
+3. Xem PG/primary thay đổi, phân bố trên OSD và ảnh hưởng ngoài tập OSD được chọn; sửa thông số và tính lại nếu cần.
+4. Lưu/xuất báo cáo với nhãn **Dự đoán — chưa áp dụng**. Không có nút Áp dụng lên Ceph.
+5. Nếu người vận hành đổi cluster bên ngoài console, có thể lấy As-is mới để đối chiếu thực tế; không coi kịch bản giả định là collection Sau nâng cấp.
 
-1. Đọc capacity snapshot còn mới.
-2. MVP mở một advisory lock toàn FSID. Tối ưu sau này có thể khóa ordered set `FSID + OSD_ID`, nhưng mọi pool dùng chung OSD phải cùng lock domain; không khóa riêng từng pool.
-3. Cộng `pending_unobserved_increase` và `remaining_persistent_commitment` trên toàn FSID theo từng OSD.
-4. Tính worst-case multi-pool của operation mới.
-5. Nếu fit, tạo reservation và child rows per-pool/per-OSD rồi commit nguyên tử.
-6. Thực hiện operation, heartbeat kèm fencing generation.
-7. Thành công operation ngắn hạn: chuyển sang `SETTLING`. Sau configured settle window và các fresh post-operation samples, chuyển phần đã phản ánh vào `observed_used` ra khỏi pending charge. Vì không thể attribution hoàn hảo từ aggregate OSD delta, giữ conservative charge nếu snapshot không đủ tin cậy.
-8. Volume reserved-logical: chuyển thành `PERSISTENT_COMMITMENT`; không release khi lease request tạo volume hết hạn.
-9. Thất bại/timeout/lease expiry: vẫn charge và reconcile observed state trước khi release.
-10. Delete volume chỉ release commitment sau khi image ID không còn tồn tại và có fresh post-delete samples. RGW cleanup chỉ tạo headroom khi policy quan sát được headroom mới; không gán một aggregate drop bất kỳ cho owner rồi credit hai lần.
-
-### 7.4. RBD logical reservation
-
-RBD là thin-provisioned. Có hai mode:
-
-#### `reserved-logical` — mặc định
-
-- Trước khi trả volume cho người dùng ghi trực tiếp, reserve raw worst case của toàn logical size.
-- Với replicated pool, ước lượng ban đầu:
-
-```text
-estimated_raw = logical_size × pool_size × raw_overhead_factor
-```
-
-- Công thức aggregate chỉ là điểm bắt đầu, không phải per-OSD proof. Reservation phải tạo child rows cho metadata/data pool với replica size riêng, cộng fixed object/index/OMAP budget và kiểm tra per-OSD headroom/placement skew; không chỉ chia đều estimated raw cho số OSD.
-- Nếu không đủ bằng chứng để phân bổ per OSD, dùng conservative bound và từ chối image quá lớn.
-- Khi OSDMap đổi, ngừng cấp volume mới và reconcile lại reservation.
-
-#### `actual-use` — chỉ để thử nghiệm best-effort
-
-- Không reserve toàn logical size.
-- Theo dõi actual raw usage và dừng writer do console quản lý.
-- Không cam kết application admission ceiling nếu người dùng SSH vào mountpoint và tự ghi ngoài controller.
-- UI phải hiển thị nhãn `BEST EFFORT` rõ ràng.
-
-### 7.5. Failure reserve
-
-Cap 70% trong trạng thái bình thường không chứng minh còn đủ chỗ khi mất một OSD/host hoặc khi drain OSD. Nếu policy yêu cầu vẫn dưới 70% sau một failure, phép tính aggregate dưới đây chỉ là **điều kiện cần**, không phải PASS gate:
-
-```text
-allowed_used_raw <= 0.70 × (eligible_raw_capacity - failed_domain_capacity)
-```
-
-Admission `one_osd`/`one_host` còn phải mô phỏng hoặc lập conservative bound cho remap của từng PG theo CRUSH, heterogeneous capacity, data skew và target-specific headroom. Với lab chỉ có 3 OSD và replica theo host, mất một OSD còn không có failure domain thứ tư để phục hồi đủ `size=3`, dù phần trăm dung lượng còn thấp. Capacity Guard phải báo `NO_RECOVERY_TARGET`; không được biến phép tính aggregate thành tuyên bố cluster vẫn đủ replica.
-
-## 8. RGW Object Console
-
-### 8.1. Phạm vi quyền
-
-MVP dùng một identity RGW lab có quyền quản lý toàn bộ bucket thử nghiệm. Cần phân biệt:
-
-- S3 `ListBuckets` có scope theo account/owner; không dùng kết quả này để tuyên bố đã liệt kê mọi bucket được policy grant hoặc mọi bucket trong cluster.
-- Inventory cluster-wide dùng RGW Admin Ops. Đọc/ghi/xóa object qua S3 phải dùng RGW system/admin identity lab hoặc explicit owner credential có data access phù hợp; admin inventory cap và S3 data access là hai contract cần test riêng.
-- Không log access key/secret key.
-- Không đọc secret từ biến `VITE_*` hoặc gửi secret xuống browser.
-
-Nếu chưa cấu hình admin identity, console phải ghi rõ scope là `CURRENT_S3_IDENTITY`, không được gắn nhãn “toàn cluster”.
-
-### 8.2. API object đề xuất
-
-Giữ API đang có và bổ sung:
-
-```text
-GET    /api/buckets
-GET    /api/objects
-GET    /api/objects/head
-GET    /api/objects/content
-
-PUT    /api/objects/content
-PATCH  /api/objects/metadata
-DELETE /api/objects
-POST   /api/objects/bulk-delete
-GET    /api/objects/versions
-```
-
-Quy ước:
-
-- Tất cả endpoint kiểm tra bucket allowlist, kể cả read/list; không chỉ kiểm tra delete.
-- `GET /objects` và `GET /objects/versions` dùng continuation marker/token opaque, limit có trần và trả `next_token`.
-- `PUT /objects/content` nhận bucket, exact key, Content-Type, Content-Length bắt buộc và optional checksum/`If-Match`; đây là create hoặc overwrite. Nếu không biết trước kích thước thì upload vào staging bounded hoặc từ chối, không stream vô hạn rồi mới admission.
-- `PATCH /objects/metadata` thực hiện copy object lên chính nó với metadata mới khi backend/S3 API hỗ trợ.
-- `DELETE /objects` nhận optional `version_id`.
-- Bulk delete giới hạn batch và trả kết quả từng object; không trả success chung nếu một phần thất bại.
-- API manual delete được phép xóa object trong bucket allowlist.
-- Auto streaming delete mặc định chỉ xóa object có trong catalog của chính job.
-- Mutation hỗ trợ `Idempotency-Key`; response ghi `request_id`, bucket/key/version/result và capacity decision. HEAD/GET/metadata response phải phân biệt version ID/current head/delete marker khi RGW trả được thông tin đó.
-
-### 8.3. Semantics cần hiển thị trên UI
-
-- `UPDATE` content là `PUT` lại cùng key, không phải PATCH byte-range.
-- Metadata update có thể là self-copy và phát sinh I/O tương đương object mới.
-- Bucket versioned: delete không có `VersionId` có thể tạo delete marker.
-- Hard delete phải list và xóa đúng version/delete marker.
-- ETag không được coi là SHA-256 payload trong mọi trường hợp, đặc biệt multipart.
-- Preview binary không tin cậy tiếp tục bị chặn như console hiện tại.
-
-### 8.4. RGW CRUD streaming job
-
-Payload đề xuất:
-
-```json
-{
-  "schema_version": 2,
-  "job_type": "rgw_crud",
-  "client_id": "loadgen-01",
-  "bucket": "rgw-lab-data",
-  "prefix": "console-jobs/run-001/",
-  "payload_source": {
-    "corpus_ids": ["mixed"],
-    "category_weights": {
-      "images": 35,
-      "data": 25,
-      "documents": 20,
-      "media": 10,
-      "archives": 10
-    },
-    "min_bytes": 4096,
-    "max_bytes": 1048576,
-    "naming_strategy": "generated"
-  },
-  "operation_weights": {
-    "PUT": 28,
-    "GET": 28,
-    "HEAD": 3,
-    "LIST": 2,
-    "UPDATE": 20,
-    "DELETE": 19
-  },
-  "requests_per_second": 5,
-  "concurrency": 4,
-  "duration_seconds": 3600,
-  "object_limit": null,
-  "max_live_objects": 10000,
-  "max_live_logical_bytes": 10737418240,
-  "delete_scope": "job_owned",
-  "auto_drain": true,
-  "version_policy": "detect",
-  "capacity_policy_id": "default-70"
-}
-```
-
-Worker behavior:
-
-1. Claim job bằng lease có `lease_generation` fencing token; mọi heartbeat, counter update, reservation và pre-operation admission phải so owner + generation. Worker cũ mất lease không được tiếp tục mutation.
-2. Chọn operation theo weight và inventory hiện tại.
-3. Capacity Guard có quyền override operation mix.
-4. Nếu không có object để GET/UPDATE/DELETE, chọn một operation hợp lệ khác và ghi lý do.
-5. `PUT` tạo key mới trong prefix job.
-6. `UPDATE` chỉ chọn object/version job-owned, tạo payload/version mới và reserve toàn kích thước mới.
-7. `GET/HEAD/LIST` không làm tăng capacity reservation.
-8. `DELETE` phân biệt delete-marker creation và hard-delete. Auto cleanup chỉ xóa version/delete marker job-owned, đánh dấu catalog là deleting và chỉ chuyển deleted sau khi S3/ListObjectVersions xác nhận.
-9. Không credit raw capacity từ DELETE cho đến khi collector quan sát thấy dung lượng giảm.
-10. Ghi per-operation counters, bytes, latency, error và capacity decision.
-
-Khi `PAUSED_CAPACITY`:
-
-- Dừng `PUT`, `UPDATE`; multipart chưa thuộc MVP tiếp tục bị reject.
-- Tiếp tục `GET`, `HEAD`, `LIST`.
-- Có thể tăng tỷ lệ DELETE trên object job-owned nếu job bật `auto_drain=true`.
-- Nếu không có object được phép xóa, chuyển job sang pause; không mở rộng delete scope.
-
-Job config phải là discriminated/versioned union. `job_type=legacy_put` giữ nguyên các trường hiện có (`client_id`, `corpus_ids`, category weights, naming strategy); migration không được biến job cũ thành `rgw_crud` thiếu payload source.
-
-Catalog versioned không dùng một mutable row duy nhất cho mỗi key. Lưu row bất biến theo `(bucket, key, version_id hoặc synthetic_unversioned_id)`, cờ `is_delete_marker`, owner job và một head pointer riêng. Bucket ở trạng thái `Suspended` phải có test riêng. Cleanup của job phải list/reconcile versions rồi hard-delete toàn bộ version/marker do job tạo; không được xóa version của owner khác.
-
-## 9. RBD Volume Console
-
-### 9.1. Pool, host và naming
-
-- Dùng pool lab riêng, mặc định `rbd-lab`; `rbd pool init` chỉ chạy một lần ở provisioning.
-- Chọn một Linux Ceph/client host cố định, ví dụ `10.20.20.12`, đã có `ceph-common`, `rbd`, keyring, SSH server và kernel RBD.
-- Image do console tạo dùng prefix cố định, ví dụ `lab-<name>` hoặc `lab-<uuid>`.
-- Mount root cố định, ví dụ `/mnt/rbd`; mỗi image mount vào `/mnt/rbd/<safe-image-name>`.
-- Windows không map RBD và không format filesystem; `ext4` chỉ tồn tại/mount trên Linux host.
-
-### 9.2. State đơn giản cần theo dõi
-
-```text
-NOT_FOUND
-  → CREATED
-  → MAPPED
-  → FORMATTED
-  → MOUNTED
-  → UNMOUNTED
-  → UNMAPPED
-  → DELETED
-```
-
-Không cần daemon đặc quyền riêng chạy trên Linux host. Node.js RBD service xác định **observed state** bằng các lệnh read-only qua SSH như `rbd info`, `rbd device list`, `blkid` và `findmnt` trước/sau mỗi action. Nếu SSH rớt hoặc command timeout, trạng thái chuyển `UNKNOWN` và phải probe lại trước retry.
-
-### 9.3. Create + map + ext4 + mount
-
-Flow mặc định:
-
-1. Validate pool, image name, size và mount root.
-2. Capacity preflight/reservation nếu Capacity Guard đang bật.
-3. `rbd create <pool>/<image> --size <MiB>`.
-4. `rbd device map <pool>/<image> --exclusive`; lấy device thực từ `rbd device list --format=json`.
-5. Kiểm tra `wipefs -n` và `blkid`. Chỉ image vừa tạo, chưa có signature mới được `mkfs.ext4 -m 0 <device>`.
-6. `mkdir -p /mnt/rbd/<image>` và `mount <device> <mountpoint>`.
-7. Probe bằng cách ghi file nhỏ, `sync`, đọc lại và xóa probe.
-8. Trả về `image`, `device`, `mount_path`, filesystem và observed state.
-
-Ví dụ lệnh trên Linux host:
-
-```bash
-rbd create rbd-lab/test01 --size 1024
-rbd device map rbd-lab/test01 --exclusive
-# ví dụ /dev/rbd0
-wipefs -n /dev/rbd0
-blkid /dev/rbd0 || true
-mkfs.ext4 -m 0 /dev/rbd0
-mkdir -p /mnt/rbd/test01
-mount /dev/rbd0 /mnt/rbd/test01
-```
-
-### 9.4. Web terminal
-
-- Frontend dùng `xterm.js`; backend Node.js dùng `ssh2.shell()` và pipe qua WebSocket.
-- Terminal mở shell trực tiếp trên Linux host, nên có thể chạy `ls`, `cat`, `dd`, `fio` hoặc thao tác file trong `/mnt/rbd/<image>`.
-- Đóng tab/session thì SSH shell đóng; RBD mount **không** tự unmount chỉ vì terminal đóng.
-- Terminal là công cụ lab để test RBD sau upgrade, không phải sandbox production.
-
-### 9.5. File browser và preview nội dung ext4
-
-Sau khi volume ở trạng thái `MOUNTED`, file trong ext4 là file Linux bình thường. Console đọc chúng qua **SFTP**, nên vẫn duyệt và xem được nội dung mà không cần mount RBD trên Windows.
-
-API đề xuất:
-
-```text
-GET    /api/rbd/images
-POST   /api/rbd/images
-GET    /api/rbd/images/:name
-POST   /api/rbd/images/:name/mount
-POST   /api/rbd/images/:name/unmount
-DELETE /api/rbd/images/:name
-GET    /api/rbd/devices
-
-GET    /api/rbd/images/:name/files?path=/
-GET    /api/rbd/images/:name/files/content?path=/photos/a.jpg
-PUT    /api/rbd/images/:name/files/content?path=/docs/test.txt
-POST   /api/rbd/images/:name/directories
-DELETE /api/rbd/images/:name/files?path=/tmp/a.bin
-
-WS     /ws/terminal
-```
-
-File browser hỗ trợ:
-
-- List folder: name, type, size, mtime.
-- Upload file từ browser vào ext4 qua SFTP.
-- Download file.
-- Preview text (`txt`, `log`, `json`, `yaml`, `md`, source code) với giới hạn kích thước.
-- Preview ảnh phổ biến (`jpg`, `jpeg`, `png`, `gif`, `webp`, `svg`) bằng endpoint stream `inline`.
-- Preview PDF inline khi browser hỗ trợ.
-- Các binary khác chỉ hiển thị metadata + nút download.
-- Tạo directory và xóa file/directory trong mount root.
-
-Không tin extension một mình; backend cần xác định/whitelist MIME hợp lý và luôn đặt `X-Content-Type-Options: nosniff`. Với file lớn, stream theo chunk; không load toàn bộ file vào RAM.
-
-### 9.6. Unmount, unmap và delete
-
-```bash
-sync
-umount /mnt/rbd/test01
-rbd device unmap /dev/rbd0
-rbd rm rbd-lab/test01   # chỉ khi người dùng chọn Delete
-```
-
-Quy tắc:
-
-- Unmount khi busy trả conflict; không dùng lazy unmount mặc định.
-- Unmap đúng device đang map tới image đã xác minh.
-- Delete image chỉ sau khi đã unmount/unmap; snapshot/dependency còn tồn tại thì báo lỗi, không force purge.
-- `Unmount`/`Unmap` không làm mất dữ liệu. Re-map + mount lại image cũ phải thấy nguyên file đã ghi trước đó.
-
-### 9.7. API action và idempotency tối thiểu
-
-Create/mount/unmount/delete nên có `action_id` + `Idempotency-Key` để tránh double-click hoặc HTTP retry gây duplicate destructive action. Không cần state machine/reconciler phức tạp ở host, nhưng vẫn cần probe observed state trước khi chạy:
-
-- `mount` khi đã mounted → trả current state, không mount lần hai.
-- `unmount` khi đã unmounted → idempotent success.
-- `create` cùng idempotency key → trả image/action cũ.
-- Không bao giờ tự `mkfs` một image có filesystem signature đã tồn tại.
-
-### 9.8. RBD lifecycle test sau upgrade
-
-Mục tiêu RBD của MVP là xác nhận dữ liệu vẫn hoạt động sau upgrade:
-
-1. Create 1–3 image test.
-2. Map + ext4 + mount.
-3. Upload một tập file gồm text + ảnh + binary; lưu SHA-256.
-4. Đọc/preview ảnh và text từ web; đọc lại qua terminal.
-5. Ghi thêm file lớn bằng terminal (`dd`/`fio` nếu cần).
-6. Unmount + unmap.
-7. Re-map + mount lại cùng image.
-8. Verify file list + SHA-256 + preview ảnh vẫn đúng.
-9. Sau khi xác nhận xong mới delete image nếu muốn cleanup.
-
-Nếu sau này cần job tự động create/use/delete nhiều vòng, bổ sung sau; không bắt buộc cho MVP 2–3 ngày.
-
-## 10. Database và migration
-
-### 10.1. Migration framework
-
-Thêm Alembic hoặc một migration runner có version rõ ràng. Không tiếp tục chỉ dựa vào một chuỗi `CREATE TABLE IF NOT EXISTS` vì cần thay CHECK constraint và schema qua nhiều phiên bản.
-
-Tạo one-shot service/command `migrate` chạy trước backend và worker. Nó phải fingerprint schema legacy, stamp revision ban đầu sau khi xác minh, rồi apply migration trong transaction phù hợp. Backend/worker/RBD Node.js service đợi migration hoàn tất và không chạy runtime DDL. Backup PostgreSQL trước migration lab có dữ liệu cần giữ; không cho hai process bootstrap schema đồng thời.
-
-### 10.2. Bảng `operations`
-
-Mở rộng hoặc thay CHECK constraint để hỗ trợ ít nhất:
-
-```text
-PUT, GET, HEAD, LIST, UPDATE, DELETE,
-RBD_CREATE, RBD_MAP, RBD_FORMAT, RBD_MOUNT,
-RBD_FILE_READ, RBD_FILE_WRITE, RBD_FILE_DELETE,
-RBD_UNMOUNT, RBD_UNMAP, RBD_DELETE
-```
-
-Schema hiện tại bắt buộc `bucket` và `object_key`, nên không thể chỉ thêm RBD kind. Migration phải:
-
-- Backfill row cũ thành `target_type='RGW_OBJECT'` và `target_id` ổn định.
-- Cho `bucket`/`object_key` nullable với row không phải RGW.
-- Thêm `target_type` và `target_id` NOT NULL sau backfill.
-- Thêm conditional CHECK: RGW object operation phải có bucket/key; RBD operation phải có volume ID/action tương ứng.
-- Giữ chi tiết command lifecycle ở `rbd_actions`; `operations` là audit/metric record chung, không thay state store RBD.
-
-Thêm các trường:
-
-- `request_id`, `job_id`, `volume_id`.
-- `target_type`, `target_id`.
-- `bytes_delta_logical`, `estimated_bytes_delta_raw`.
-- `capacity_decision_id`, `osdmap_epoch`.
-- `error_code`, `error`.
-
-### 10.3. Bảng mới
-
-#### `stream_objects`
-
-- Job, bucket, key, immutable version ID hoặc synthetic ID cho unversioned object.
-- `is_delete_marker`, owner job, head pointer riêng, size, ETag và checksum nếu có.
-- State: LIVE/UPDATING/DELETING/DELETED/UNKNOWN.
-- Created/updated/deleted timestamps.
-
-#### `capacity_snapshots`
-
-- FSID, OSDMap epoch, timestamp.
-- Collector version và freshness.
-- Cluster health summary.
-
-#### `capacity_osds`
-
-- Snapshot ID, OSD ID.
-- Total/used/available bytes, used ratio.
-- Up/in state, host/device class.
-- Pool/rule scope metadata.
-
-#### `capacity_reservations`
-
-- Owner, affected pools, logical/raw estimate, reservation class và remaining commitment.
-- Lease owner/generation/heartbeat cho transient operation; persistent volume commitment không tự expire.
-- State và epoch binding.
-
-#### `capacity_reservation_allocations`
-
-- Reservation ID, pool ID, OSD ID và estimated bytes.
-- Unique theo reservation/pool/OSD; dùng để cộng atomically trên toàn FSID.
-
-#### `capacity_decisions`
-
-- Request/job/action, policy version, input snapshot và OSDMap epoch.
-- State/reason, participating OSD, projected ratios và decision ADMIT/THROTTLE/BLOCK.
-- Liên kết các reservation tạo ra bởi decision.
-
-#### `performance_samples`
-
-- `fsid`, `source`, `scope_type`, `scope_id`, `captured_at`, `window_seconds` và collector version.
-- Read/write/total IOPS; read/write/total bytes-per-second; latency fields chỉ lưu khi nguồn cung cấp đúng semantics.
-- `fresh`, `reset_detected`, `partial` và metadata/capability để UI không biến mất mẫu thành số 0.
-- Unique theo source/scope/timestamp/window; index theo `(fsid, source, scope_type, scope_id, captured_at)`.
-- Raw sample giữ mặc định 24 giờ; rollup 1 phút giữ mặc định 30 ngày. Retention phải cấu hình được và cleanup theo batch.
-
-#### `idempotency_requests`
-
-- Scope/actor, `Idempotency-Key`, HTTP method/resource và canonical request fingerprint.
-- State `CLAIMED/IN_PROGRESS/SUCCEEDED/FAILED_RETRYABLE/FAILED_FINAL`, owner/fencing generation, request/action ID và response/result đã redact.
-- Unique theo `(scope, idempotency_key)`; claim trong transaction trước mutation.
-- Retry cùng key + cùng fingerprint replay kết quả hoặc trạng thái hiện có. Cùng key nhưng khác fingerprint trả conflict; không phát lại versioned PUT/self-copy/delete.
-- Áp dụng chung cho RGW và RBD; `rbd_actions.idempotency_key` tham chiếu record này thay vì tạo contract riêng không đồng bộ.
-
-#### `rbd_volumes`
-
-- Volume UUID, pool, namespace, image name và immutable image ID.
-- Logical size, actual allocation quan sát được, capacity mode.
-- Feature set, state, device, FS UUID và mountpoint.
-- Created/updated/deleted timestamps và last error.
-
-#### `rbd_actions`
-
-- Action ID/idempotency key.
-- Volume, action type, intended state và observed state.
-- Start/end, timeout, exit code, redacted result.
-
-### 10.4. Job lease
-
-Thêm các trường:
-
-- `job_type`.
-- `lease_owner`.
-- `lease_generation`/fencing token.
-- `lease_expires_at`.
-- `heartbeat_at`.
-- `paused_reason`.
-- Per-operation counters/bytes.
-
-Claim job phải atomic. Worker khác chỉ được takeover khi lease hết hạn và sau bước reconcile. Mọi heartbeat, state/counter update, reservation và pre-operation admission phải kèm đúng `lease_owner + lease_generation`; worker cũ bị fence không được tiếp tục mutation.
-
-## 11. API telemetry và response contract
-
-### 11.1. Capacity snapshot
-
-```text
-GET /api/capacity?scope_type=pool&scope=rbd-lab
-GET /api/capacity/stream
-```
-
-Response tối thiểu:
-
-```json
-{
-  "fsid": "redacted-id",
-  "osdmap_epoch": 123,
-  "captured_at": "2026-09-21T10:00:00Z",
-  "fresh": true,
-  "policy": {
-    "hard_ceiling_ratio": 0.70,
-    "admission_stop_ratio": 0.68,
-    "resume_ratio": 0.67
-  },
-  "state": "NORMAL",
-  "most_full_osd": 2,
-  "most_full_ratio": 0.641,
-  "participating_osds": [0, 1, 2],
-  "pending_unobserved_raw_bytes": 268435456,
-  "remaining_persistent_commitment_raw_bytes": 805306368,
-  "contract": "STABLE_EPOCH_CONTROLLED_WRITERS",
-  "reasons": []
-}
-```
-
-### 11.2. Lỗi chuẩn
-
-| HTTP | Code | Ý nghĩa |
-| --- | --- | --- |
-| 409 | `CAPACITY_LIMIT` | Operation không fit policy |
-| 409 | `VOLUME_BUSY` | Volume đang được dùng/mount busy |
-| 409 | `DEPENDENCY_EXISTS` | Snapshot/clone/dependency chặn delete |
-| 409 | `STATE_CONFLICT` | DB intent và observed state không khớp |
-| 422 | `INVALID_SCOPE` | Pool/bucket/image/path ngoài allowlist |
-| 423 | `RECONCILING` | RBD service/controller đang đối chiếu observed state |
-| 503 | `TELEMETRY_STALE` | Không có capacity evidence đủ mới |
-| 503 | `CEPH_UNAVAILABLE` | Không truy cập được Ceph/RGW |
-
-Response lỗi phải có `request_id`, stable error code, message, retryable và observed state; không trả command string chứa secret.
-
-### 11.3. Control plane và RBD SSH service
-
-Các control bắt buộc:
-
-```text
-GET  /api/control/state
-POST /api/control/emergency-stop
-POST /api/control/resume
-
-GET  /api/rbd/ssh/health
-GET  /api/rbd/ssh/capabilities
-GET  /api/capacity/decisions/{decision_id}
-```
-
-- `GET /api/rbd/ssh/health` kiểm tra SSH connect, host identity, `ceph fsid`, `rbd --version`, mount root và quyền cần thiết; không trả private key/password/keyring.
-- Capability response cho biết `rbd`, `mkfs.ext4`, `mount`, `umount`, SFTP và interactive shell có sẵn hay không.
-- Emergency stop ngừng action tạo/tăng dung lượng mới từ API. Terminal đang mở không thể bị coi là fully controlled writer; volume dùng terminal phải được reserved-logical từ trước.
-- Resume chỉ được chấp nhận khi capacity/telemetry gate đạt.
-
-### 11.4. API hiệu năng hiện tại
-
-```text
-GET /api/performance/current?source=ceph&scope_type=cluster&scope=<fsid>
-GET /api/performance/history?source=ceph&scope_type=osd&scope=2&from=...&to=...&step=15s
-GET /api/performance/stream?source=ceph&scope_type=cluster&scope=<fsid>
-```
-
-Response tối thiểu:
-
-```json
-{
-  "schema_version": 1,
-  "source": "ceph",
-  "scope_type": "cluster",
-  "scope": "redacted-fsid",
-  "captured_at": "2026-09-21T10:00:00Z",
-  "window_seconds": 15,
-  "fresh": true,
-  "reset_detected": false,
-  "iops": {"read": 120.0, "write": 80.0, "total": 200.0},
-  "throughput_bps": {"read": 10485760.0, "write": 5242880.0, "total": 15728640.0},
-  "latency_ms": {"read_avg": 2.1, "write_avg": 3.4},
-  "context": {"recovery_active": false, "osdmap_epoch": 123},
-  "reasons": []
-}
-```
-
-Contract đo lường:
-
-- `application`: tính từ operation journal/job của console, gồm request/s, payload byte/s, success/error và p50/p95/p99. Đây là tải do console quan sát, không phải tổng IOPS Ceph.
-- `ceph`: lấy counter client read/write từ Ceph mgr/Prometheus hoặc adapter read-only tương đương, rồi tính rate bằng `delta(counter) / delta(time)`. Đây là nguồn mặc định cho thẻ “IOPS/throughput hệ thống”.
-- `device` là tùy chọn từ node exporter/iostat và chỉ bật khi ánh xạ OSD ↔ device ↔ host đã được xác minh; không trộn device I/O với Ceph client I/O.
-- Tách read/write và client/recovery/replication nếu nguồn có counter tương ứng. Không cộng recovery/backfill vào client throughput rồi gắn nhãn là workload.
-- Scope pool/RBD image chỉ xuất hiện khi metric có label/counter đáng tin cậy. Không suy ra per-pool bằng cách chia cluster total hoặc cộng các OSD dùng chung nhiều pool.
-- “Hiện tại” là rate của cửa sổ hoàn chỉnh gần nhất, mặc định 15 giây; API luôn trả `window_seconds`, unit và timestamp. Có thêm cửa sổ 1 phút/5 phút để làm mượt.
-- Counter giảm do daemon restart/wrap hoặc đổi identity phải tạo `reset_detected=true` và sample `UNKNOWN/PARTIAL`; không phát spike âm/dương giả. Mất mẫu hoặc quá `stale_after` phải trả `fresh=false`, không điền 0.
-- Performance Monitor chỉ dùng quan sát/cảnh báo. Không được dùng sample IOPS/throughput để cấp phép Capacity Guard nếu chưa có một contract admission riêng được kiểm chứng.
-
-## 12. Frontend
-
-### 12.1. Navigation mới
-
-```text
-Live dashboard
-Performance
-Upload objects
-Random object
-RGW CRUD stream
-Object explorer
-RBD volumes
-Capacity
-```
-
-### 12.2. Global capacity banner
-
-Mọi view có banner nhỏ hiển thị:
-
-- Guard state.
-- OSD đầy nhất và phần trăm.
-- Application admission ceiling/admission stop và contract hiện tại.
-- Telemetry age.
-- Active reservation.
-- Lý do pause/block.
-
-Không cho nút thao tác tăng dung lượng chỉ dựa vào disabled UI; backend/worker vẫn phải enforce.
-
-### 12.3. Object Explorer
-
-Drawer object bổ sung:
-
-- Exact bucket/key/version.
-- Overwrite content.
-- Edit metadata.
-- Delete current head.
-- Hard delete version khi bật advanced mode.
-- Bulk select/delete.
-- Kết quả từng action và operation ID.
-
-### 12.4. RBD Volumes
-
-Danh sách volume hiển thị:
-
-- Display name, pool/image ID.
-- Logical size, actual allocated và reserved raw.
-- Lifecycle state.
-- Device/mount path.
-- Filesystem/FS UUID.
-- Capacity mode.
-- Các action hợp lệ ở state hiện tại.
-
-Volume detail gồm file browser, preview pane (text/ảnh/PDF), event/command timeline, nút mở web terminal và nút mount/unmount/delete. Destructive action vẫn cần modal xác nhận tên volume; đây là guard chống thao tác nhầm, không phải RBAC.
-
-### 12.5. Performance
-
-- Thẻ hiện tại: read/write/total IOPS, read/write/total throughput theo MiB/s và latency có sẵn.
-- Biểu đồ time-series có range 5 phút, 1 giờ, 24 giờ; chọn source/scope và cửa sổ 15 giây, 1 phút, 5 phút.
-- Mỗi thẻ/biểu đồ phải hiện `source`, scope, thời điểm mẫu, tuổi mẫu và cửa sổ tính rate; stale/reset/partial dùng trạng thái trực quan riêng, không vẽ về 0.
-- Có overlay OSD down, recovery/backfill, job start/stop và upgrade event để đối chiếu nguyên nhân biến động.
-- Khi xem `application`, UI ghi rõ “console workload”; khi xem `ceph`, ghi rõ “Ceph client counters”; `device` ghi rõ “physical device I/O”.
-
-## 13. Cấu hình
-
-Không ghi giá trị secret vào file plan. Các biến dự kiến:
-
-Backend/worker env:
-
-```text
-CEPH_EXPECTED_FSID
-CEPH_CLUSTER_NAME
-RBD_SSH_SERVICE_URL
-
-RBD_ALLOWED_POOLS
-RBD_ALLOWED_NAMESPACES
-RBD_IMAGE_PREFIX
-RBD_MOUNT_ROOT
-RBD_DEFAULT_CAPACITY_MODE
-
-RGW_ADMIN_MODE
-RGW_ALLOWED_BUCKETS
-RGW_STREAM_PREFIX_ROOT
-
-CAPACITY_OBSERVE_ONLY
-CAPACITY_HARD_CEILING_RATIO
-CAPACITY_ADMISSION_STOP_RATIO
-CAPACITY_THROTTLE_START_RATIO
-CAPACITY_RESUME_RATIO
-CAPACITY_COLLECTOR_INTERVAL_SECONDS
-CAPACITY_METRICS_MAX_AGE_SECONDS
-CAPACITY_RESUME_CONSECUTIVE_SAMPLES
-CAPACITY_OPERATION_LEASE_SECONDS
-CAPACITY_SETTLEMENT_CONSECUTIVE_SAMPLES
-CAPACITY_SETTLEMENT_MIN_SECONDS
-CAPACITY_RAW_OVERHEAD_FACTOR
-CAPACITY_FIXED_METADATA_BYTES_PER_OBJECT
-CAPACITY_SAFETY_MARGIN_RATIO_PER_OSD
-CAPACITY_SAFETY_MARGIN_MIN_BYTES_PER_OSD
-CAPACITY_EMERGENCY_MAINTENANCE_BYTES
-CAPACITY_FAIL_CLOSED_ON_OSDMAP_CHANGE
-CAPACITY_PAUSE_ON_DEGRADED_OR_REMAPPED
-CAPACITY_REQUIRE_CLEAN_FOR_RBD_FORMAT
-CAPACITY_FAILURE_RESERVE_MODE
-
-PERFORMANCE_ENABLED
-PERFORMANCE_SOURCE
-PERFORMANCE_PROMETHEUS_URL
-PERFORMANCE_PROMETHEUS_BEARER_TOKEN
-PERFORMANCE_COLLECTOR_INTERVAL_SECONDS
-PERFORMANCE_CURRENT_WINDOW_SECONDS
-PERFORMANCE_STALE_AFTER_SECONDS
-PERFORMANCE_RAW_RETENTION_HOURS
-PERFORMANCE_ROLLUP_RETENTION_DAYS
-PERFORMANCE_ALLOWED_SCOPES
-```
-
-RBD Node.js/SSH service env:
-
-```text
-RBD_HOST
-RBD_SSH_PORT
-RBD_SSH_USER
-RBD_SSH_KEY_PATH
-RBD_SSH_PASSWORD            # optional; ưu tiên key
-RBD_POOL
-RBD_MOUNT_ROOT
-RBD_IMAGE_PREFIX
-RBD_COMMAND_TIMEOUT_MS
-RBD_FILE_PREVIEW_MAX_BYTES
-RBD_ALLOWED_PREVIEW_MIME
-```
-
-SSH credential chỉ nằm ở Node.js service env/secret store và không trả ra browser. `RBD_SSH_KEY_PATH` phải trỏ tới private key chỉ process service đọc được.
-
-MVP có thể dùng CephX `client.admin` trên Linux SSH host vì yêu cầu lab quyền cao. RGW không dùng CephX key này; RGW dùng access/secret của một RGW system/admin identity riêng. Production hóa sau này phải thay bằng caps tối thiểu; việc đó không nằm trong MVP này.
-
-Thông tin xác thực của Prometheus (nếu endpoint có auth) chỉ nằm ở backend secret store/env, không trả ra frontend. Không tự bật/thay cấu hình module Ceph trong runtime; P0 phải inventory endpoint, metric names, labels và scrape interval trước.
-
-## 14. Kế hoạch triển khai theo pha
-
-### P0 — Inventory chỉ đọc
-
-- Xác nhận FSID, version, OSD topology, pool/CRUSH rule, RGW pools, bucket versioning và telemetry source.
-- Chốt `rbd-lab`, Linux SSH host, `RBD_MOUNT_ROOT` và SSH account.
-- Trên SSH host kiểm tra `ceph -s`, `rbd --version`, `rbd device list`, `mkfs.ext4`, `mount`, `umount`, SFTP và quyền `sudo` nếu dùng.
-- Không thay cluster ngoài provisioning đã duyệt.
-
-### P1 — Giữ RGW backend + dựng RBD SSH service
-
-- Giữ FastAPI/worker hiện có cho RGW, capacity và performance.
-- Tạo `rbd-console` Node.js với Express + `ssh2` + WebSocket.
-- Tạo `/api/rbd/ssh/health`, `GET /api/rbd/images`, `GET /api/rbd/devices` read-only trước.
-- Tạo validator cho pool, image prefix, mount root và safe path.
-- Thêm command timeout, reconnect và redacted command log.
-
-Điều kiện hoàn thành: web service connect được host, FSID đúng, đọc được image/device state và không cần cài Ceph/driver trên Windows.
-
-### P2 — Capacity/performance observe-only
-
-- Giữ Capacity Guard và Performance Monitor như thiết kế hiện tại.
-- Collector có thể chạy qua SSH read-only tới Linux host thay vì Linux SSH host.
-- Xác minh UI với `ceph osd df` và counter nguồn thực tế.
-- Chưa dùng terminal/file write cho tới khi dedicated RBD pool/mount root đã chốt.
-
-### P3 — RGW CRUD và capacity enforcement
-
-- Thực hiện các hạng mục RGW/capacity như plan hiện tại: migration, reservation, exact-key PUT/overwrite, delete/versioning, CRUD stream, pause/resume.
-- Phần này độc lập với việc RBD bỏ Linux SSH host.
-
-### P4 — RBD create/map/ext4/mount qua SSH
-
-- Thêm create/info/map/mount/unmount/unmap/delete API.
-- Probe state trước/sau action; không retry mù sau timeout.
-- Chỉ `mkfs.ext4` image vừa tạo và chưa có signature.
-- Tích hợp reserved-logical capacity preflight trước create nếu guard đang enforce.
-
-Điều kiện hoàn thành: create → map → ext4 → mount → write/read → unmount → remap → dữ liệu còn nguyên.
-
-### P5 — File browser + preview qua SFTP
-
-- List folder, upload, download, mkdir, delete.
-- Preview text, ảnh và PDF inline; binary khác download.
-- Stream file lớn; giới hạn preview size; chặn path escape/symlink escape.
-- UI volume detail có file tree + preview pane.
-
-Điều kiện hoàn thành: upload một ảnh vào ext4, unmount/remap/mount lại, vẫn list và preview đúng ảnh; SHA-256 file không đổi.
-
-### P6 — Web terminal
-
-- `xterm.js` + WebSocket + `ssh2.shell()`.
-- Mở shell trên đúng Linux host; hiển thị host/mount context rõ trên UI.
-- Đóng terminal chỉ đóng SSH shell, không tự unmount volume.
-
-Điều kiện hoàn thành: chạy `ls`, `cat`, `dd` trong mountpoint từ browser và quan sát file xuất hiện ngay trong file browser.
-
-### P7 — Tích hợp bài upgrade
-
-- Chạy baseline trước upgrade: create/mount, upload text + ảnh + binary, lưu checksum.
-- Trong/sau upgrade theo dõi RGW/RBD IOPS, throughput, latency và error.
-- Sau upgrade: remap/mount, verify checksum, preview ảnh/text và thử ghi mới.
-- Cleanup chỉ sau khi evidence đã lưu.
-
-**Phần RBD SSH console riêng** dự kiến khoảng **2–3 ngày công** cho MVP create/map/mount + terminal + file browser/preview. Toàn bộ RGW + Capacity Guard + Performance Monitor vẫn là scope lớn hơn và có estimate riêng.
-
-## 15. Test matrix bắt buộc
-
-### 15.1. Capacity
-
-| ID | Tình huống | Kết quả mong đợi |
-| --- | --- | --- |
-| C01 | Cluster average 60%, một participating OSD 69,5% | Mutation dự kiến vượt cap bị từ chối |
-| C02 | OSD ngoài CRUSH scope >70% | Không chặn pool không liên quan |
-| C03 | 32 worker thực hiện tổng 1.000 reservation attempt tại 67–68% | Tổng per-OSD charge không overbook; không có hai fencing generation cùng mutate một job |
-| C04 | Telemetry stale/CLI timeout | PUT/update/RBD create bị block; read còn hoạt động khi cluster cho phép; cleanup chỉ chạy trong emergency metadata budget |
-| C05 | OSDMap epoch đổi giữa reserve và execute | Hủy/recompute trước mutation; chuyển `PAUSED_REMAP/RECONCILING` |
-| C06 | OSD down/reweight/backfill | Dừng cấp mới, tính lại scope; báo thiếu failure reserve nếu có |
-| C07 | RGW và RBD cùng ghi | Dùng chung capacity ledger |
-| C08 | DELETE thành công nhưng raw chưa giảm | Không credit/resume sớm |
-| C09 | Controller restart có reservation active | Reconcile, không mất hoặc cộng trùng reservation |
-| C10 | RGW và RBD dùng hai pool khác nhau nhưng chung OSD | FSID/per-OSD lock ngăn cross-pool overbook |
-| C11 | Lease operation hết khi upload còn chạy | Vẫn charge `LEASE_EXPIRED_UNRECONCILED`; không auto-release |
-| C12 | Reservation đã phản ánh vào observed usage | Không double-count vô hạn; settlement có evidence/audit |
-
-### 15.2. RGW
-
-| ID | Tình huống | Kết quả mong đợi |
-| --- | --- | --- |
-| G01 | List >1.000 object | Pagination đủ, không lặp/mất |
-| G02 | Preview/range/download | Byte/checksum đúng |
-| G03 | Overwrite exact key | GET sau đó trả bản mới; operation ghi UPDATE |
-| G04 | Metadata self-copy | Metadata mới đúng; capacity accounting không coi miễn phí |
-| G05 | Delete unversioned | Object biến mất; raw release chờ telemetry |
-| G06 | Delete versioned không VersionId | Hiển thị delete marker, không báo hard-delete |
-| G07 | Hard-delete đúng VersionId | Xóa đúng version/marker được chọn |
-| G08 | Bulk delete partial failure | Trả kết quả từng key; retry idempotent |
-| G09 | CRUD mix | Tỷ lệ gần cấu hình khi đủ mẫu |
-| G10 | Auto-delete | Chỉ xóa object job-owned/prefix-owned |
-| G11 | Bucket versioning `Suspended` | Current/null version và delete marker được catalog/reconcile đúng |
-| G12 | Worker crash/restart | Catalog/job counters reconcile, fencing chặn worker cũ double mutation |
-| G13 | Nhiều UPDATE trên bucket versioned | Giữ immutable row cho từng version; cleanup chỉ hard-delete version/marker job-owned |
-
-### 15.3. RBD
-
-| ID | Tình huống | Kết quả mong đợi |
-| --- | --- | --- |
-| R01 | SSH health + FSID | Kết nối đúng Linux host/cluster; không lộ credential |
-| R02 | Tạo image 1 GiB | `rbd info` trả đúng size |
-| R03 | Map + ext4 + mount | Có device và mountpoint đúng dưới `RBD_MOUNT_ROOT` |
-| R04 | Upload text + ảnh qua file browser | File xuất hiện trong ext4; text/ảnh preview được |
-| R05 | Ghi file qua terminal | File xuất hiện ngay trong file browser |
-| R06 | Unmount + unmap | Device/mount biến mất, image vẫn còn |
-| R07 | Re-map + mount image cũ | File và SHA-256 còn nguyên; ảnh vẫn preview đúng |
-| R08 | Image có filesystem signature | Không tự `mkfs` lại |
-| R09 | Mount busy | Unmount trả conflict; không lazy unmount mặc định |
-| R10 | Path `..`/absolute/symlink escape | File API không thoát mount root |
-| R11 | SSH rớt giữa action | Reconnect rồi probe observed state trước retry |
-| R12 | Delete image | Chỉ xóa sau unmount/unmap; dependency thì báo lỗi |
-| R13 | 3 image đồng thời | Mount path riêng, list/read/write không lẫn dữ liệu |
-| R14 | Preview file lớn/binary | Không load toàn bộ vào RAM; unsupported type chuyển download |
-
-### 15.4. Performance
-
-| ID | Tình huống | Kết quả mong đợi |
-| --- | --- | --- |
-| P01 | Không có job console trong một cửa sổ hoàn chỉnh | `application` IOPS/throughput bằng 0; `ceph` vẫn có thể khác 0 do client/background khác |
-| P02 | Console hoàn thành số request và payload biết trước trong 60 giây | `application` count/bytes khớp journal; rate khớp theo đúng window/step |
-| P03 | RGW và RBD chạy đồng thời | Tách được series ứng dụng theo job/type; cluster series không bị cộng lặp ở API |
-| P04 | OSD/mgr restart làm counter giảm | Sample đánh dấu reset/unknown; không có IOPS hoặc throughput âm/spike giả |
-| P05 | Bỏ lỡ scrape hoặc endpoint timeout | Giữ last-known có age nhưng `fresh=false`; UI không vẽ thành 0 |
-| P06 | Recovery/backfill chạy cùng client workload | UI có context/overlay và không gắn recovery traffic thành client throughput |
-| P07 | Yêu cầu pool/image scope không có metric phù hợp | Trả `UNAVAILABLE` có lý do; không nội suy từ cluster/OSD total |
-| P08 | So sánh API với counter delta gốc trong cùng timestamp/window | Read/write/total và bytes/s đúng công thức, unit và sai số làm tròn đã công bố |
-
-### 15.5. Upgrade/fault
-
-- RGW/RBD workload đang chạy khi recovery/backfill bắt đầu.
-- Collector mất kết nối với MON/MGR.
-- PostgreSQL restart.
-- Backend restart.
-- Worker restart giữa request.
-- Node.js RBD service restart hoặc SSH rớt giữa map/format/mount và unmount/delete.
-- Một OSD down; sau đó up lại.
-- Metrics bị trễ hoặc timestamp lệch.
-- Disk chứa PostgreSQL/RBD service log gần đầy.
-- RGW GC backlog tăng.
-- Capacity vượt ngưỡng bởi external writer.
-
-Mỗi fault test phải ghi thời gian phát hiện, action bị chặn, operation đang bay, thời gian hội tụ và tài nguyên mồ côi còn lại.
-
-## 16. Observability và audit
-
-Metrics tối thiểu:
-
-- Per operation count/error/latency/bytes và application request/s, byte/s, p50/p95/p99.
-- Ceph client read/write/total IOPS và throughput byte/s theo cluster/OSD; pool/image chỉ khi source hỗ trợ đúng scope.
-- Ceph read/write latency từ sum/count hoặc counter tương đương khi có; không gán percentile nếu nguồn chỉ cung cấp average.
-- Source, scope, sample window, timestamp, freshness, reset/gap và collector error cho từng series.
-- Recovery/backfill/client traffic tách riêng nếu metric có sẵn; physical device I/O nằm trong namespace/source riêng.
-- RGW live object count/logical bytes.
-- RBD logical size/actual allocation/reserved raw.
-- OSD used ratio từng participating OSD và max.
-- Capacity state, reason, snapshot age và OSDMap epoch.
-- Active/lease-expired-unreconciled reservation và persistent commitment.
-- Job state, lease owner, last heartbeat và paused reason.
-- SSH/RBD command latency, timeout, reconnect và state-probe count.
-- RGW GC/version backlog nếu thu thập được.
-
-Mỗi mutation lưu:
-
-- Request/action ID.
-- Actor/job/volume.
-- Intended state và observed state trước/sau.
-- Capacity snapshot/decision binding.
-- Result/error đã redact.
-
-Không lưu secret, raw keyring hoặc payload người dùng vào log thông thường.
-
-Giá trị IOPS/throughput phải được tính từ counter monotonic ở backend hoặc Prometheus query đã version hóa. Không lấy hai lần tốc độ, không cộng series trùng label, không dùng timestamp trình duyệt làm sample time. Dashboard mặc định hiển thị cửa sổ hoàn chỉnh 15 giây gần nhất và đánh dấu stale thay vì giữ số cũ như thể còn hiện tại.
-
-## 17. Emergency stop và cleanup
-
-### 17.1. Emergency stop
-
-Console cần một control chuyển toàn hệ thống sang `READ_CLEANUP_ONLY`:
-
-- Không admit PUT/update/RBD create/file-write mới; multipart/resize chưa thuộc MVP vẫn bị reject.
-- Stop/pause producer jobs.
-- Không retry/kill mù command đang chạy; sau timeout hoặc SSH disconnect phải probe observed state trước action tiếp theo.
-- Giữ GET/HEAD/LIST nếu RGW còn phục vụ được. Chỉ chạy hard-delete/cleanup trong emergency maintenance budget; delete-marker creation không được coi là cleanup. Cho phép unmount/remove khi state và Ceph cho phép.
-- Ghi action ID và lý do.
-
-### 17.2. Cleanup cuối run
-
-- Không còn job `running/pending/stopping` ngoài dự kiến.
-- Không còn reservation hết lease chưa reconcile.
-- `rbd device list` không còn mapping mồ côi.
-- Mount table không còn mountpoint mồ côi.
-- Image/volume còn lại được inventory và có owner rõ ràng.
-- Không có multipart upload do MVP job tạo; nếu inventory thấy multipart bên ngoài thì chỉ báo cáo, không tự abort ngoài ownership evidence.
-- Object/volume auto-delete chỉ nằm trong scope run.
-- Capacity và cluster health đã hội tụ.
-
-Cleanup không tự xóa volume/object không có ownership evidence.
-
-## 18. Rollout và rollback
-
-Rollout theo capability flag:
-
-1. `capacity.observe_only=true`.
-2. Bật `performance.enabled=true` ở observe-only, xác minh source/window/freshness.
-3. Bật capacity enforcement cho upload hiện tại.
-4. Bật manual RGW delete/update.
-5. Bật RGW CRUD streaming.
-6. Bật RBD SSH service read-only và xác minh FSID/capability.
-7. Bật manual RBD create/map/ext4/mount.
-8. Bật file browser/SFTP preview.
-9. Bật web terminal SSH.
-
-Rollback feature không được đồng nghĩa xóa dữ liệu:
-
-- Disable job creation và pause producer.
-- Unmount/unmap volume do console tạo nếu operator yêu cầu và observed state cho phép.
-- Giữ image/object còn lại để điều tra; xóa là action riêng.
-- Disable RBD Node.js service/SSH credential sau khi không còn mount/mapping nếu cần rollback.
-- Không downgrade DB migration nếu chưa có procedure và backup đã thử.
-
-## 19. Liên kết với kế hoạch upgrade OSD
-
-Console này là workload generator, data browser và capacity controller hỗ trợ lab; nó không thay thế các gate upgrade.
-
-Khi đưa vào tài liệu upgrade hiện tại, liên kết tại:
-
-- Mục 3.2: workload RGW/RBD và dữ liệu canary.
-- Mục 5: preflight/capacity evidence.
-- Mục 8.4: metrics bắt buộc.
-- Mục 8.5: threshold lab.
-- Mục 9: test matrix và fault injection.
-- Mục 12: đầu ra/biên bản run.
-
-Không dùng câu “mọi OSD dưới 70%” để kết luận đủ headroom drain một OSD. Với topology chỉ 3 host × 1 OSD và `size=3`, cần thêm failure domain/spare hợp lệ trước bài yêu cầu phục hồi đủ replica. Nếu chạy upgrade ở mức fill cao, phải dùng `failure_reserve_mode=one_osd` hoặc `one_host` và chứng minh placement/recovery thực tế.
-
-## 20. Chia PR/đầu việc đề xuất
-
-1. **PR1 — Backend refactor + migrations + job lease**
-2. **PR2 — Capacity collector observe-only + dashboard**
-3. **PR2A — Performance collector + current/history/SSE + dashboard**
-4. **PR3 — Capacity reservation/enforcement cho upload hiện tại**
-5. **PR4 — RGW manual CRUD/version-aware delete**
-6. **PR5 — RGW CRUD streaming + catalog**
-7. **PR6 — RBD Node.js SSH service + health + image/device inventory**
-8. **PR7 — RBD create/map/ext4/mount/unmount/delete**
-9. **PR8 — RBD SFTP file browser + text/image/PDF preview**
-10. **PR9 — Web terminal (`xterm.js` + `ssh2.shell`) + integrated upgrade tests**
-
-Không có service Unix-socket/systemd riêng trên Linux host. RBD privileged operation được thực thi qua SSH, còn Windows chỉ chạy web service/browser.
-
-## 21. Definition of Done
-
-- [ ] Inventory P0 đã được lưu và review.
-- [ ] Dedicated RGW/RBD lab scope được xác nhận.
-- [ ] Migration chạy được từ schema console hiện tại.
-- [ ] Existing feature không regression.
-- [ ] Capacity collector khớp số liệu Ceph CLI.
-- [ ] IOPS/throughput dashboard có source/scope/window/freshness rõ ràng; application series khớp journal và Ceph series được đối chiếu bằng counter delta cùng cửa sổ.
-- [ ] Reset, missing sample và unsupported scope không tạo số 0/spike/per-pool estimate giả.
-- [ ] Reservation/concurrency/stale-metrics tests đạt.
-- [ ] RGW CRUD manual và streaming tests đạt.
-- [ ] RBD create/map/ext4/mount/remount tests đạt; SSH reconnect không gây duplicate destructive action.
-- [ ] File browser đọc được ext4 qua SFTP; text/ảnh/PDF preview được và checksum giữ nguyên sau unmount/remap.
-- [ ] Application admission SLO, stable-epoch contract và giới hạn với recovery/backfill/external writer được ghi rõ trên UI/runbook.
-- [ ] Không có secret trong log, response, screenshot hoặc tài liệu.
-- [ ] Emergency stop và cleanup đã rehearsal.
-- [ ] Có báo cáo lab; chưa chạy thì ghi `NOT_RUN`, không tự đánh dấu PASS.
-- [ ] Plan upgrade chỉ tham chiếu kết quả đã kiểm chứng, không suy rộng từ unit test.
-
-## 22. Nguồn kỹ thuật
-
-- [Ceph Pacific — Block Device Quick Start](https://docs.ceph.com/en/pacific/start/quick-rbd/): create, map, ext4 và mount.
-- [Ceph Pacific — RBD commands](https://docs.ceph.com/en/pacific/rbd/rados-rbd-cmds/): thin provisioning, remove và trash.
-- [Ceph Pacific — RBD exclusive locks](https://docs.ceph.com/en/pacific/rbd/rbd-exclusive-locks/): exclusive lock và `--exclusive` map.
-- [Ceph Pacific — Troubleshooting OSD fullness](https://docs.ceph.com/en/pacific/rados/troubleshooting/troubleshooting-osd/): per-OSD fullness, nearfull/backfillfull/full.
-- [Ceph Pacific — Prometheus manager module](https://docs.ceph.com/en/pacific/mgr/prometheus/): endpoint metrics, metric/label semantics, scrape interval và RBD I/O statistics.
-- [Ceph Pacific — Influx manager module counters](https://docs.ceph.com/en/pacific/mgr/influx/): ý nghĩa counter pool/OSD như client read/write operation, byte và latency.
-- [Ceph Pacific — RGW S3 object operations](https://docs.ceph.com/en/pacific/radosgw/s3/objectops/): GET/HEAD/DELETE semantics.
-- [Ceph Pacific — RGW bucket index/versioning](https://docs.ceph.com/en/pacific/dev/radosgw/bucket_index/): object version và delete marker/index behavior.
-- [Ceph Pacific — RGW notifications](https://docs.ceph.com/en/pacific/radosgw/notifications/): lựa chọn mở rộng nếu sau này cần event từ client ngoài console.
-- [`features/ceph-v2-qos-controller.md`](../features/ceph-v2-qos-controller.md): policy/gate/QoS controller của dự án.
-- [`comparison/ceph-osd-upgrade-lab-production-plan(1)(1).md`](../comparison/ceph-osd-upgrade-lab-production-plan%281%29%281%29.md): topology, workload, metrics và gate upgrade hiện tại.
-
-
-
----
-
-Tài liệu này là đặc tả phát triển. Các command, threshold và ước lượng phải được xác nhận lại từ inventory thực trước khi cho phép mutation lên cluster lab.
-
-Baseline capability phải được đối chiếu trước hết với tài liệu/output Pacific 16.2.5. Tài liệu release mới hơn chỉ dùng tham khảo; adapter phải có capability matrix và test theo từng hop trước khi dùng hành vi mới.
+Đây là công cụ phân tích placement độc lập, **không khôi phục Dry-run planning/session/upgrade controller đã bỏ**. Chi tiết contract ở mục 20.
+
+## 4. Quy ước “thời gian thực” và dữ liệu mới
+
+“Thời gian thực” trong v5 nghĩa là **đọc mới theo yêu cầu tại lần bấm**, không phải lấy collection cũ và đổi timestamp.
+
+### 4.1. Contract nút Xem
+
+- Mỗi lần bấm phát sinh request mới tới nguồn Ceph/telemetry được phép.
+- Trả thông tin daemon cùng chỉ số đo có thời gian nguồn cụ thể.
+- Trong khi đọc, hiển thị **Đang lấy dữ liệu…**; ngăn thao tác trùng ngoài ý muốn.
+- Không âm thầm dùng lịch sử hoặc cache cũ khi SSH/Prometheus lỗi.
+- Nếu giữ dữ liệu đã xem trên màn hình khi request mới lỗi, phải tách rõ **Dữ liệu lần trước**, thời gian cũ và lỗi lần mới; không gắn nhãn “Mới”.
+- Đọc mới khi vào màn hình; thao tác Xem lại luôn thu mới. Phân trang không được tự làm mất lựa chọn.
+- Đáp ứng đổi filter/daemon bằng request đúng phạm vi; kết quả request cũ không được ghi đè request mới nếu trả về muộn.
+
+### 4.2. Contract nút Xuất dữ liệu mới
+
+- Thu mới đúng phạm vi đã chọn trước khi tạo file, không tái dùng payload lần Xem.
+- Mỗi lần export giữ request ID và thời gian thu; retry cùng request để tải lại có thể dùng chính kết quả đó. Một lần bấm mới dùng request ID mới.
+- Nguồn thiếu/lỗi phải hiện rõ; chỉ xuất phần có thật kèm trạng thái Một phần, không tạo số 0 hoặc số liệu giả.
+- Có hai ý định tách biệt: **Xuất dữ liệu mới** ở màn hình trực tiếp và **Xuất collection đã lưu** trong lịch sử/So sánh.
+- Xuất collection đã lưu không được thu lại, vì sẽ làm thay đổi ý nghĩa của A/B; file phải ghi rõ **Dữ liệu đã lưu — thời điểm…**.
+
+### 4.3. Timestamp và tính đồng thời
+
+Mỗi yêu cầu có:
+
+- Thời điểm bắt đầu và kết thúc.
+- Thời điểm quan sát của từng daemon/nguồn.
+- Khoảng đo, độ trễ/tuổi dữ liệu nguồn và chất lượng.
+- Thông tin schema, nguồn CLI/Prometheus/host agent và collector version.
+
+Lưu UTC; hiển thị thời gian **Asia/Saigon**, kèm múi giờ trong export. Thu nhiều daemon không phải ảnh chụp nguyên tử của cluster: phải thể hiện khoảng thu và chênh thời điểm quan sát.
+
+### 4.4. Counter, rate và percentile
+
+- IOPS/throughput cần cửa sổ đo và ít nhất hai counter hợp lệ, hoặc truy vấn rate đã có cửa sổ xác định.
+- Lần Xem/Export đọc endpoint mới; không hứa đo tức thời trong một mili giây.
+- Nếu cần hai lần scrape trực tiếp, UI báo đang đo và hiển thị khoảng đo thực; không lấy counter thô làm IOPS.
+- Counter reset/restart/incarnation đổi phải được nhận diện; không sinh rate/delta âm giả.
+- Không dùng số đo quá cũ như số đo mới. Ngưỡng freshness theo nguồn có cấu hình và được hiển thị.
+- Không suy luận p50/p95/p99 từ average hoặc trung bình percentile. Chỉ hiển thị percentile khi nguồn có dữ liệu hợp lệ.
+
+## 5. Chỉ số cụm và daemon
+
+### 5.1. Bố cục và 10 daemon mỗi trang
+
+- Khu tổng quan hệ thống nằm riêng: health, dung lượng, population daemon, trạng thái PG/recovery và chỉ số tải khi có nguồn.
+- Bảng daemon mặc định 10 dòng/trang, có tổng số, trang trước/sau và filter.
+- Filter loại daemon, tên/ID, host, trạng thái; sort ổn định theo loại + daemon ID.
+- Chọn hàng ở trang hiện tại, chọn nhiều trang, hoặc chọn toàn bộ kết quả lọc. Phải ghi rõ **Đã chọn N daemon**, không nhầm “Chọn 10 hàng” với “Chọn tất cả”.
+- API trả page/cursor, tổng số hoặc next cursor; không tải vô hạn toàn cluster vào DOM.
+- Export theo một daemon, các daemon đã chọn hoặc toàn phạm vi lọc được phép. Export không bị cắt còn trang đang thấy.
+- Nếu yêu cầu quá lớn, tạo job thu/export có tiến độ hoặc báo giới hạn rõ; không cắt ngầm.
+
+### 5.2. Nguồn và nội dung
+
+| Phạm vi | Dữ liệu phải hỗ trợ theo nguồn thực |
+|---|---|
+| Hệ thống/cluster | Health/checks, FSID, dung lượng, phiên bản, PG trạng thái, recovery/backfill, cluster flags, IOPS/throughput/latency khi có |
+| MON | Danh tính/host/địa chỉ/phiên bản, quorum/rank/election/monmap, latency và process metrics khi có adapter |
+| MGR | Active/standby, module, host/địa chỉ/phiên bản/image, process metrics khi có |
+| OSD | Up/in, capacity, weight/reweight/primary-affinity, PG/primary PG, phiên bản/image, IOPS/throughput/latency và process metrics khi có |
+| RGW | Danh tính/host/phiên bản/image, request/error/latency/throughput theo endpoint telemetry được phép |
+| MDS | Danh tính/host/phiên bản/image, filesystem/rank/state, session/cache/load theo nguồn được phép |
+| Host | Host inventory; CPU/RAM/disk/network/clock qua nguồn host thật, không lấy metric cluster gán thành metric host |
+| Pool | Config/capacity/PG, ngữ cảnh các daemon liên quan; không phải workload generator |
+
+Phân biệt **Thông tin hiện trạng** với **Chỉ số đo**, gauge với counter/rate, cluster aggregate với daemon/process metrics.
+
+Nội dung nguồn chưa có phải hiện **Chưa có nguồn / Chưa hỗ trợ / Không đủ dữ liệu**, kèm lý do. Daemon vắng mặt không tự động có nghĩa “down”; cần bằng chứng từ nguồn chính thức.
+
+### 5.3. Nguồn dữ liệu cần bổ sung
+
+- Ceph CLI qua closed executor cho inventory, health, quorum, maps và cấu hình.
+- Ceph MGR Prometheus/Prometheus query cho các chỉ số Ceph được xác minh.
+- Host/process telemetry adapter cho CPU/RAM/network/disk/clock; cần xác định mapping daemon→process/container→host.
+- Khi nguồn không có FSID label, endpoint phải được ràng buộc với cluster đã kiểm danh tính; không tự kết hợp nhiều cluster.
+- Không đổi cài đặt MGR, mở port hoặc cài agent lên cluster một cách ngầm định. Triển khai nguồn mới cần cấu hình/quyền riêng.
+
+## 6. Thu thập hiện trạng (As-is)
+
+### 6.1. Đối tượng và lựa chọn nhiều daemon
+
+- Danh tính chuẩn: **(cluster FSID, loại daemon, daemon ID)**; không dùng chỉ tên vì MON/MGR có thể trùng.
+- Chọn daemon cụ thể, host hoặc loại daemon; UI phải cho xem danh sách đích cuối cùng trước khi thu.
+- Lưu danh sách yêu cầu và danh sách đã thu thực tế; daemon thiếu/lỗi nằm trong kết quả, không biến mất khỏi báo cáo.
+- Có thể thu nhiều loại trong một collection. Khi so sánh phải chọn từng loại, không gộp MON và OSD vào một bảng diff có ý nghĩa sai.
+- Chọn nhiều daemon nghĩa là phạm vi theo dõi phục vụ nâng cấp, không cho phép console nâng cấp đồng thời tất cả.
+- Không bắt nhập OSD ID thủ công nếu có inventory danh sách; vẫn có tìm tên/ID.
+
+### 6.2. Ba giai đoạn
+
+Ba giá trị UI:
+
+- **Trước nâng cấp**
+- **Trong nâng cấp**
+- **Sau nâng cấp**
+
+Có thể lấy nhiều collection trong cùng giai đoạn. Không yêu cầu đủ cả ba mới được xem/xuất/so sánh. Không bắt A phải Trước và B phải Sau. Không tự chuyển nhãn dựa trên tuổi dữ liệu hoặc giả định upgrade thành công.
+
+### 6.3. Hành vi mỗi lần bấm
+
+- Nút **Xem hiện trạng** đọc mới, không chọn snapshot cũ làm nguồn.
+- Nút **Lấy As-is** đọc mới và lưu collection bất biến của chính lần thu.
+- Nút **Lấy As-is và xuất** dùng một lần thu mới duy nhất: lưu và xuất cùng collection ID/hash.
+- Collection cũ chỉ nằm trong **Lịch sử thu thập**, được ghi ngày giờ rõ. Không gọi lịch sử đó là “hiện trạng đang sống”.
+- Mỗi bấm mới có collection mới. Retry của cùng một job không tạo hai collection khác nhau.
+- Thu lâu hoặc nhiều daemon dùng job có tiến độ từng daemon; giới hạn concurrency/timeouts/output được áp dụng.
+- Trạng thái tiếng Việt: **Đang thu thập / Hoàn tất / Một phần / Thất bại / Đã xóa**. State kỹ thuật có thể giữ mã ổn định trong API.
+- Một daemon lỗi không xóa kết quả hợp lệ của daemon khác; thông tin lỗi được redact.
+- Không đánh dấu toàn collection “đủ” khi thiếu command/field bắt buộc.
+
+### 6.4. Thông tin chung và phần OSD chuyên sâu
+
+Thông tin chung mỗi daemon:
+
+- ID, loại, host/địa chỉ, cluster FSID và incarnation khi có.
+- Trạng thái, phiên bản Ceph, image/digest, cấu hình hiệu lực liên quan.
+- Chỉ số tại cửa sổ thu, đơn vị và thời gian nguồn.
+- Capability, dữ liệu thiếu, lỗi từng nguồn và quality.
+- Provenance/hash để kiểm tra tính toàn vẹn.
+
+OSD phải giữ thêm:
+
+- OSD UUID, public/cluster network, CRUSH location và device class.
+- BlueStore data/DB/WAL path, physical devices, capacity và device IDs.
+- Up/in, daemon status, CRUSH weight, reweight, primary-affinity.
+- PG count, primary PG count, PG IDs và dữ liệu up/acting/override theo phạm vi được phép.
+- Effective config, cluster/pool/CRUSH context cần để đọc đúng tình trạng OSD.
+- Thông tin thiết bị không được báo phải giữ **Không có dữ liệu**, không giả DB/WAL riêng.
+- Tách thông tin read-only khỏi điều kiện an toàn nâng cấp. Dữ liệu hợp lệ không tự thành PASS/HOLD vận hành.
+
+### 6.5. Coverage A0 cần bảo toàn
+
+Các nhóm dưới đây là yêu cầu thu thập/export, **không phải tuyên bố source đã hỗ trợ đầy đủ**:
+
+| Nhóm | Dữ liệu cần giữ | Áp dụng |
+|---|---|---|
+| A0.1 — Môi trường | Host chạy collector, shell/OS, thời gian/múi giờ, công cụ và client version | Provenance của lần thu |
+| A0.2 — Cluster | Health/checks, MON quorum, MGR, capacity, flags | Ngữ cảnh chung |
+| A0.3 — OSD | Tree, weight/reweight/primary-affinity, capacity, phiên bản/image | Phần OSD chuyên sâu |
+| A0.4 — CRUSH | Map/rules, compat weight-set, choose_args | Phần OSD/placement context |
+| A0.5 — PG | Up/acting, PG theo các OSD được chọn, override | Phần OSD/PG context |
+| A0.6 — Pool/RBD | Pool config, PG/image/mapping liên quan được chọn | Chốt phạm vi hiện trạng, không tạo workload |
+| A0.7 — Orchestration | Daemon version/image, service spec, upgrade status | Mỗi loại daemon khi nguồn hỗ trợ |
+| A0.8 — An toàn | Clock sync, crash, scrub, recovery, dung lượng và tình trạng nguồn/helper | Bằng chứng; không tự cấp quyền thực thi |
+
+Không hard-code osd.2/osd.5 hoặc PG 13.0 vào logic; đó là giá trị lab có thể chọn qua cấu hình/UI. Collection phải ghi coverage **Đã lấy / Thiếu / Không áp dụng / Chưa hỗ trợ**. Group lỗi/thiếu vẫn xuất được với lý do.
+
+## 7. Lịch sử và xóa collection
+
+### 7.1. Lịch sử
+
+Lọc theo ngày thu, loại daemon, daemon ID/host, nhãn Trước/Trong/Sau, quality và trạng thái xóa. Hiển thị số daemon, coverage, thời gian, ID rút gọn và ghi chú.
+
+Khoảng ngày trong UI dùng Asia/Saigon và quy đổi UTC, biên **từ đầu ngày bắt đầu đến trước đầu ngày kế tiếp của ngày kết thúc**. Không bỏ mất dữ liệu cuối ngày.
+
+### 7.2. Xóa và khôi phục
+
+- Cho xóa một hoặc nhiều collection do người dùng chọn rõ.
+- Mặc định **xóa mềm**: ẩn khỏi danh sách và lựa chọn so sánh thông thường, ghi deleted_at/deleted_by/reason và cho **Khôi phục**.
+- Hộp xác nhận ghi ID/thời gian/số collection/số daemon và ảnh hưởng tới comparison.
+- Không xóa collection đang thu; không dừng job hoặc xóa dữ liệu Ceph qua nút xóa.
+- Comparison có nguồn bị xóa phải báo **Nguồn đã xóa**, không trả kết quả mới như nguồn vẫn tồn tại.
+- Khôi phục collection trả dữ liệu gốc/hash gốc, không thu lại rồi gán ID cũ.
+- Collection có tham chiếu lịch sử cần giữ blob và audit. Không cascade xóa session, upgrade evidence hoặc collection khác.
+- Dọn blob/xóa vĩnh viễn là quy trình riêng có quyền, kiểm references và xác nhận; chưa tự động làm trong MVP.
+- File export đã tải trên máy không bị xóa theo collection.
+- Read-only đối với Ceph vẫn cho phép metadata collection trong ứng dụng thay đổi; phải tách quyền **đọc Ceph**, **thu**, **xuất**, **xóa/khôi phục lịch sử**.
+
+## 8. So sánh hai As-is collection
+
+### 8.1. Cách chọn
+
+- Trang chỉ có chức năng **So sánh**, không còn một workspace Evidence riêng.
+- Filter ngày, loại daemon, tên/ID/host, giai đoạn và chất lượng.
+- Chọn một loại daemon trước, rồi chọn **Collection A** và **Collection B** khác nhau.
+- Collection nhiều loại chỉ dùng phần đúng loại đã chọn.
+- Cho chọn nhiều daemon trong hợp hai tập A/B; không ép toàn bộ scope hai bên phải giống nhau. Bảng coverage giữ cả các daemon chỉ có một phía; delta chỉ tính cho daemon cùng ID có dữ liệu tương thích ở cả hai phía.
+- Nhãn Trước/Trong/Sau hiển thị để đọc ngữ cảnh, không làm gate hợp lệ.
+- Không bắt cùng session hoặc cùng config hash; thay đổi cấu hình/phiên bản là nội dung cần so sánh.
+- A/B có thể được chọn theo thứ tự bất kỳ; delta ghi rõ **B − A** và ngày giờ hai bên. Đảo A/B đảo hướng, không đổi dữ liệu nguồn.
+
+### 8.2. Điều kiện và matching
+
+- Cùng FSID và cùng loại daemon là điều kiện bắt buộc; không so MON với OSD, không trộn hai cluster.
+- Ghép từng hàng theo daemon ID, không tự lấy ID khác thay thế.
+- Daemon chỉ có ở một bên hiển thị **Chỉ có ở A / Chỉ có ở B / Không đủ dữ liệu**.
+- Nếu incarnation/OSD UUID/process đổi, hiển thị rõ **Daemon đã được tạo lại/khởi động lại** khi có bằng chứng; không coi raw counter là chuỗi liên tục.
+- Schema/collector version khác phải kiểm mapping tương thích; trường không tương thích có lý do, không auto PASS.
+- Giữ dữ liệu thiếu null/unknown riêng với zero, false và tập rỗng hợp lệ.
+
+### 8.3. Kết quả
+
+- Bảng A/B: danh tính, thời điểm, giá trị A, giá trị B, thay đổi, đơn vị, quality và lý do không so được.
+- Nhóm trường theo thông tin chung, phiên bản/image, cấu hình, metric, và phần chuyên sâu loại daemon.
+- OSD thêm topology/device/weight/affinity/capacity/PG/up-acting/override.
+- Metric rate chỉ so khi cửa sổ/đơn vị/định nghĩa tương thích; ghi rõ nếu khác cửa sổ. Raw counter reset không suy thành biến động tải.
+- Ngữ cảnh cluster có thể trình bày bên cạnh, không tự coi nó là metric của daemon.
+- So sánh là dữ liệu mô tả, không phải kết luận nâng cấp thành công hoặc quyền vận hành.
+- Cho **Xuất so sánh** JSON/CSV/Markdown/ZIP với hai source collection ID/hash/coverage, không đọc lại Ceph khi xuất diff.
+
+## 9. Việt hóa
+
+Toàn bộ nội dung người dùng nhìn thấy phải bằng tiếng Việt:
+
+- Menu, heading, nút, label, tooltip, empty/loading/error state.
+- Tên filter, pagination, confirmation và validation.
+- Nhãn quality/freshness và giải thích dữ liệu thiếu.
+- Hướng dẫn README và báo cáo đọc được trong export.
+
+Giữ nguyên tên daemon/host/pool, FSID/ID/hash, tên lệnh Ceph, metric key, đơn vị và raw schema khi cần đối chiếu.
+
+Một số mapping:
+
+| Nhãn cũ/kỹ thuật | Nhãn UI mới |
+|---|---|
+| Cluster & Metrics | Chỉ số cụm và daemon |
+| OSD inventory | Thu thập hiện trạng |
+| Evidence & Comparison | So sánh |
+| Legacy | Công cụ cũ |
+| View / Export | Xem / Xuất dữ liệu mới |
+| Before / During / After | Trước / Trong / Sau nâng cấp |
+| Collection A / Collection B | Bộ As-is A / Bộ As-is B |
+| VALID / PARTIAL / UNKNOWN | Dữ liệu hợp lệ / Dữ liệu một phần / Chưa xác định |
+| FRESH / STALE | Dữ liệu mới / Dữ liệu cũ |
+| Delete / Restore | Xóa collection / Khôi phục |
+
+Không dịch mã API/state lưu trong database theo kiểu làm mất khả năng đọc lịch sử. Dùng bảng nhãn/localization riêng; thông báo backend có mã ổn định và nội dung UI tiếng Việt.
+
+## 10. API và kiến trúc mục tiêu
+
+Các tên API dưới đây là **contract đề xuất**, chưa phải endpoint đã triển khai.
+
+### 10.1. Bounded modules
+
+- **Danh mục tài nguyên/daemon:** discovery, filter, pagination, allowlist và capability.
+- **Chỉ số trực tiếp:** fresh read/rate window, source timestamps, đơn vị và scope.
+- **Thu thập As-is:** job, partial results, collection registry, provenance và artifact.
+- **So sánh:** matching, compatible schema, diff A/B và coverage.
+- **Xem trước OSDMap:** đọc map gốc, thay đổi có kiểu trên bản cục bộ, gọi `osdmaptool`, đối chiếu placement và lưu kết quả dự đoán tách biệt với As-is thực.
+- **Xuất dữ liệu:** live read + render hoặc saved collection + verified render.
+- **Lịch sử:** filter, xóa mềm/khôi phục và audit.
+- **Cấu hình/bảo mật:** FSID, SSH, token, authorization, redact và storage containment.
+- **Công cụ cũ:** cách ly, không điều khiển As-is state.
+
+Domain không import SSH/FastAPI/database driver; adapter gọi fixed allowlisted actions. Không có arbitrary shell/CLI argv từ browser.
+
+### 10.2. API đề xuất
+
+- GET /api/v1/daemons — danh mục trực tiếp; type/host/search/status/page_size=10/cursor.
+- POST /api/v1/live-observations — đọc mới system/daemon metrics, không đọc collection gần nhất.
+- POST /api/v1/as-is/collections — phạm vi daemon + giai đoạn + ghi chú; không yêu cầu session_id.
+- GET /api/v1/as-is/jobs/{id} — tiến độ, daemon hoàn tất/lỗi và kết quả.
+- GET /api/v1/as-is/collections — lịch sử có filter ngày/type/ID/giai đoạn/deleted.
+- GET /api/v1/as-is/collections/{id} — đọc dữ liệu đã lưu, ghi rõ historical.
+- DELETE /api/v1/as-is/collections/{id} — xóa mềm có authorization/audit.
+- POST /api/v1/as-is/collections/{id}/restore — khôi phục dữ liệu gốc.
+- POST /api/v1/as-is/comparisons — collection_a/collection_b/daemon_type/daemon_ids.
+- POST /api/v1/exports/live — thu mới rồi xuất theo scope.
+- POST /api/v1/exports/saved — xuất collection hoặc diff bất biến đã xác minh.
+- POST /api/v1/osdmap-previews — tạo job tính tác động; chỉ nhận thay đổi đã có capability và phạm vi được phép.
+- GET /api/v1/osdmap-previews/{id} — kết quả, provenance, coverage và trạng thái map gốc đã cũ.
+- POST /api/v1/osdmap-previews/{id}/export — xuất báo cáo dự đoán đã lưu, không thực thi lệnh Ceph.
+
+Có batch xóa với danh sách ID đóng/giới hạn; không nhận SQL filter hoặc wildcard path để xóa. Payload các thao tác dùng schema đóng, idempotency và giới hạn số daemon.
+
+### 10.3. Freshness và đồng thời
+
+- Discovery, live read và collection job có request/job IDs riêng.
+- Ghi nguồn từng daemon, thời điểm và quality; không biến API poll time thành observed_at.
+- Collector worker có concurrency cap, timeout, output cap và một owner lease của job.
+- Restart API/worker không làm job đang chạy thành Hoàn tất giả; reconcile hoặc báo trạng thái chưa xác định.
+- UI polling có backoff; đổi trang/filter không mất selection hoặc trộn response.
+- Cấm cache browser/service worker/proxy làm fresh action thành old observation; API gửi cache policy phù hợp.
+
+## 11. Data model và chuyển đổi lịch sử
+
+Collection mới cần tối thiểu:
+
+- ID, cluster_id, fsid, actor, phase, ghi chú/tên đợt tùy chọn.
+- Requested/resolved daemon identities và lỗi các đích không thu được.
+- Started_at/completed_at, source observed times và metric windows.
+- Collector/schema version, capability/coverage và config provenance đã redact/hash.
+- Quality/state, immutable artifact ID/hash/size.
+- Metadata xóa mềm/khôi phục và audit.
+
+Daemon record có type/ID/host/incarnation, payload chung + extension theo loại, source status và metric units.
+
+### 11.1. Migration an toàn
+
+- Dùng migration mới bổ sung schema; không sửa checksum migration đã phát hành.
+- Giữ các bảng/FK cũ để đọc evidence lịch sử; không reset DB để bỏ UI cũ.
+- Adapter read lịch sử phân biệt legacy OSD collection với As-is mới và ghi rõ phase mapping.
+- Không sửa timestamp/hash/quality hoặc artifact cũ để giả đó là collection v5.
+- Thay đổi config không được làm mất lịch sử. Khi đọc/export phải kiểm FSID và quyền hiện tại; khi so sánh cho phép config thay đổi nhưng nêu rõ.
+- Soft-delete không sửa immutable payload; trạng thái hiển thị lưu ở registry/tombstone riêng.
+- Kịch bản OSDMap lưu trong registry riêng với `kind=OSDMAP_PREVIEW`; không ghi kết quả giả định vào daemon As-is records. Tham chiếu map/collection nguồn được bảo vệ khi xóa mềm hoặc dọn blob.
+- Backup DB/evidence trước migration; kiểm restore có thể thực hiện, giữ rollback ứng dụng tương thích schema.
+
+## 12. Export và tính toàn vẹn
+
+- JSON cho cấu trúc, CSV cho bảng, Markdown cho báo cáo, ZIP cho bundle.
+- Manifest gồm ID, cluster/daemon scope, source times, generation time, quality/coverage, units và config/collector schema.
+- ZIP có SHA256SUMS và source hash riêng với download hash.
+- Redact password/token/keyring/private key/auth headers và URL chứa credentials; không đưa server filesystem path tùy ý ra client.
+- CSV chống formula injection; Markdown/HTML không thực thi dữ liệu nguồn.
+- Đọc artifact theo registry, kiểm containment/hash/size; không nhận path từ browser.
+- Giới hạn rows/columns/nodes/depth/output và job quá lớn; không silent truncation.
+- Live export ghi đúng dữ liệu mới vừa thu; saved export giữ nguyên provenance lịch sử.
+- Người dùng không cần SSH/copy file thủ công để tải thông tin đang xem.
+- Không xuất tập dữ liệu ngoài allowlist hoặc nối sang cluster khác chỉ vì collection cũ có nó.
+
+## 13. Bảo mật, cấu hình và quyền đọc
+
+- Private key/token/DB credentials ngoài image và ngoài Git.
+- Host key bắt buộc pin/trust; FSID kiểm trước và sau thu khi cần.
+- Executor private network; chỉ ingress API được expose đúng phạm vi.
+- Fixed read commands, scope allowlist, no arbitrary shell/terminal.
+- Không thay sudoers hoặc tắt TLS/host validation để làm collector chạy.
+- Permission matrix tách đọc hệ thống, thu As-is, export, xóa/khôi phục collection.
+- Xóa collection là ghi metadata ứng dụng, không mở các Ceph mutation.
+- Production cần TLS/auth/least privilege và nghiệm thu nguồn metrics; lab read-only chạy được chưa đủ chứng nhận production.
+- Không hard-code địa chỉ/FSID/OSD/pool lab vào logic; local profile có giá trị runtime riêng.
+- Các capability không được hỗ trợ phải fail closed và được giải thích bằng tiếng Việt.
+- Worker mô phỏng OSDMap không có Ceph key/token, không nối mạng cluster và không có action ghi map. Chỉ bước thu map dùng executor đọc; parser/process bị giới hạn tài nguyên theo mục 20.
+
+## 14. Gỡ chức năng cũ khỏi sản phẩm
+
+Lát cắt gỡ Benchmark và Dry-run phải bao gồm:
+
+- Navigation, deep link, component/form/control và CSS riêng.
+- API tạo/preflight/start/stop/status và discovery target của workload.
+- Executor actions, helper runner, version metadata và COPY trong Dockerfile.
+- Env/profile/config registry mẫu, deployment flags và phụ thuộc chỉ dùng cho các phần bị bỏ.
+- Export source và tests riêng của chức năng bị loại; thêm regression bảo đảm đường cũ không còn gọi được.
+- README/hướng dẫn hiện hành, release/version metadata và localhost image.
+
+Không xóa:
+
+- Migration/schema đã áp dụng hoặc evidence cũ mà chưa có quy trình kiểm tham chiếu.
+- Thông tin/collector/capacity/metrics được Inventory hoặc Chỉ số cụm sử dụng.
+- Pool/image/bucket/PG/daemon trên cluster.
+- Tài liệu nâng cấp/benchmark độc lập bên ngoài console khi chưa có yêu cầu riêng.
+
+Route đã bỏ phải trả lỗi rõ hoặc 404; bookmark cũ được đưa về trang hợp lệ với thông báo tiếng Việt, không đưa tới action khác âm thầm. File lịch sử/backups không được quảng cáo như hướng dẫn sản phẩm hiện hành.
+
+## 15. Đóng gói image và vận hành portable
+
+- Một OCI application image có version/digest và các role cần thiết: API/UI, executor, collector/worker.
+- PostgreSQL, cấu hình, secret, evidence và job state bên ngoài image.
+- Build không chứa key/token hoặc dữ liệu cluster.
+- Không cài package tùy ý khi container khởi động.
+- Root filesystem read-only, user non-root, cap-drop/no-new-privileges và writable mounts tối thiểu.
+- Image mới không chứa helper workload đã bị bỏ.
+- Thành phần phân tích OSDMap dùng `osdmaptool`/`crushtool` được pin phiên bản/digest và kiểm tương thích map; có thể là role/worker image riêng nếu dependency Ceph lớn. Không cài công cụ bằng network lúc container khởi động và không mount cluster credentials vào worker offline.
+- Health/readiness tách DB, cấu hình, executor, SSH/FSID và nguồn metric theo capability.
+- Không gắn app ready với mọi metric adapter đều có số liệu; những nguồn thiếu phải hiển thị rõ và không chặn inventory nguồn khác một cách sai.
+- Docker Hub/registry publication là bước release riêng, không tự push khi chỉ sửa plan.
+- Hỗ trợ online/offline với version/digest, schema compatibility, backup/restore và rollback đã kiểm.
+- Cùng source/image mang sang cluster khác bằng profile, nhưng release/topology mới cần acceptance; không hứa mọi Ceph version tự động tương thích.
+
+## 16. Thứ tự triển khai
+
+Mỗi lát cắt phải kèm test, docs và checkpoint; không gộp trạng thái planned với delivered.
+
+### L0 — Thu hẹp sản phẩm và Việt hóa khung
+
+- Gỡ Benchmark/Dry-run UI/API/executor/config/package theo mục 14.
+- Navigation tiếng Việt, xử lý bookmark cũ.
+- Giữ SSH/inventory/metrics/evidence cũ không mất dữ liệu.
+- Build image mới, kiểm localhost không còn hai mục bị loại.
+
+### L1 — Danh mục daemon và chỉ số đọc mới
+
+- Canonical identity đa daemon, bảng 10 dòng/trang và multi-selection.
+- Xem/Export fresh source, system + daemon metrics, timestamp/window/error rõ.
+- MON/MGR/OSD đầu tiên; bảng capability RGW/MDS/host process.
+- Không dùng collection gần nhất như nguồn trực tiếp.
+
+### L2 — As-is đa daemon, không session UI
+
+- Form chọn daemon, giai đoạn, ghi chú; job thu mới và partial results.
+- Schema collection mới, legacy reader và OSD deep extension.
+- Lấy As-is/Lấy As-is và xuất cùng provenance, không trùng retry.
+- Lịch sử có filter, không buộc upgrade plan/run.
+
+### L3 — So sánh A/B và quản lý collection
+
+- Same-type/same-FSID matcher, multi-daemon diff và date/type filters.
+- Bỏ gate Before→After/session/config hash.
+- Soft-delete/restore, reference checks/audit và source-deleted warning.
+- Export saved/diff không recollect.
+
+### L3a — Xem trước thay đổi OSDMap
+
+- Thu map binary read-only, kiểm FSID/epoch/hash, fixed job directory và closed simulator protocol.
+- MVP: CRUSH weight của một/nhiều OSD; trả diff PG/raw/up/acting/primary và phân bố theo OSD từ cùng map nguồn.
+- Mọi biến thể state/reweight/affinity/CRUSH nâng cao cần capability test theo tool build, không mở option chỉ vì có trong tài liệu.
+- Lưu/export giả định riêng, báo epoch drift và giới hạn dự đoán; kiểm không có đường Apply/ceph write.
+
+### L4 — Bổ sung coverage và nghiệm thu
+
+- Hoàn thiện nhóm A0/adapter còn thiếu và telemetry host/process.
+- Việt hóa toàn bộ trường/trạng thái/lỗi.
+- Test failure/restart/concurrency/limits/access và cluster acceptance.
+- Update README/VALIDATION/release artifact, kiểm clean host deployment.
+
+## 17. Test matrix bắt buộc
+
+### 17.1. Fresh View/Export
+
+- Hai lần bấm tạo hai lần đọc nguồn; timestamp/data phản ánh từng lần.
+- Export sau Xem không dùng payload Xem cũ.
+- Nguồn lỗi không fallback stale âm thầm; partial/null có lý do.
+- Rate có đúng window/counter reset semantics; proxy/browser không cache fresh action.
+- Response chậm của daemon A không ghi đè daemon B vừa được chọn.
+
+### 17.2. Phân trang và selection
+
+- Cluster >10 daemon: 10 dòng/trang, total/next đúng, sort ổn định.
+- Chọn daemon qua nhiều trang/filter, UI đếm đúng.
+- Export toàn lựa chọn không cắt về 10 hàng.
+- Không tính host/pool/system summary thành daemon.
+- Daemon ID trùng giữa các loại không gây collision.
+
+### 17.3. As-is
+
+- Bấm thu đọc mới, không cần session/upgrade plan.
+- Cả ba giai đoạn; nhiều collection cùng giai đoạn.
+- Một/nhiều daemon, một/nhiều loại; OSD sâu hơn loại khác.
+- Required/optional command failure, missing source, giới hạn/timeouts/restart đều giữ kết quả/lỗi thật.
+- Retry idempotent không tạo duplicate; bấm mới tạo collection khác.
+- Evidence immutable/hash/redaction/coverage đúng.
+
+### 17.4. Comparison
+
+- Cho Trước↔Trong, Trong↔Trong, Sau↔Trước và A/B bất kỳ cùng loại/FSID.
+- Khác loại/FSID bị chặn ở UI và API.
+- Khác config/session không tự chặn; config khác hiện trong diff.
+- Same-ID matching, only-A/only-B, incarnation drift, missing metric và counter reset.
+- Selected intersection/subset không đòi toàn scope hai bên giống hệt.
+- Lọc ngày đúng timezone/biên cuối ngày.
+- Export diff giữ hai source ID/hash/thời gian, không gọi Ceph lại.
+
+### 17.5. Xóa/khôi phục và an toàn
+
+- Một/nhiều collection, xác nhận chính xác và scope authorization.
+- Không xóa đang thu, không cascade refs/evidence cũ, không gọi Ceph write.
+- Deleted source comparison có cảnh báo; restore giữ original bytes/hash.
+- Audit actor/time/reason; purge riêng không tự mở trong MVP.
+- Migration không sửa file cũ; backup/restore và DB permission tests.
+- Key/token không xuất hiện trong image/log/export.
+- API/executor workload và dry-run đã bỏ không còn callable.
+- Inventory/metrics/export và công cụ cũ cần giữ không bị regression.
+
+### 17.6. OSDMap preview
+
+- Kịch bản không đổi tham số có diff rỗng; map nguồn/hash không đổi sau chạy.
+- Fixture có PG remap/primary đổi và weight-set/override: raw/up/acting được phân biệt, không tự clear-temp hoặc mark-up-in để làm đẹp kết quả.
+- Thay nhiều CRUSH weight áp dụng đủ mục; option state lặp không được âm thầm chỉ đổi OSD cuối.
+- Kiểm `mark-out`, `mark-in` và persistence thực tế theo tool build; adapter không đúng ý định phải báo chưa hỗ trợ.
+- FSID sai, epoch drift, map hỏng, schema/tool không tương thích, thiếu pool/OSD và output truncated đều có lỗi/coverage rõ.
+- Kiểm blast radius toàn phạm vi cho phép; không chỉ thống kê PG của OSD nguồn mà bỏ PG ngoài mục tiêu.
+- Counter/performance/recovery không có dữ liệu dự báo; không tạo IOPS/latency/ETA giả hoặc nhãn an toàn vận hành.
+- Không có network/credential trong worker; API không nhận argv/path/command tùy ý, không chạy output upmap như shell.
+- Export lưu đúng source hash, thông số, tool build, kết quả và nhãn Dự đoán; không lẫn vào collection thực hoặc comparison As-is.
+
+## 18. Definition of Done
+
+Chỉ công bố v5 hoàn tất khi:
+
+- Navigation hiện đúng Tổng quan, Chỉ số cụm và daemon, Thu thập hiện trạng, So sánh, Công cụ cũ.
+- Không còn chức năng chạy workload hoặc Dry-run trong sản phẩm hiện hành.
+- Bảng 10 daemon/trang; chọn/export nhiều daemon đúng scope.
+- Xem/Export trực tiếp thu mới, có source times/window/quality, không dùng snapshot cũ thay nguồn.
+- As-is hỗ trợ các loại đã công bố, OSD deep data, Trước/Trong/Sau và không có Upgrade session UI.
+- So sánh hai collection tùy ý cùng loại/FSID, ngày/type filters và multi-daemon matcher đúng.
+- Xóa mềm/khôi phục hoạt động, không mất dữ liệu được tham chiếu hoặc tài nguyên Ceph.
+- Toàn UI/hướng dẫn tiếng Việt; metric key/raw identity giữ nguyên.
+- Tests, browser verification, real read-only cluster acceptance và download/hash checks có bằng chứng.
+- Image/version đang chạy khớp source đã kiểm; docs nêu rõ adapter nào còn thiếu.
+- Không dùng chất lượng dữ liệu/so sánh thay kết luận an toàn nâng cấp.
+- Có xem trước OSDMap cho các loại thay đổi đã công bố, báo chênh placement và epoch drift; không thay đổi cluster và không trình bày dự đoán như kết quả thực.
+
+## 19. Tài liệu liên quan
+
+- [Code console](rgw-console/)
+- [README console](rgw-console/README.md)
+- [Tổng quan trong thư mục code](README.md)
+- [OSD collector](osd-info-collector/README.md)
+- [Validation](rgw-console/VALIDATION.md)
+- [Cấu hình SSH local](rgw-console/docs/LOCAL_SSH_READONLY.md)
+- [Plan chiến lược dự án](../plan-tổng.md)
+- [Tài liệu osdmaptool — Pacific](https://docs.ceph.com/en/pacific/man/8/osdmaptool/)
+- [Mã nguồn osdmaptool — Ceph v16.2.15](https://github.com/ceph/ceph/blob/v16.2.15/src/tools/osdmaptool.cc)
+- [Đọc OSDMap từ cluster — Pacific](https://docs.ceph.com/en/pacific/rados/operations/control/)
+- [CRUSH map tool — Pacific](https://docs.ceph.com/en/pacific/man/8/crushtool/)
+
+Tài liệu phụ có menu/contract cũ sẽ được cập nhật trong L0–L4. File tham khảo OSD validation do người dùng từng gửi không còn ở đường dẫn cũ lúc rà soát; bảng A0 trên được giữ từ yêu cầu đã cung cấp, không coi file thiếu là bằng chứng đã nghiệm thu.
+
+## 20. Xem trước thay đổi bằng osdmaptool
+
+**Mục tiêu:** trước một thay đổi ảnh hưởng placement, xem map hiện tại và map giả định khác nhau ở đâu, trên PG/OSD nào, mà không tác động cluster. Localhost đã có adapter CRUSH weight cho pool replicated trên Pacific 16.2.15; các thao tác khác trong bảng dưới vẫn là kế hoạch. Phạm vi đã kiểm và gate còn thiếu nằm ở mục 21–23.
+
+### 20.1. Phạm vi hỗ trợ và capability
+
+Không diễn giải “thay đổi bất cứ gì” thành một bộ giả lập toàn Ceph. `osdmaptool` xử lý OSDMap/placement; công cụ có test mapping, thay CRUSH weight và nhúng CRUSH map trên file. Các option phải được kiểm trên đúng bản đóng gói, không chỉ đọc help. [Tài liệu Pacific](https://docs.ceph.com/en/pacific/man/8/osdmaptool/).
+
+| Thay đổi dự định | Chính sách triển khai |
+|---|---|
+| CRUSH weight một/nhiều OSD | MVP theo CRUSH reweight native Pacific: `--adjust-crush-weight` đồng bộ weight-set của item/parent; trả effective weight và dấu hiệu choose_args thay đổi. Dải đã kiểm 0–32767, có lượng tử hóa 1/65536 |
+| In/out/up/down, override reweight, primary-affinity | Chỉ mở khi adapter offline tái hiện đúng ý định và có fixture theo tool build; chưa hỗ trợ thì khóa form, nêu lý do |
+| CRUSH rule/topology/class, compat weight-set, choose_args | Lát cắt sau: xử lý bản CRUSH cục bộ bằng adapter kiểm soát, nhúng vào bản map riêng, kiểm rule/device IDs và semantics |
+| Upmap/primary override, pool size/PG config | Lát cắt sau theo capability/version; không tự sinh rồi chạy các lệnh lên cluster |
+| Đổi phiên bản/image OSD hoặc cấu hình MON/MGR/RGW/MDS không ảnh hưởng OSDMap | Không dự báo bằng osdmaptool; hiển thị thay đổi thông số dự định và giới hạn, dùng As-is thực để kiểm tra sau |
+| IOPS/latency, peering, thời gian recovery hoặc an toàn stop daemon | Ngoài khả năng dự báo của map tool; không đưa ra số đo giả hoặc PASS/HOLD vận hành |
+
+CRUSH weight khác override reweight và primary-affinity; không dùng thao tác này thay cho thao tác kia. Có thể hỗ trợ nhiều tham số trong một kịch bản nếu adapter chứng minh đầy đủ; tuyệt đối không bỏ qua trường chưa hỗ trợ.
+
+Điểm cần kiểm ở Pacific: mã nguồn tag v16.2.15 giữ một biến cho OSD mark-out, thao tác này còn đặt UP; nhánh mark-in dùng biến mark-up. Vì vậy không ghép tùy chọn lặp để giả mô phỏng nhiều OSD hoặc coi chúng là semantics chuẩn của lệnh online. State thay đổi trong bộ nhớ cũng không mặc nhiên có trong file xuất. Những trường hợp này phải kiểm bằng dump/mapping thực và khóa capability nếu sai. [Mã nguồn theo tag](https://github.com/ceph/ceph/blob/v16.2.15/src/tools/osdmaptool.cc).
+
+### 20.2. Thu map mới và giữ nguyên baseline
+
+- Mỗi bấm **Tính tác động** lấy map binary mới từ cluster bằng fixed read action, tương đương `ceph osd getmap`; không dựng map giả bằng createsimple rồi gọi đó là cluster thật. [Ceph control commands](https://docs.ceph.com/en/pacific/rados/operations/control/).
+- Kiểm FSID, epoch, thời gian nguồn, SHA-256 và tool compatibility; lưu map gốc bất biến trong artifact store được kiểm containment.
+- So sánh baseline/candidate đều bắt đầu từ **cùng một map gốc**, cùng pool/PG scope và cùng tool build; chỉ candidate áp dụng bộ thông số dự định.
+- Không ghi đè map gốc. Worker dùng thư mục job riêng, tạo bản làm việc riêng; không nhận đường dẫn từ browser.
+- Giữ nguyên upmap/pg_temp/primary_temp và flags; không tự clear-temp/mark-up-in/balancer. Với MVP CRUSH reweight native, weight-set/choose_args liên quan được tool đồng bộ và phải báo rõ/hash trước–sau. Không mô tả thao tác này là canonical weight độc lập giữ nguyên compat weight-set. [Default update_weight_sets=true](https://github.com/ceph/ceph/blob/v16.2.15/src/crush/CrushWrapper.h#L935-L944).
+- Đọc epoch/identity lúc thu và lúc hoàn tất. Nếu cluster đổi map, kết quả vẫn là dự đoán của epoch đã lưu nhưng phải ghi **Map gốc đã cũ — tính lại trước khi thay đổi**. Không cập nhật kết quả cũ bằng cách đổi epoch/hash.
+- Khi mở lại scenario đã lưu, API đọc epoch hiện tại riêng để kiểm drift; nếu không đọc được phải báo **Chưa xác minh với cluster hiện tại**, không coi lịch sử là dự đoán mới.
+- Không gọi epoch giả định của file candidate là epoch đã được cluster chấp nhận.
+
+### 20.3. Kết quả phải xem được
+
+- Bảng **Hiện tại theo map gốc / Dự kiến theo kịch bản / Chênh lệch** cho từng PG.
+- Dùng output có raw/up/acting và primary khi bản tool hỗ trợ; parser giữ đúng nghĩa từng tập, không gọi acting từ map là peering/replica availability đã kiểm ngoài cluster. Source v16.2.15 có output chi tiết này qua test-map-pgs-dump-all. [Mã nguồn output](https://github.com/ceph/ceph/blob/v16.2.15/src/tools/osdmaptool.cc#L609-L659).
+- Tổng PG đã kiểm, PG đổi membership, đổi thứ tự/primary, số PG dự kiến vào/ra từng OSD, OSD/pool/failure domain bị tác động.
+- Replicated pool và EC pool phải có capability/fixture riêng; với EC giữ thứ tự shard và profile/rule, không diễn giải shard placement thành số bản sao replicated. Phạm vi chưa nghiệm thu phải báo chưa hỗ trợ.
+- Thống kê theo raw/up/acting riêng; tính từ PG records đầy đủ, không chỉ summary của tool vì có thể không liệt kê OSD weight=0/out.
+- Hiện PG chưa map đủ thành viên, OSD không hợp lệ/trùng và vi phạm rule/failure domain mà adapter kiểm được, kèm phạm vi/cách kiểm. Không gọi đây là trạng thái HEALTH của cluster thật.
+- Filter OSD/pool/PG và phân trang; tổng kết phải tính trên toàn phạm vi đã kiểm, không cắt theo trang.
+- Khi người dùng chọn OSD nguồn/đích, vẫn phải tính và báo **ảnh hưởng ngoài các OSD mục tiêu**. Nếu chỉ kiểm một pool, ghi rõ không bao phủ pool khác; không được tuyên bố không ảnh hưởng toàn cluster.
+- PG di chuyển không đồng nghĩa byte di chuyển. Nếu sau này ước lượng bytes từ PG stats, phải ghi thời điểm/độ tin cậy và điều kiện ước lượng; MVP không đoán dung lượng hoặc ETA từ số PG.
+- Weight nhỏ không là quota PG. Chênh lệch bằng 0 có thể đúng do weight-set/override; phải giải thích coverage và dữ liệu kiểm, không tự xóa override để tạo kết quả mong muốn.
+
+### 20.4. Form, lưu lịch sử và export
+
+- Form chỉ có thao tác đã kiểm: loại thay đổi, OSD IDs, giá trị cũ/mới và pool/PG scope. Validator kiểm OSD tồn tại, finite/range, precision/rounding và duplicate/conflict.
+- Chỉ hiển thị **Tính tác động / Lưu kịch bản / Xuất dự đoán / Tính lại với map mới**. Không có Apply, chạy lệnh sinh ra hoặc submit map lên Ceph.
+- Thay form làm kết quả cũ thành **Chưa tính cho cấu hình này**; không tái sử dụng báo cáo cũ cho thông số mới.
+- Mỗi kết quả có scenario ID, base FSID/epoch/hash, input parameters/hash, tool version/binary digest, source times, scope/coverage, effective candidate dump/mapping hashes và lỗi.
+- Nếu thay đổi chỉ tồn tại trong bộ nhớ, manifest ghi rõ và lưu thông số + effective output để tái tạo. Chỉ lưu candidate binary khi đã kiểm nó thực sự chứa thay đổi; không xuất bản sao gốc rồi gắn nhãn map đã đổi.
+- Lưu/xuất JSON/CSV/Markdown/ZIP có nhãn **Dự đoán — chưa áp dụng**. Saved export dùng bản đã lưu; nút tính lại thu map mới và tạo scenario mới.
+- Không nhập scenario vào lịch sử As-is thực. Comparison A/B trong mục 8 tiếp tục chỉ so hai lần thu thực cùng loại daemon; một panel dự đoán riêng có thể liên kết collection nguồn.
+- Scenario có xóa mềm/khôi phục và reference checks tương tự lịch sử collection; không xóa nguồn dùng chung hoặc map của job khác.
+
+### 20.5. An toàn, đóng gói và nghiệm thu
+
+- Chỉ executor đọc map được giữ quyền Ceph; mô phỏng chạy offline, không keyring/token, network hoặc shell input tùy ý.
+- Tool version/binary digest được pin, hỗ trợ decoding của map đích và có ma trận fixture theo release; không dùng bản latest mặc định cho mọi cluster.
+- CRUSH thay đổi nâng cao có thể cần `crushtool` để xử lý/kiểm bản cục bộ; công cụ này không thay thế full OSDMap PG/pool semantics. [Tài liệu crushtool](https://docs.ceph.com/en/pacific/man/8/crushtool/).
+- Closed argv, tối thiểu quyền filesystem, giới hạn CPU/RAM/thời gian/map bytes/PG output, exit code và parser version. Map hỏng/lớn hoặc tool lỗi phải báo chưa tính được, không trả preview rỗng như không thay đổi.
+- Không mặc nhiên tin uploaded map/CRUSH file; MVP dùng map đọc từ cluster và typed changes. Import file chỉ mở sau validation/sandbox được nghiệm thu.
+- Không dùng `ceph osd setmap/setcrushmap`, ceph osd out/reweight hoặc các lệnh upmap trong quá trình xem trước; không thực thi command output của tool.
+- Nghiệm thu gồm fixture không đổi/đổi weight/nhiều OSD/overrides/failure-domain, version gotchas, source drift, export integrity và proof không có lệnh ghi Ceph. Chỉ công bố capability đã đạt.
+## 21. Trạng thái triển khai và giới hạn bản preview
+
+Ngày 12/10/2026, localhost đã chạy `dang7904/storage-lab-console:5.1.0-rc.1`, schema 0021 và worker riêng `dang7904/storage-lab-osdmap:16.2.15-rc.1`. Đây là release candidate chỉ đọc, không đánh dấu toàn bộ Definition of Done hay nghiệm thu production đã hoàn thành.
+
+Đã triển khai/kiểm tra:
+
+- Gỡ màn hình/API/executor/runner/config Benchmark khỏi console; gỡ router Dry-run hoạt động. Migrations/session/evidence lịch sử giữ nguyên. Các tài liệu benchmark/MOP ở ngoài `code` không bị xóa.
+- Navigation chính tiếng Việt: Tổng quan, Chỉ số cụm và daemon, Thu thập hiện trạng, So sánh; nhóm Công cụ cũ thu gọn.
+- Xem/Xuất trực tiếp thu mới qua CLI; hai scrape Prometheus trong cùng yêu cầu cho cửa sổ IOPS/throughput. MON/MGR/OSD/RGW/MDS có adapter metadata/version/image/host theo khả năng nguồn. MDS ghép FSMap active/standby với orchestrator; RGW giữ thời điểm cache orchestrator thật. CPU/RAM container lấy từ orchestrator với thời điểm/chất lượng nguồn. Mẫu quá cũ hoặc timestamp tương lai bất hợp lệ không được xem là mới; schema nguồn sai không giả làm danh sách daemon rỗng hợp lệ.
+- 10 daemon mỗi trang, chọn nhiều trang, chọn tập lọc và export đủ lựa chọn; đã kiểm danh sách 14 daemon thật trên hai trang.
+- As-is tự chứa FSID/cấu hình/provenance, ba giai đoạn, không cần Upgrade session UI; một lần Lấy As-is và xuất lưu/tải cùng collection.
+- Môi trường A0.1 qua helper 1.0.5: host/OS/kernel, Python, shell có provenance, Ceph/RBD/Rados/SSH/tool versions, thời điểm và NTP properties. Phạm vi chỉ SSH client host, không đọc key/env dump/process command line và không suy ra clock offset/PASS toàn cụm. Probe thiếu/thất bại được ghi PARTIAL.
+- Lịch sử máy chủ dùng cursor keyset `(started_at,id)`, mặc định 10 collection/trang, không cắt tổng số ở 200. Tìm ID/daemon/ghi chú/chất lượng/daemon key được lọc trên server. Giữ lựa chọn qua trang; chọn A/B ở hai trang khác nhau. Collection xóa mềm vẫn xem/xuất được khi chủ ý bao gồm đã xóa; cần khôi phục trước khi so sánh.
+- So sánh A/B bất kỳ cùng loại/FSID, lọc ngày UTC+7/loại/giai đoạn/daemon, union coverage, metric delta có kiểm unit/quality/incarnation/reset. Xóa mềm/khôi phục giữ nguyên payload/checksum và ghi audit event.
+- OSD deep giữ raw collector, cluster context, CRUSH JSON/choose_args, PG dump brief/up/acting và override theo khả năng nguồn. Độ phủ A0.1–A0.8 và thiếu dữ liệu được ghi trong `system.coverage`.
+- Mô phỏng CRUSH reweight native Pacific một/nhiều OSD trên map mới; trả diff raw/up/acting/primary, phân bố OSD cả weight-zero, effective weight và hash choose_args trước/sau. Worker không có network hoặc credential Ceph. Không có Apply.
+- Kiểm real-data pool 13: PG 13.0 gốc acting `[0,2,1]`, giả định `[0,5,1]`; acting primary vẫn 0, raw primary đổi 2→5. Map thật không được sửa bởi kịch bản. Export có nhãn Dự đoán, timestamp, scope và checksum.
+- Backend 292 test qua toàn bộ, không bỏ qua sau khi dùng PostgreSQL test cô lập; frontend 20 test và TypeScript qua; executor/SSH 25 test qua; helper 26 test qua; worker 11 test gồm tool thật và upmap đã qua. Có kiểm live database cho tạo/đọc/so sánh/xóa/khôi phục, truy vấn lịch sử keyset và tải file qua browser. Adapter kiểm config hiệu lực của từng MON và chỉ cho dự đoán khi MON 16.2.15 đồng bộ weight-set=true. Release khóa EC/unknown pool, kiểm allowlist và báo mapping thiếu thành viên, không tự kết luận failure-domain.
+
+Còn lại trước nghiệm thu đủ v5/production:
+
+- Request/session metrics và host/process/network telemetry đầy đủ cho RGW/MDS; percentile latency không được dựng từ average. MDS active/standby đã kiểm fixture; lab hiện không có MDS để nghiệm thu daemon chạy thật.
+- Môi trường/tool versions từng daemon host/container ngoài SSH client, RBD read-only context, service specs/upgrade status, clock offset toàn cụm/crash/helper an toàn đầy đủ. CRUSH binary riêng chưa được export trong As-is.
+- Collection hiện thu đồng bộ có giới hạn 128 daemon/16 MiB; cần job tiến độ và phân trang danh mục daemon server cho cluster lớn. Cursor lịch sử collection đã triển khai, không còn giới hạn tổng lịch sử 200.
+- Hướng dẫn/nhãn công cụ legacy ngoài luồng chính còn cần hoàn tất Việt hóa. Lịch sử OSD/session cũ còn API tương thích; chưa có projection import vào danh sách As-is mới.
+- Mô phỏng down/out/in, override reweight, affinity, topology/rules/pool config, release khác, purge/xóa/khôi phục kịch bản và ma trận fixture EC/override/weight-set rộng hơn là các lát cắt sau. No-op của thao tác native không đồng nghĩa chỉ nhập lại canonical weight khi compat weight-set khác; phải xem hiệu ứng weight-set.
+- Chỉ linux/amd64 đã build/kiểm/publish. Scan ứng dụng không phát hiện CVE tại lần kiểm; worker Ceph cũ còn 9 Critical/333 High nên **không bật production**. Production destination/cluster thứ hai, multi-architecture/signature/full offline acceptance vẫn chưa nghiệm thu. Compose overlay offline worker chỉ dành lab; phát hành registry không tự cập nhật deployment đích.
+
+Đối chiếu [VALIDATION.md](rgw-console/VALIDATION.md), [README](README.md) và [hướng dẫn OSDMap](rgw-console/docs/OSDMAP_PREVIEW.md) trước khi dùng image trên hệ thống khác.
+
+## 22. Release candidate 5.1.0-rc.1 — 12/10/2026
+
+- Docker Hub ứng dụng: `dang7904/storage-lab-console:5.1.0-rc.1`; digest `sha256:36b6b7b1664958b792dda841cf7140ab9e0006d3aff436d8b8823056451c86f4`.
+- Worker lab/offline: `dang7904/storage-lab-osdmap:16.2.15-rc.1`; digest `sha256:65025d1fb24e90b87ec623b805946bcc6252bce43f8bfd198e70d6ef2a63cdad`.
+- Cả hai tag đã xác minh trạng thái active qua Docker Hub API, manifest registry và pull theo digest; không ghi đè bản v3 hay tag latest.
+- Sửa race/debounce/double-click và phản hồi async cũ; export stream giới hạn 16 MiB và bắt buộc SHA-256/WebCrypto, HTTP ngoài localhost phải dùng HTTPS.
+- Sửa dữ liệu nguồn sai/NaN/Infinity/timestamp cũ hoặc tương lai; metric có timestamp đúng nguồn; không tính delta khi loại metric đổi hoặc số vượt giới hạn. Lịch sử ngoài scope hiện tại trả 403 cho xem/xuất/so sánh, không sửa payload; vẫn xóa/khôi phục metadata được.
+- Image/env mẫu mặc định chỉ đọc, tắt mutation/legacy writes. HTTPS/auth/CSRF/least-privilege DB đã kiểm trên deployment riêng, không dùng secret/DB/Ceph của lab để test production bootstrap.
+- Script backup/restore dùng schema theo image, giữ lịch sử migration; đã khôi phục offline schema 21, 21 checksum migration, 2 As-is synthetic gồm 1 bản xóa mềm, 1 evidence/hash liên kết. Unicode/float/null và SHA giữ nguyên. Đây không phải nghiệm thu RPO/RTO của site đích.
+- [Release manifest](rgw-console/deploy/releases/5.1.0-rc.1.yaml) ghi digest, SBOM/scan hash và các gate PASS/PARTIAL/NOT_RUN. Worker có CVE công khai; giảm quyền/network-none không thay thế bản vá. Không gọi toàn bộ bộ công cụ là production-ready.
+
+## 23. Nhánh kiểm thử local sau RC1 — 13/10/2026
+
+Tại thời điểm kiểm thử nhánh này, Docker Hub và localhost chưa thay; RC1 trong mục 22 còn đang chạy. Trạng thái local sau yêu cầu đổi cấu hình được ghi riêng ở mục 26. Không thay giao diện So sánh, DB schema, SSH profile hoặc dữ liệu Ceph.
+
+- Backend yêu cầu handshake đầy đủ: version/commit đã kiểm, parser 2, pool replicated, đúng thao tác CRUSH weight và đúng SHA hai tool. Từ chối heartbeat không hữu hạn/cũ/tương lai, field thiếu, binary khác, cờ thành công không phải boolean và mã lỗi không hợp lệ. Kết quả phải khớp handshake và pool yêu cầu trước khi lưu evidence; hồ sơ dự đoán cũ vẫn được đọc/xuất như trước. Đây là kiểm hợp đồng dữ liệu, không phải attestation mật mã của worker.
+- Đã build ứng dụng local `storage-lab-console:5.1.1-preview.1`, index `sha256:8fee0b7383ceb64a4b464ff0dadaad7f8fc6b52a9f132d42eb83123b60eea3cc`; source service trùng checksum trong image. Backend 296/296 test qua trên PostgreSQL test cô lập, không bỏ qua. Fixture lab có policy rõ ràng, không kế thừa `CONSOLE_READ_ONLY=true` của runtime để làm sai mục tiêu test; bảo vệ production không bị tắt. Scout kiểm 167 package của ứng dụng, không phát hiện CVE trong lần kiểm này.
+- Worker thử nghiệm `storage-lab-osdmap:16.2.15-minimal-preview.1`, index `sha256:452ba2b9b3e4c1660b5e1e89a45b0d2a8aba6190d4d0bfa84d058403b147cff5`. [Dockerfile.minimal](rgw-console/packaging/osdmap/Dockerfile.minimal) lấy đúng hai tool và `libceph-common.so.2` từ donor Ceph đã pin, chạy trên UBI8-minimal được pin và cập nhật bằng repo chính thức. Không copy system library cũ hay giả RPM database. Giữ license/source URLs, manifest dependency closure 22 mục, 114 RPM thật và SBOM riêng cho hai package Ceph được trích file.
+- Cả ba ELF Ceph giữ đúng checksum; 17/17 worker test qua ở cả RC1 và runtime mới. Ba kịch bản trên cùng map tạo offline (no-op, nhiều weight, pg_upmap_items) cho cùng raw/up/acting/primary, CRUSH bytes, effective weight, choose_args và parser diagnostics. Chỉ chuẩn hóa một dòng stdout chứa đường dẫn thư mục tạm xuất CRUSH; raw stdout và kết quả/hash gốc được giữ riêng. SHA bản so sánh canonical: `b5dad984d27f13ff56b1c093222dc6ceb106f830af29217828b35332457742d5`.
+- Scan toàn worker mới: 144 package được index, raw findings 1 Critical / 28 High / 40 Medium / 6 Low / 0 unspecified (RC1: 9 / 333 / 1333 / 481 / 18). Scout ghi SQLite `CVE-2026-51302` Critical/Not Fixed, nhưng [CNA đã rút bản ghi ngày 31/07/2026](https://cveawg.mitre.org/api/cve/CVE-2026-51302) vì không phải vấn đề bảo mật; phải phân biệt scanner finding với vulnerability đã xác nhận. Giữ raw report/checksum, không gọi “đã vá” hoặc tự suppress để vượt gate. Scan SBOM Ceph trích file không phát hiện CVE nhưng không chứng minh mã Pacific đã hết rủi ro hoặc mọi backend được nạp động đã được thử. **Worker mới vẫn chưa đạt gate production; không tự promote, publish hoặc cập nhật deployment.**
+
+Biên bản: [VALIDATION](rgw-console/VALIDATION.md), [manifest local preview](rgw-console/deploy/releases/5.1.1-preview.1.yaml), [hướng dẫn runtime tối giản](rgw-console/docs/OSDMAP_PREVIEW.md#runtime-tối-giản-thử-nghiệm-chưa-phát-hành). Sau khi chọn hướng tiếp theo cần xử lý CVE residual và nghiệm thu integration/môi trường đích; không dùng việc giảm package hoặc test fixture để tuyên bố toàn bộ plan hoàn tất.
+
+## 24. Integration và triage sau preview — 13/10/2026
+
+- API/middleware/service/repository của app preview, worker tối giản thật và PostgreSQL 16/schema 21 đã qua **38/38 kiểm tra synthetic**. Hai scenario được lưu DB/artifact; checksum, export bất biến/không thu lại, epoch drift, CSRF/no-Apply, capability lỗi và kết quả sai identity trước save đều được kiểm. Dataset tạo offline có metadata từ cùng map; không nối Ceph thật hoặc dùng credential lab. Script được khóa bằng marker opt-in + tên DB synthetic/host internal; spool/evidence/DB tách biệt, dữ liệu chứng minh giữ riêng.
+- [Báo cáo security triage](rgw-console/docs/OSDMAP_SECURITY_TRIAGE.md) đối chiếu 29 raw Critical/High: 15 vendor-fixed đúng RPM EVR/product/component, 5 vendor-not-affected, 4 CNA-rejected, 5 vendor-affected. Giữ nguyên raw Scout/count/hash; không VEX/suppress/waiver. Không gọi CVE SQLite đã bị rút là “còn Critical chưa vá đã xác nhận”.
+- Năm finding vendor-affected cần tiếp tục xử lý: GnuTLS hai CVE, OpenSSL, PCRE2 và Expat. GnuTLS có thể được bỏ nếu solver uninstall được package-manager extras mà giữ closure/RPM metadata/chown/runtime; ba core component khác cần bản vá vendor hoặc runtime/adapter mới có fixture và pin mới. Không ép `--nodeps`, giả ABI OpenSSL3 thành 1.1 hoặc xóa file để che scanner.
+- Gate synthetic integration đổi thành PASS trong manifest local; **live-cluster/site acceptance và production vẫn chưa đạt**. Tại thời điểm kiểm thử này chưa publish/promote/thay localhost; việc đổi local theo yêu cầu riêng ở mục 26 không phải promote production. Giao diện So sánh và image RC1 đã phát hành vẫn giữ nguyên.
+
+## 25. Worker preview.2 sau gỡ package quản lý — 13/10/2026
+
+- Build local `storage-lab-osdmap:16.2.15-minimal-preview.2`, index `sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893`, flag `STRIP_PACKAGE_MANAGER_EXTRAS=true`. Gỡ thật 13 package qua solver; không fake RPM metadata, dùng `--nodeps` hoặc che scanner. Tool/library pins, 22 dependencies, RPM query/chown/Python và UID 10001 giữ nguyên; build cập nhật glibc/libxml2, có 103 RPM headers.
+- 17 worker tests và 3 differential scenarios đạt. API–worker–Postgres synthetic có 4 lượt liên tiếp 38/38 PASS sau thêm diagnostics. Lượt đầu lỗi ở kiểm tampered identity sau 32 bước, chưa tái hiện/xác nhận nguyên nhân; giữ report lỗi và stability review OPEN. DB chỉ có hai artifact hợp lệ của lượt đó, không lưu kết quả sai thứ ba. Không dùng retries để xóa lỗi khỏi acceptance.
+- Guard script synthetic reject libpq query/fragment và environment override đích DB trước mở pool; 9 guard tests đạt. Đây là fixture safety, không tắt policy production.
+- Raw Scout còn 1 Critical/21 High/35 Medium/2 Low; triage 22 C/H là 12 vendor-fixed, 3 not affected, 4 CNA-rejected, 3 vendor-affected (OpenSSL/PCRE2/Expat). Không sửa raw finding hoặc tạo waiver. Compressed size 80 MB so với preview.1 66 MB; bớt package không mặc nhiên làm ít layer bytes hơn.
+- [Manifest preview.2](rgw-console/deploy/releases/osdmap-16.2.15-minimal-preview.2.yaml) và VALIDATION ghi rõ tag/digest/checksum/report lỗi/PASS. **Tại thời điểm kiểm thử này chưa publish/promote/thay localhost; production gate chưa đạt.** Cấu hình local hiện tại ở mục 26; residual affected, lỗi đầu chưa xác nhận và site acceptance vẫn phải xử lý.
+
+## 26. Đổi cấu hình localhost lab — 13/10/2026
+
+- Theo yêu cầu đổi cấu hình, localhost `http://127.0.0.1:8080` dùng app `5.1.1-preview.1`, digest `sha256:8fee0b7383ceb64a4b464ff0dadaad7f8fc6b52a9f132d42eb83123b60eea3cc`, và worker `16.2.15-minimal-preview.2`, digest `sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893`. [Cấu hình opt-in](rgw-console/deploy/local-images.preview.json) pin image local; default RC1/production env không đổi.
+- Đã backup DB vào thư mục runtime riêng với ACL hạn chế trước migration/recreate; schema vẫn 21, không có migration chờ. Giữ nguyên DB/container/volume, bốn collection và SHA/deletion state/tám events, tám file evidence cũ cùng checksum, mọi SSH/config/token mounts. Container RC1 cũ giữ ở trạng thái dừng để rollback, không xóa volume.
+- Bốn app role và worker mới chạy UID 10001/rootfs chỉ đọc/cap-drop ALL/no-new-privileges. API chỉ publish loopback 8080; worker network-none, CPU 1/RAM 1536 MiB/PIDs 32, chỉ mount spool. `CONSOLE_READ_ONLY=true`, mutation/lab/legacy writes tắt. Readiness/schema, capability/parser/tool hashes, so sánh và export lịch sử đạt.
+- Smoke thực tế chỉ đọc: observe MON/OSD mới theo request trả đúng FSID; quality PARTIAL do nguồn CPU/RAM orchestrator cũ, không giả thành VALID. Mô phỏng offline no-op `osd.2`/pool 13 có epoch 3888, 0 PG thay đổi, không lưu map ứng viên; export kiểm SHA. Không tạo collection As-is mới hoặc thay cấu hình Ceph.
+- Đây chỉ là **local lab smoke**, không đóng lỗi integration đầu hoặc production gate. Ba vendor-affected và stability review OPEN được giữ. Không push/tag lại Docker Hub, không thay production-test 8443, không chạy nâng cấp/Apply/Ceph write. [Biên bản chuyển cấu hình](rgw-console/deploy/releases/localhost-20261013-preview.yaml).
+
+## 27. Sửa lỗi So sánh và thông báo dung lượng — 13/10/2026
+
+- Đã tái hiện việc đổi bộ lọc giai đoạn làm xóa cả A/B trên preview.1. Preview.2 chỉ reset lựa chọn/kết quả khi đổi loại daemon; giữ A/B qua ngày, giai đoạn, từ khóa và trang lịch sử. Chọn A ở Trước rồi B ở Sau, đổi ngày/tìm kiếm và so sánh ba RGW cũ đã kiểm trực tiếp trên browser; đổi sang OSD xóa đúng A/B và kết quả.
+- Snapshot dung lượng trước đây có state cảnh báo nhưng `reasons=[]`, làm UI ghi “Chưa có cảnh báo”. Backend mới thêm OSD, phần trăm dùng và ngưỡng policy đã chạm; giữ ghi chú vận hành/cảnh báo nguồn cũ hoặc scope thiếu. UI chỉ dùng thông báo không cảnh báo khi NORMAL; trạng thái scope thiếu có nhãn tiếng Việt. Ô chọn daemon dùng 16×16 px, không kế thừa kích thước ô nhập văn bản.
+- App local `storage-lab-console:5.1.1-preview.2`, index `sha256:44c809d6ebc46c66e43152b746ba167e83fbbcebfa6f905bcd79c21f0c395c84`, đã build và cập nhật localhost. 20 frontend tests, TypeScript/build và 61 backend tests liên quan đạt. Không đổi schema hoặc dữ liệu lịch sử; backup riêng trước swap, bốn collection/tám events/chín file evidence cùng SHA giữ nguyên.
+- API/worker/DB synthetic sau khởi động worker từ trạng thái dừng đạt 38/38, marker xác nhận tamper injection đã chạy và trả 503 trước lưu kết quả sai. Lỗi đầu lịch sử vẫn chưa tái hiện hoặc xác định nguyên nhân; stability OPEN/production NOT_PASSED giữ nguyên. Browser kiểm tải JSON ở lượt này bị từ chối quyền tải xuống, không dùng cách khác để vượt chặn; test export/checksum synthetic đạt.
+- [Manifest bản sửa](rgw-console/deploy/releases/5.1.1-preview.2.yaml) và [VALIDATION](rgw-console/VALIDATION.md) ghi kết quả/giới hạn. Worker vẫn preview.2, chưa publish Hub hoặc triển khai production.
+
+## 28. Bổ sung chẩn đoán report integration — 13/10/2026
+
+- Runner test tạo report schema 2 cho mọi request, giữ HTTP status/code, tên bước, worker envelope và exception, thời lượng, source calls và thay đổi DB/artifact. Lỗi không có response ghi HTTP null; service được nối đúng request, không dùng trace của request trước. Lỗi logging phụ không che lỗi gốc. Report mới lưu nguồn runner/diagnostic bất biến theo SHA, không lưu body/credential/env/SQL.
+- 26 unit tests và bốn tình huống lỗi chủ động tạo đã kiểm contract; lượt integration bình thường đạt 38/38. Worker thật trên map hỏng trả 409/OSDMAP_TOOL_FAILED và có envelope trong report ngay từ create đầu. [Hướng dẫn](rgw-console/docs/INTEGRATION_REPORTING.md) · [Manifest](rgw-console/deploy/releases/integration-reporting-20261013.yaml). Thông tin chưa ghi trong report lịch sử không được tự suy đoán bổ sung; stability lịch sử vẫn OPEN. Lát cắt này sửa runner, không yêu cầu rebuild image ứng dụng.
+
+## 29. Hoàn thiện và phát hành demo/lab — 13/10/2026
+
+- Bản app mới `5.1.1-rc.1` sửa lỗi nguồn bận do thao tác chồng nhau: hai slot đang chạy + hai slot chờ tối đa 30 giây; mỗi yêu cầu được nhận thu nguồn mới độc lập. UI single-flight, hủy yêu cầu client khi rời trang, tự thử lại tối đa hai lần chỉ cho `COLLECTION_BUSY`; không dùng cache để giả dữ liệu real-time. Thu sâu OSD có thể lâu hơn; giao diện hiển thị đang đọc rõ ràng.
+- `last_refresh` null/rỗng/sai kiểu của orchestrator trả dữ liệu một phần thay vì lỗi server. Metric có timestamp, cửa sổ đo, chất lượng thật. Giữ phân trang 10 daemon, chọn nhiều daemon qua trang, As-is theo giai đoạn, so sánh A/B cùng loại/FSID, xóa mềm/khôi phục; benchmark và dry-run vẫn bị loại khỏi sản phẩm.
+- Backend 304 test không skip PostgreSQL, frontend 24 + TypeScript/build, executor 31, helper 26, real worker 17, diagnostics/guard 26 đạt. API–worker–PostgreSQL synthetic đạt 38/38 với HTTP/worker report schema 2 và tamper rejection 503 có bằng chứng. Lỗi integration đầu lịch sử chưa xác nhận nguyên nhân, không tự ghi là đã giải quyết.
+- Đã kiểm browser: đọc mới đủ 14 daemon/FSID, 10 + 4 hàng; xuất mới hai daemon chọn qua trang tải thật về máy; so sánh hai bộ OSD và xuất JSON, lọc giai đoạn không mất A/B; thu một bộ demo mới hai OSD ghi rõ không nâng cấp/ghi Ceph. [Kịch bản demo](rgw-console/docs/DEMO.md) và README được cập nhật.
+- App và worker đã push Docker Hub, kiểm API tag/index và pull theo digest: app `sha256:49f5284d27fd4defe2e2804e3b4eb06eaa3ac19352026622de3eae6c417fbe1f`; worker `sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893`. Không ghi đè tag RC1 cũ hoặc `latest`. [Manifest mới](rgw-console/deploy/releases/5.1.1-rc.1.yaml).
+- App raw scan 0 findings; worker raw scan vẫn 1C/21H/35M/2L, chỉ lab/offline, không promote production. Chưa hoàn tất telemetry host/process/network và RGW/MDS request/latency, cluster thứ hai, ARM64/signing hoặc nghiệm thu production toàn bộ. “Hoàn thiện demo” không biến các gate đó thành PASS.
+- Localhost đã đổi cấu hình theo digest mới; backup trước swap, dữ liệu As-is/evidence/SSH/DB/mount cũ giữ nguyên, container cũ giữ để phục hồi. Production-test 8443 không thay; không Apply, nâng cấp hoặc Ceph write. Đã thêm một collection demo có chủ đích sau khi xác nhận bốn collection cũ và evidence không đổi.
+
+## 30. Sửa lựa chọn metric, bộ lọc collection và nguồn bận — 14/10/2026
+
+- Giữ Lịch sử thu thập; thay khối nguồn/phạm vi/giới hạn dài bằng biểu tượng warning nhỏ, bấm xem chỉ liệt kê dữ liệu thiếu/cũ. Giữ null/quality/timestamp thật; không xóa thông tin nguồn khỏi tệp gốc để làm đẹp giao diện.
+- Chọn daemon trong Chỉ số cụm để bấm **Xem chỉ số mới (N daemon)** hoặc **Xuất N daemon (JSON)** ngay cạnh lựa chọn. Đọc mới trả một khu vực kết quả riêng, không thu hẹp danh mục và không nâng cấp. Xem danh mục toàn bộ là thao tác riêng.
+- Collection nhiều loại vẫn khớp bộ lọc khi chứa loại được chọn; danh sách/count/chi tiết chỉ hiện daemon đúng loại hoặc exact ID. So sánh chỉ xét cùng loại/FSID. **Xuất daemon đã lọc** trả `FILTERED_AS_IS_EXPORT` với nguồn gốc/SHA gốc rõ ràng; checksum bytes xuất là checksum riêng. **Xuất bộ gốc** giữ đầy đủ payload. Xóa mềm có xác nhận là xóa toàn bộ bộ gốc, không chỉ daemon đang lọc.
+- Sửa nguyên nhân thu bận do server tiếp tục lịch lệnh sau browser abort: request observe/export theo dõi ASGI disconnect, hủy lượt chờ và lệnh chưa chạy; slot còn giữ đến khi HTTP nguồn đã chạy kết thúc. Không tăng đồng thời hoặc dùng cache để né lỗi. SSH đã chạy không bị dừng tức thì, vẫn có timeout; tải quá mức thật vẫn được từ chối có giới hạn.
+- Inventory mở trang đọc danh mục nhẹ, không tự thu sâu sáu OSD. Đọc sâu theo thao tác explicit có deadline 60 giây cộng budget collector được cấu hình; metric thường 60 giây. Đã sửa mismatch 60 giây/collector 300 giây được tìm trong review.
+- Local `5.1.2-preview.1`, digest `sha256:98ed06baecb12868acbed65fa67c338da6f2c4d7b584d509b4326cd7cf238297`, đã build/cập nhật; 319 backend không skip PostgreSQL, 31 frontend + TypeScript/build đạt. Kiểm HTTP nguồn thật hủy hai request rồi đọc mới đạt 200; bộ MON+OSD lọc/export đúng và SHA gốc không đổi. Năm collection/19 events trước kiểm giữ nguyên, không tạo/xóa/khôi phục collection trong lượt kiểm này. Backup trước swap, schema vẫn 21, chỉ đọc Ceph.
+- [Manifest kiểm](rgw-console/deploy/releases/5.1.2-preview.1.yaml) giữ báo cáo/checksum. Preview **chưa đăng Hub**; tag Hub RC1 không thay. Tab lỗi ban đầu đã được người dùng thay bằng tab localhost truy cập được; không vượt chặn. Kiểm Browser trực tiếp đạt cho xem/xuất mới hai daemon, bộ hỗn hợp lọc OSD, exact osd.2, cảnh báo nhỏ và so sánh đúng một OSD. Hai JSON tải thật về Downloads; SHA bộ gốc và 5 collection/19 events giữ nguyên. Đây là kiểm theo phạm vi bản sửa, không phải mọi thao tác UI, tải dài hạn hoặc chấp thuận production.

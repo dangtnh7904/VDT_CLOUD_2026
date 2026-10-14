@@ -1,0 +1,49 @@
+# Experimental compatibility build. RC1 Dockerfile remains the deployed default.
+# Donor provides exactly three pinned Ceph ELF files, never its old system libs.
+FROM quay.io/ceph/ceph:v16.2.15@sha256:f15b41add2c01a65229b0db515d2dd57925636ea39678ccc682a49e2e9713d98 AS ceph-donor
+
+FROM registry.access.redhat.com/ubi8/ubi-minimal:8.10@sha256:9ba99bcb387bdb7203f6d778a081950832a5fc500824431d10ec9d3ceacf949f
+ARG APP_VERSION=16.2.15-minimal-preview.1
+ARG BUILD_DATE=unknown
+ARG VCS_REF=unknown
+ARG STRIP_PACKAGE_MANAGER_EXTRAS=false
+LABEL org.opencontainers.image.title="Storage Lab Console experimental minimal OSDMap worker" \
+      org.opencontainers.image.description="Unapproved preview: exact legacy Ceph tools on updated EL8 dependency closure; copied Ceph provenance and licenses retained" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      storage-lab-console.security-status="experimental-unapproved-legacy-ceph-components" \
+      storage-lab-console.package-manager-extras-stripped="${STRIP_PACKAGE_MANAGER_EXTRAS}" \
+      storage-lab-console.supported-platform="linux/amd64" \
+      storage-lab-console.ceph-donor="quay.io/ceph/ceph:v16.2.15@sha256:f15b41add2c01a65229b0db515d2dd57925636ea39678ccc682a49e2e9713d98" \
+      storage-lab-console.copied-component-sbom="/usr/share/osdmap-preview/copied-ceph.spdx.json"
+
+# Use public signed UBI repos, preserve the real RPM database and package
+# licenses, and let dependency resolution install the complete OS closure.
+# No non-UBI repository, old donor OS library or fabricated RPM entry is used.
+RUN test "${STRIP_PACKAGE_MANAGER_EXTRAS}" = true -o "${STRIP_PACKAGE_MANAGER_EXTRAS}" = false \
+    && microdnf --refresh update -y \
+    && microdnf --refresh install -y --setopt=install_weak_deps=0 \
+       python3.12 libblkid openssl-libs systemd-libs libibverbs librdmacm \
+       zlib libstdc++ libgcc libmount libnl3 libselinux pcre2 \
+    && microdnf clean all
+
+# A genuine solver transaction, not file deletion or forged package metadata.
+# Keep RPM/query/DB, Python and the complete tool/chown dependency closure.
+RUN if test "${STRIP_PACKAGE_MANAGER_EXTRAS}" = true; then \
+       microdnf remove -y microdnf libdnf librepo librhsm libpeas \
+         gobject-introspection json-glib libmodulemd libsolv gpgme \
+         gnupg2 glib2 gnutls; \
+    fi
+
+COPY --from=ceph-donor /usr/bin/osdmaptool /usr/bin/osdmaptool
+COPY --from=ceph-donor /usr/bin/crushtool /usr/bin/crushtool
+COPY --from=ceph-donor /usr/lib64/ceph/libceph-common.so.2 /usr/lib64/ceph/libceph-common.so.2
+COPY minimal/licenses /usr/share/licenses/copied-ceph
+COPY minimal/verify_runtime.py /opt/osdmap-preview/verify_runtime.py
+COPY worker.py /opt/osdmap-preview/worker.py
+RUN /usr/bin/python3.12 /opt/osdmap-preview/verify_runtime.py
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 OSDMAP_PREVIEW_SPOOL=/spool
+USER 10001:10001
+ENTRYPOINT ["/usr/bin/python3.12", "/opt/osdmap-preview/worker.py"]

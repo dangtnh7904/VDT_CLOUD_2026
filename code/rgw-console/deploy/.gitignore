@@ -1,0 +1,9 @@
+.env.release
+.env
+.env.production
+.env.local-readonly
+config/profiles/*.yaml
+!config/profiles/*.yaml.example
+secrets/*
+!secrets/README.md
+dist/

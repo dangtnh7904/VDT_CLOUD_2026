@@ -1,0 +1,12 @@
+{
+  "scope": "localhost-lab-only",
+  "application_version": "5.1.2-preview.1",
+  "application_image": "storage-lab-console@sha256:98ed06baecb12868acbed65fa67c338da6f2c4d7b584d509b4326cd7cf238297",
+  "osdmap_worker_version": "16.2.15-minimal-preview.2",
+  "osdmap_worker_image": "dang7904/storage-lab-osdmap@sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893",
+  "console_read_only": true,
+  "production_approved": false,
+  "docker_hub_published": false,
+  "worker_docker_hub_published": true,
+  "published_application_image": "dang7904/storage-lab-console@sha256:49f5284d27fd4defe2e2804e3b4eb06eaa3ac19352026622de3eae6c417fbe1f"
+}

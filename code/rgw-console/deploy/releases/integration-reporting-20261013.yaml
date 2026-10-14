@@ -1,0 +1,55 @@
+schema_version: 1
+status: diagnostic_report_gap_fixed_and_verified
+validated_on: "2026-10-13"
+timezone: Asia/Saigon
+report_contract:
+  diagnostic_schema_version: 2
+  all_http_requests: true
+  all_create_and_worker_result_paths: true
+  named_stage_before_request: true
+  correlated_http_and_service_sequences: true
+  failure_context: [stage, failed_check, http, service, capability, exception]
+  typed_worker_envelope_error_and_stage: true
+  storage_status: true_false_or_unknown
+  diagnostic_error_does_not_mask_original: true
+  source_snapshots: immutable_hash_addressed_runner_and_diagnostic_module_only
+  raw_response_request_headers_sql_and_exception_text: excluded
+  bounded_trace_counts: {http: 512, service: 128}
+tests:
+  target_guard: {passed: 9, failed: 0}
+  diagnostic_unit: {passed: 17, failed: 0}
+  normal_real_worker_integration: {passed: 38, failed: 0}
+  source_snapshot_hash_verification: PASS
+  deliberate_failure_scenarios: [capability_stale, corrupt_map_real_worker, transport_exception, invalid_json_response]
+  all_four_failure_reports_satisfy_contract: PASS
+  historical_failure_was_not_replaced_with_control_reports: true
+evidence:
+  success_report_path: ../dist/integration-reporting-20261013/success-with-source-snapshots.json
+  success_report_sha256: 1c12bf81d6830bb0c39cdad99ba21becce74ea10a9e377d333e9489552d9536d
+  worker_failure_report_path: ../dist/integration-reporting-20261013/failure-corrupt-map-with-sources.json
+  worker_failure_report_sha256: 7e01579f9ff04b6f730ffd7ecdafc299d4406ef4629b1ac048d71238ad8deef0
+  archived_test_source_path: ../dist/integration-reporting-20261013/sources/d9dae9057093be71e4a0d8db49e7952f8a756bf838f7758bf18f7a814a624d86.py
+  archived_test_source_sha256: d9dae9057093be71e4a0d8db49e7952f8a756bf838f7758bf18f7a814a624d86
+  archived_diagnostic_source_path: ../dist/integration-reporting-20261013/sources/58497e57519d18cf0211d002a69ae049e21a9cb92bc2da017d1769f0f4c39258.py
+  archived_diagnostic_source_sha256: 58497e57519d18cf0211d002a69ae049e21a9cb92bc2da017d1769f0f4c39258
+  exercise_failure_driver_source_sha256: 2f00c556c7f44cc35524fd16a4a82d9707419dbd296d0f802c30ab34b2c425e9
+  diagnostic_unit_test_source_sha256: fa642884de6ad2feb8833d6490224f7011eae104ff1e116844b4f6dc615c0050
+  synthetic_archive_path: ../dist/integration-reporting-20261013/synthetic-database.dump
+  synthetic_archive_sha256: 7bdf1e0533630f1766b3d7486a4d8d2dfb9a42b0d298a99c22161f9652653f07
+scope:
+  database: osdmap_synthetic_reporting_20261013
+  source: generated_offline_maps_in_process_adapter
+  worker: 16.2.15-minimal-preview.2
+  application: 5.1.1-preview.2
+  synthetic_database_artifact_rows: 4
+  test_services_stopped_after_verification: true
+  live_localhost_configuration_changed: false
+  historical_failed_report_sha256_unchanged: fc5594a095ea68578eb5442edfa5bf212fa4026aa5ebf81a617d52dcacc568fc
+  ceph_mutations: none
+  image_build_or_publish: none
+acceptance:
+  missing_http_and_worker_diagnostics: FIXED_FOR_NEW_RUNS
+  missing_historical_data_reconstructed: false
+  first_historical_failure_stability_review: OPEN
+  production_acceptance: NOT_PASSED
+  documentation: ../../docs/INTEGRATION_REPORTING.md

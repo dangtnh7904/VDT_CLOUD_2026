@@ -1,0 +1,194 @@
+name: storage-lab-console-local
+
+x-runtime-environment: &runtime-environment
+  APP_ENV: lab
+  EXECUTION_ENVIRONMENT: lab
+  CONSOLE_READ_ONLY: "true"
+  FEATURE_UPGRADE: "true"
+  FEATURE_LAB: "false"
+  FEATURE_LEGACY_RGW: "false"
+  FEATURE_LEGACY_RBD: "false"
+  UPGRADE_MUTATIONS_ENABLED: "false"
+  LAB_ALLOW_WRITE: "false"
+  RBD_TERMINAL_ENABLED: "false"
+  CAPACITY_OBSERVE_ONLY: "true"
+  DATABASE_URL_FILE: /run/secrets/database_url
+  CEPH_EXECUTOR_URL: http://storage-lab-console-local-executor:3001
+  RBD_EXECUTOR_URL: http://storage-lab-console-local-executor:3001
+  CEPH_EXECUTOR_TOKEN_FILE: /run/secrets/executor_token
+  RBD_EXECUTOR_TOKEN_FILE: /run/secrets/executor_token
+  EVIDENCE_STORE: filesystem
+  EVIDENCE_ROOT: /var/lib/storage-lab-console/evidence
+
+x-application: &application
+  image: ${SLC_LOCAL_IMAGE:?Run start-image-readonly.ps1 with -Image}
+  pull_policy: never
+  env_file:
+    - path: ${SLC_LOCAL_ENV_FILE:?Set runtime configuration file}
+      format: raw
+  environment: *runtime-environment
+  user: "10001:10001"
+  read_only: true
+  init: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,mode=1777"]
+  networks: [control]
+  labels: {storage-lab-console.scope: local-preview}
+  restart: unless-stopped
+  stop_grace_period: 45s
+
+x-database-secret: &database-secret
+  source: database_url
+  target: database_url
+
+x-token-secret: &token-secret
+  source: executor_token
+  target: executor_token
+
+services:
+  postgres:
+    container_name: storage-lab-console-local-postgres
+    image: ${SLC_LOCAL_POSTGRES_IMAGE:?Set PostgreSQL image}
+    pull_policy: never
+    environment:
+      POSTGRES_USER: storage_lab_console
+      POSTGRES_DB: storage_lab_console
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    networks: [control]
+    labels: {storage-lab-console.scope: local-preview}
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U storage_lab_console -d storage_lab_console"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  init-permissions:
+    image: ${SLC_LOCAL_IMAGE:?Run start-image-readonly.ps1 with -Image}
+    pull_policy: never
+    profiles: [setup]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    entrypoint: [/bin/chown]
+    command: ["10001:10001", /evidence, /executor-state, /spool]
+    cap_add: [CHOWN]
+    network_mode: none
+    volumes:
+      - evidence:/evidence
+      - executor-state:/executor-state
+      - osdmap-spool:/spool
+    restart: "no"
+
+  migrate:
+    <<: *application
+    profiles: [setup]
+    command: [migrate, --wait-seconds, "90"]
+    secrets: [*database-secret, *token-secret]
+    volumes: ["${SLC_LOCAL_CONFIG_DIR:?Set config directory}:/etc/storage-lab-console:ro"]
+    restart: "no"
+
+  executor:
+    <<: *application
+    container_name: storage-lab-console-local-executor
+    command: [executor]
+    environment:
+      <<: *runtime-environment
+      PORT: "3001"
+      RBD_SSH_KEY_PATH: /run/secrets/ssh_private_key
+      RBD_SSH_HOST_KEY_REQUIRED: "true"
+      RBD_EXECUTOR_STATE_ROOT: /var/lib/rbd-executor
+    secrets: [*token-secret, ssh_private_key]
+    volumes:
+      - ${SLC_LOCAL_CONFIG_DIR:?Set config directory}:/etc/storage-lab-console:ro
+      - executor-state:/var/lib/rbd-executor
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    <<: *application
+    container_name: storage-lab-console-local-api
+    command: [api]
+    environment:
+      <<: *runtime-environment
+      PORT: "8000"
+      BIND_HOST: 0.0.0.0
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      OSDMAP_PREVIEW_SPOOL: /var/lib/storage-lab-console/osdmap-spool
+    ports: ["127.0.0.1:8080:8000"]
+    secrets: [*database-secret, *token-secret]
+    volumes:
+      - ${SLC_LOCAL_CONFIG_DIR:?Set config directory}:/etc/storage-lab-console:ro
+      - evidence:/var/lib/storage-lab-console/evidence
+      - osdmap-spool:/var/lib/storage-lab-console/osdmap-spool
+    depends_on:
+      postgres: {condition: service_healthy}
+      executor: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/live', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  capacity:
+    <<: *application
+    container_name: storage-lab-console-local-capacity
+    command: [capacity-collector]
+    secrets: [*database-secret, *token-secret]
+    volumes: ["${SLC_LOCAL_CONFIG_DIR:?Set config directory}:/etc/storage-lab-console:ro"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      executor: {condition: service_healthy}
+
+  performance:
+    <<: *application
+    container_name: storage-lab-console-local-performance
+    command: [performance-collector]
+    secrets: [*database-secret, *token-secret]
+    volumes: ["${SLC_LOCAL_CONFIG_DIR:?Set config directory}:/etc/storage-lab-console:ro"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  osdmap:
+    profiles: [osdmap]
+    container_name: storage-lab-console-local-osdmap
+    image: ${SLC_LOCAL_OSDMAP_IMAGE:?Set tested offline worker image}
+    pull_policy: never
+    network_mode: none
+    user: "10001:10001"
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1
+    mem_limit: 1536m
+    pids_limit: 32
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,mode=1777"]
+    labels: {storage-lab-console.scope: local-preview}
+    volumes: ["osdmap-spool:/spool"]
+    restart: unless-stopped
+
+networks:
+  control:
+    name: storage-lab-console-local
+    driver: bridge
+    labels: {storage-lab-console.scope: local-preview}
+
+volumes:
+  postgres-data: {name: storage-lab-console-local-postgres-data, labels: {storage-lab-console.scope: local-preview}}
+  evidence: {name: storage-lab-console-local-evidence, labels: {storage-lab-console.scope: local-preview}}
+  executor-state: {name: storage-lab-console-local-executor-state, labels: {storage-lab-console.scope: local-preview}}
+  osdmap-spool: {name: storage-lab-console-local-osdmap-spool, labels: {storage-lab-console.scope: local-preview}}
+
+secrets:
+  database_url: {file: "${SLC_LOCAL_DATABASE_URL_FILE:?Set database URL secret file}"}
+  executor_token: {file: "${SLC_LOCAL_TOKEN_FILE:?Set executor token secret file}"}
+  ssh_private_key: {file: "${SLC_LOCAL_SSH_KEY_FILE:?Set SSH private key file}"}
+  postgres_password: {file: "${SLC_LOCAL_POSTGRES_PASSWORD_FILE:?Set generated PostgreSQL password file}"}

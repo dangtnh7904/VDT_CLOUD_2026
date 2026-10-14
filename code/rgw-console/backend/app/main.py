@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+import os
 import tempfile
 import time
 import uuid
@@ -15,20 +16,29 @@ from typing import Annotated, Literal
 from botocore.exceptions import ClientError
 from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .api.capacity import router as capacity_router
 from .api.control import router as control_router
 from .api.rbd import RbdControlError, router as rbd_router, terminal_router
 from .api.performance import router as performance_router
+from .api.health import router as health_router
 from .config import get_settings
+from .platform.security.middleware import ConsoleSecurityMiddleware
 from .corpus import CATEGORY_ALIASES, choose_random, classify, describe, resolve_corpus_path
 from .db import connection, initialize, json_ready, pool, record_operation
 from .models.domain import IdempotencyClaimRequest, IdempotencyDisposition, IdempotencyState
 from .services.capacity_guard import CapacityRejected, finish_reservation, require_admission, require_cleanup_admission, reservation_lease
 from .services.idempotency import IdempotencyError, IdempotencyService, canonical_request_fingerprint
 from .services.scope_validator import InvalidScopeError, ScopeValidator
+from .modules.cluster_profiles.api import router as cluster_profile_router
+from .modules.sessions.api import router as sessions_router
+from .modules.evidence_exports.api import router as evidence_exports_router
+from .modules.osd_info_collector.api import router as osd_info_collector_router
+from .modules.cluster_metrics.api import router as cluster_metrics_router
+from .modules.as_is.api import router as as_is_router
+from .modules.osdmap_preview.api import router as osdmap_preview_router
 from .storage import client as s3_client
 from .storage import delete_exact, exact_put, list_object_versions, object_key, replace_metadata, upload_file, upload_stream
 
@@ -101,6 +111,7 @@ class BulkDeleteRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    get_settings().validate_feature_dependencies()
     initialize()
     yield
     pool.close()
@@ -108,13 +119,37 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Ceph Storage Lab API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(ConsoleSecurityMiddleware, settings_provider=lambda: get_settings())
 app.include_router(capacity_router)
 app.include_router(control_router)
 app.include_router(rbd_router)
 app.include_router(terminal_router)
 app.include_router(performance_router)
+app.include_router(health_router)
+app.include_router(cluster_profile_router)
+app.include_router(sessions_router)
+app.include_router(evidence_exports_router)
+app.include_router(osd_info_collector_router)
+app.include_router(cluster_metrics_router)
+app.include_router(as_is_router)
+app.include_router(osdmap_preview_router)
 scope_validator = ScopeValidator()
 idempotency_service = IdempotencyService()
+
+
+@app.get("/api/runtime-config")
+def runtime_config():
+    settings = get_settings()
+    return {
+        "console_read_only": settings.console_read_only,
+        "application_version": os.environ.get("APP_VERSION", "3.0.0"),
+        "features": {
+            "upgrade": settings.feature_upgrade,
+            "lab": settings.feature_lab,
+            "legacy_rgw": settings.feature_legacy_rgw,
+            "legacy_rbd": settings.feature_legacy_rbd,
+        },
+    }
 
 
 @app.middleware("http")
@@ -297,24 +332,6 @@ def fail_idempotent_mutation(
         },
         error_code=error_code,
     )
-
-
-@app.get("/api/health")
-def health():
-    try:
-        response = s3_client().list_buckets()
-        visible = [row for row in response.get("Buckets", []) if row.get("Name") in scope_validator.allowed_buckets]
-        with connection() as conn:
-            revision = conn.execute("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").fetchone()
-        return {
-            "status": "ok",
-            "endpoint": get_settings().rgw_endpoint_url,
-            "buckets": len(visible),
-            "bucket_scope": "CURRENT_S3_IDENTITY",
-            "schema_version": revision["version"] if revision else None,
-        }
-    except Exception as exc:
-        return JSONResponse(status_code=503, content={"status": "degraded", "endpoint": get_settings().rgw_endpoint_url, "error": str(exc)})
 
 
 @app.get("/api/buckets")
@@ -1082,3 +1099,32 @@ async def metric_stream():
                 break
             await asyncio.sleep(1)
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/{frontend_path:path}", include_in_schema=False)
+def frontend_asset(frontend_path: str):
+    """Serve the packaged React build without shadowing API or WebSocket paths."""
+
+    first_segment = frontend_path.split("/", 1)[0]
+    if first_segment in {"api", "ws"}:
+        raise HTTPException(404, "Not found")
+
+    configured_root = get_settings().frontend_dist_path
+    if configured_root is None:
+        raise HTTPException(404, "Frontend is not packaged in this deployment")
+    try:
+        root = configured_root.resolve(strict=True)
+        candidate = (root / frontend_path).resolve()
+        candidate.relative_to(root)
+    except (OSError, ValueError):
+        raise HTTPException(404, "Frontend asset not found")
+
+    if frontend_path and candidate.is_file():
+        return FileResponse(candidate)
+    if frontend_path and "." in PurePosixPath(frontend_path).name:
+        raise HTTPException(404, "Frontend asset not found")
+
+    index = root / "index.html"
+    if not index.is_file():
+        raise HTTPException(503, "Frontend build is unavailable")
+    return FileResponse(index)

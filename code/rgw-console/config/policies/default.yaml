@@ -1,0 +1,20 @@
+schema_version: 1
+revision: default-v1
+
+# Read-only and dry-run are the only modes enabled by this policy foundation.
+mutation_enabled: false
+inventory_max_age_seconds: 45
+stable_window_seconds: 300
+max_simultaneous_down: 1
+drain_parallelism: 1
+return_parallelism: 1
+scrub_concurrency: 1
+promotion_parallelism: 1
+chain_parallelism: 1
+handoff_parallelism: 1
+
+stop_policy:
+  stale_inventory: BLOCKED
+  fsid_mismatch: BLOCKED
+  unsupported_capability: BLOCKED
+  evidence_gap: INCONCLUSIVE

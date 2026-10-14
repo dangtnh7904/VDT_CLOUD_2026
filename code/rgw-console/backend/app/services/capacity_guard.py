@@ -829,6 +829,27 @@ def snapshot_response(*, scope_type: str | None = None, scope: str | None = None
                 (snapshot["fsid"],),
             ).fetchone()
         conn.commit()
+    reasons = [control["reason"]] if control.get("reason") else []
+    if not fresh:
+        reasons.append("Dữ liệu dung lượng đã quá hạn; cần thu lại trước khi đánh giá.")
+    elif scope_type == "pool" and scope and not osds:
+        reasons.append(f"Chưa xác định được OSD tham gia pool {scope}.")
+    elif most_full_ratio is None:
+        reasons.append("Chưa có số liệu dung lượng OSD trong phạm vi được chọn.")
+    else:
+        threshold = {
+            "EMERGENCY_CAPACITY": ("nguy cấp", "capacity_hard_ceiling_ratio", 0.70),
+            "PAUSED_CAPACITY": ("dừng nhận ghi mới", "capacity_admission_stop_ratio", 0.68),
+            "THROTTLED": ("cảnh báo sớm", "capacity_throttle_start_ratio", 0.67),
+        }.get(_physical_state(most_full_ratio))
+        if threshold:
+            label, setting, default = threshold
+            reasons.append(
+                f"osd.{most_full_osd} đang dùng {most_full_ratio:.1%}, "
+                f"đạt ngưỡng {label} của console ({float(_setting(setting, default)):.1%})."
+            )
+    if state == "READ_CLEANUP_ONLY" and not reasons:
+        reasons.append("Console đang ở chế độ chỉ quan sát và dọn dẹp.")
     return {
         "fsid": snapshot.get("fsid"),
         "osdmap_epoch": snapshot.get("osdmap_epoch"),
@@ -846,15 +867,7 @@ def snapshot_response(*, scope_type: str | None = None, scope: str | None = None
         "pending_unobserved_raw_bytes": int(reservation["pending"]),
         "remaining_persistent_commitment_raw_bytes": int(reservation["commitment"]),
         "contract": "OBSERVE_ONLY" if _setting("capacity_observe_only", True) else "STABLE_EPOCH_CONTROLLED_WRITERS",
-        "reasons": (
-            [control.get("reason")]
-            if control.get("reason")
-            else (
-                [f"No participating OSD scope is known for pool {scope}"]
-                if fresh and scope_type == "pool" and scope and not osds
-                else ([] if fresh else ["Capacity telemetry is stale"])
-            )
-        ),
+        "reasons": reasons,
         "telemetry": {
             "status": telemetry_status,
             "source": "node-ssh",

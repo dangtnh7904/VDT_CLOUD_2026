@@ -1,26 +1,39 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Activity, AlertTriangle, Archive, ArrowDownToLine, Boxes, Check, ChevronLeft, ChevronRight,
+  Activity, AlertTriangle, Archive, ArrowDownToLine, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight,
   Clock3, Database, File, FileJson, Folder, FolderOpen, Gauge, HardDrive, History, Image,
   Layers3, LineChart, LoaderCircle, Menu, MoreHorizontal, Pause, Play, RefreshCw, Save, Search, Server,
   ShieldAlert, Shuffle, Square, Trash2, Upload, Video, X, Zap,
 } from "lucide-react";
-import { api, formatBytes, uploadWithProgress } from "./api";
+import { api, formatBytes, uploadWithProgress, type ConsoleExportRequest } from "./api";
 import { RbdVolumeDetail } from "./RbdVolumeDetail";
+import { AsIs } from "./AsIs";
+import { Comparison } from "./Comparison";
+import { ClusterMetrics } from "./ClusterMetrics";
+import { ExportMenu } from "./ExportMenu";
 import {
   CAPACITY_GUIDANCE,
   CRUD_DEFAULT_OPERATION_WEIGHTS,
   CRUD_OPERATIONS,
   canResumeStreamJob,
   capacityScopeLabel,
+  capacityStateLabel,
+  telemetryStatusLabel,
   isRbdDeleteConfirmed,
   isRbdFileAccessState,
   resolveTelemetryStatus,
+  parseRuntimeConfig,
+  visibleConsoleViews,
+  consoleViewDisabledReason,
+  consoleViewFromHash,
+  LEGACY_CONSOLE_VIEWS,
+  type ConsoleView,
+  type RuntimeConfig,
   type CrudOperation,
   type TelemetryStatus,
 } from "./ui-contracts";
 
-type View = "dashboard" | "performance" | "upload" | "random" | "stream" | "objects" | "volumes";
+type View = ConsoleView;
 type CorpusItem = { name: string; path: string; kind: "file" | "directory"; size?: number; category?: string; content_type?: string };
 type Pick = { corpusId: string; paths: string[] };
 type UploadRow = { id: string; name: string; size?: number; progress: number; state: "queued" | "uploading" | "success" | "error"; result?: any; idempotencyKey?: string };
@@ -79,13 +92,17 @@ type PerformanceSample = {
 };
 
 const nav: { id: View; label: string; icon: any }[] = [
-  { id: "dashboard", label: "Live dashboard", icon: Gauge },
-  { id: "performance", label: "Performance", icon: LineChart },
-  { id: "upload", label: "Upload objects", icon: Upload },
-  { id: "random", label: "Random object", icon: Shuffle },
-  { id: "stream", label: "RGW CRUD stream", icon: Zap },
-  { id: "objects", label: "Object explorer", icon: Boxes },
-  { id: "volumes", label: "RBD volumes", icon: HardDrive },
+  { id: "overview", label: "Tổng quan", icon: Gauge },
+  { id: "metrics", label: "Chỉ số cụm và daemon", icon: LineChart },
+  { id: "inventory", label: "Thu thập hiện trạng", icon: Server },
+  { id: "comparison", label: "So sánh", icon: Archive },
+  { id: "dashboard", label: "Hoạt động đối tượng", icon: Gauge },
+  { id: "performance", label: "Hiệu năng công cụ cũ", icon: LineChart },
+  { id: "upload", label: "Tải đối tượng lên", icon: Upload },
+  { id: "random", label: "Đối tượng ngẫu nhiên", icon: Shuffle },
+  { id: "stream", label: "Luồng CRUD RGW", icon: Zap },
+  { id: "objects", label: "Duyệt đối tượng", icon: Boxes },
+  { id: "volumes", label: "Ổ đĩa RBD", icon: HardDrive },
 ];
 
 const categoryIcons: Record<string, any> = { images: Image, data: FileJson, documents: File, media: Video, archives: Archive, binary: Database, other: File };
@@ -143,8 +160,9 @@ function CorpusPicker({ open, multiple = true, folders = false, onClose, onChoos
   </div>;
 }
 
-function Header({ view, endpoint }: { view: View; endpoint: string }) {
-  return <header className="topbar"><div><p className="eyebrow">CEPH STORAGE LAB</p><h1>{nav.find(x => x.id === view)?.label}</h1></div><div className="endpoint"><span className="status-dot" /><div><small>RGW endpoint</small><strong>{endpoint || "Connecting…"}</strong></div></div></header>;
+function Header({ view, health, config }: { view: View; health: any; config: RuntimeConfig }) {
+  const rgwReady = health.dependencies?.rgw?.status === "ready";
+  return <header className="topbar"><div><p className="eyebrow">STORAGE LAB CONSOLE</p><h1>{nav.find(x => x.id === view)?.label}</h1></div><div className="console-access"><span className={`console-mode ${config.console_read_only ? "read-only" : ""}`}><ShieldAlert size={14} />{config.console_read_only ? "CHỈ ĐỌC CEPH" : "CHẾ ĐỘ LAB"}</span><small>v{config.application_version}</small></div>{config.features.legacy_rgw && !config.console_read_only && <div className="endpoint"><span className={`status-dot ${rgwReady ? "" : "unavailable"}`} /><div><small>RGW endpoint</small><strong>{health.endpoint || "Chưa cấu hình / không truy cập được"}</strong></div></div>}</header>;
 }
 
 function CapacityBanner() {
@@ -167,26 +185,26 @@ function CapacityBanner() {
   }, []);
 
   const state = error ? "UNAVAILABLE" : snapshot?.state || "CONNECTING";
-  const severity = ["EMERGENCY_CAPACITY", "BLOCKED_TELEMETRY", "READ_CLEANUP_ONLY", "UNAVAILABLE"].includes(state)
+  const severity = ["EMERGENCY_CAPACITY", "BLOCKED_TELEMETRY", "BLOCKED_UNKNOWN_CAPACITY", "READ_CLEANUP_ONLY", "UNAVAILABLE"].includes(state)
     ? "danger"
     : ["THROTTLED", "PAUSED_CAPACITY", "PAUSED_REMAP", "RECONCILING"].includes(state) ? "warning" : "normal";
   const observeOnly = snapshot?.observe_only ?? snapshot?.contract === "OBSERVE_ONLY";
   const ratio = snapshot?.most_full_ratio;
   const telemetry = snapshot?.telemetry;
   const telemetryStatus = resolveTelemetryStatus(Boolean(error), telemetry?.status, snapshot?.fresh);
-  const age = telemetry?.age_seconds == null ? "age —" : `age ${Math.round(telemetry.age_seconds)}s`;
+  const age = telemetry?.age_seconds == null ? "tuổi chưa xác định" : `tuổi ${Math.round(telemetry.age_seconds)} giây`;
   const scope = capacityScopeLabel(telemetry?.osd_scope, telemetry?.pool_scope);
   const guidance = CAPACITY_GUIDANCE[telemetryStatus];
   const reasons = error ? [error] : [...(snapshot?.reasons || []), ...(guidance ? [guidance] : [])];
   const Icon = severity === "danger" ? ShieldAlert : severity === "warning" ? AlertTriangle : Gauge;
 
   return <div className="capacity-shell"><section className={`capacity-banner ${severity}`}>
-    <div className="capacity-state"><span className="capacity-icon"><Icon /></span><div><small>CAPACITY GUARD</small><strong>{state.replaceAll("_", " ")}</strong></div></div>
-    <div className="capacity-reading"><small>Most-full participating OSD</small><strong>{ratio == null ? "—" : `${(ratio * 100).toFixed(1)}%`}</strong><span>{snapshot?.most_full_osd == null ? "No OSD evidence" : `osd.${snapshot.most_full_osd}`}</span></div>
+    <div className="capacity-state"><span className="capacity-icon"><Icon /></span><div><small>GIÁM SÁT DUNG LƯỢNG</small><strong title={state}>{capacityStateLabel(state)}</strong></div></div>
+    <div className="capacity-reading"><small>OSD đầy nhất trong phạm vi</small><strong>{ratio == null ? "—" : `${(ratio * 100).toFixed(1)}%`}</strong><span>{snapshot?.most_full_osd == null ? "Chưa có dữ liệu OSD" : `osd.${snapshot.most_full_osd}`}</span></div>
     <div className="capacity-contract">
-      <span className={`fresh-pill ${telemetryStatus === "FRESH" ? "fresh" : "stale"}`}><Clock3 />{telemetryStatus.replaceAll("_", " ")}</span>
-      {observeOnly && <span className="observe-pill">OBSERVE ONLY</span>}
-      <p title={reasons.join(" · ")}>{telemetry?.source || "node-ssh"} · {age} · {scope}. {observeOnly ? "Observe-only là chế độ policy; không phải lỗi. " : ""}{reasons.length ? reasons.join(" · ") : "No active capacity warning."}</p>
+      <span title={telemetryStatus} className={`fresh-pill ${telemetryStatus === "FRESH" ? "fresh" : "stale"}`}><Clock3 />{telemetryStatusLabel(telemetryStatus)}</span>
+      {observeOnly && <span className="observe-pill">CHỈ QUAN SÁT</span>}
+      <p title={reasons.join(" · ")}>{telemetry?.source || "node-ssh"} · {age} · {scope}. {observeOnly ? "Chỉ quan sát: console không tạm dừng daemon hoặc I/O Ceph. " : ""}{reasons.length ? reasons.join(" · ") : state === "NORMAL" ? "Chưa có cảnh báo dung lượng." : state === "CONNECTING" ? "Đang đọc dữ liệu dung lượng…" : "Chưa có diễn giải chi tiết cho trạng thái dung lượng hiện tại."}</p>
     </div>
   </section></div>;
 }
@@ -212,8 +230,8 @@ function Dashboard() {
   </div>;
 }
 
-const metricValue = (value: number | null | undefined, suffix = "") => value == null ? "—" : `${value.toFixed(value >= 100 ? 0 : 2)}${suffix}`;
-const mibPerSecond = (value: number | null | undefined) => value == null ? "—" : `${(value / 1048576).toFixed(value >= 104857600 ? 0 : 2)} MiB/s`;
+const metricValue = (value: number | null | undefined, suffix = "") => value == null || !Number.isFinite(value) ? "—" : `${value.toFixed(value >= 100 ? 0 : 2)}${suffix}`;
+const mibPerSecond = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? "—" : `${(value / 1048576).toFixed(value >= 104857600 ? 0 : 2)} MiB/s`;
 
 function PerformanceChart({ samples, metric }: { samples: PerformanceSample[]; metric: "iops" | "throughput" }) {
   const width = 900; const height = 250; const inset = 28;
@@ -241,8 +259,7 @@ function PerformanceChart({ samples, metric }: { samples: PerformanceSample[]; m
   </div>;
 }
 
-function PerformanceView() {
-  const [source, setSource] = useState<"application" | "ceph">("application");
+function PerformanceView({ source = "ceph" }: { source?: "application" | "ceph" }) {
   const [scopeType, setScopeType] = useState<"cluster" | "osd">("cluster");
   const [scope, setScope] = useState("0");
   const [range, setRange] = useState<"5m" | "1h" | "24h">("5m");
@@ -252,6 +269,7 @@ function PerformanceView() {
   const [historyKind, setHistoryKind] = useState<"raw" | "rollup_1m" | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [exportFilters, setExportFilters] = useState<ConsoleExportRequest["filters"]>();
 
   const query = () => {
     const params = new URLSearchParams({ source, scope_type: scopeType });
@@ -259,10 +277,14 @@ function PerformanceView() {
     return params;
   };
   const loadHistory = async () => {
+    setExportFilters(undefined);
     const settings = range === "5m" ? { seconds: 300, step: 15 } : range === "1h" ? { seconds: 3600, step: 60 } : { seconds: 86400, step: 60 };
     const params = query();
     const to = new Date(); const from = new Date(to.getTime() - settings.seconds * 1000);
     params.set("from", from.toISOString()); params.set("to", to.toISOString()); params.set("step", String(settings.step));
+    // Export remains useful when a source is unavailable: its file records the
+    // selected window and missing-source reason instead of inventing samples.
+    setExportFilters({ source, scope_type: scopeType, ...(scopeType !== "cluster" ? { scope } : {}), from: from.toISOString(), to: to.toISOString(), step: settings.step });
     const result = await api(`/performance/history?${params}`);
     setHistory(result.items || []);
     setHistoryKind(result.sample_kind || null);
@@ -308,7 +330,7 @@ function PerformanceView() {
       <div className="performance-status"><span className={`fresh-pill ${stateClass}`}><i />{status}</span><small>{current?.captured_at ? new Date(current.captured_at).toLocaleString() : "No sample"}</small></div>
     </section>
     <section className="panel performance-controls">
-      <div className="segmented">{(["application", "ceph"] as const).map(item => <button className={source === item ? "active" : ""} onClick={() => { setSource(item); if (item === "application") setScopeType("cluster"); }} key={item}>{item === "application" ? "Console workload" : "Ceph cluster"}</button>)}</div>
+      <span className="source-pill">{source === "application" ? "APPLICATION · CONSOLE WORKLOAD" : "CEPH · CLIENT I/O"}</span>
       <label><span>Scope</span><select value={scopeType} onChange={event => setScopeType(event.target.value as "cluster" | "osd")} disabled={source === "application"}><option value="cluster">Cluster</option><option value="osd">OSD</option></select></label>
       {scopeType === "osd" && <label><span>OSD ID</span><input value={scope} onChange={event => setScope(event.target.value.replace(/\D/g, ""))} /></label>}
       <button className="button ghost" onClick={load}><RefreshCw className={loading ? "spin" : ""} />Refresh</button>
@@ -316,7 +338,7 @@ function PerformanceView() {
     {(error || current?.reasons?.length) && <div className={`performance-notice ${status === "PARTIAL" ? "warning" : ""}`}><AlertTriangle /><span>{error || current?.reasons.join(" · ")}</span></div>}
     <div className="metric-grid">{cards.map(([label, value, sub, Icon]: any) => <article className="metric panel" key={label}><div className="metric-icon"><Icon size={19} /></div><small>{label}</small><strong>{value}</strong><span>{sub}</span></article>)}</div>
     <section className="panel performance-history">
-      <div className="section-head"><div><h2>Performance history</h2><p>Read/write series · stale và reset không bị biến thành zero</p></div><div className="chart-legend"><span className="read">Read</span><span className="write">Write</span></div></div>
+      <div className="section-head"><div><h2>Performance history</h2><p>Read/write series · stale và reset không bị biến thành zero</p></div><div className="inventory-heading-actions"><div className="chart-legend"><span className="read">Read</span><span className="write">Write</span></div><ExportMenu source="performance" filters={exportFilters} disabled={!exportFilters || loading} /></div></div>
       <div className="performance-toolbar"><div className="segmented">{(["iops", "throughput"] as const).map(item => <button className={metric === item ? "active" : ""} onClick={() => setMetric(item)} key={item}>{item === "iops" ? "IOPS" : "Throughput"}</button>)}</div><div className="segmented">{(["5m", "1h", "24h"] as const).map(item => <button className={range === item ? "active" : ""} onClick={() => setRange(item)} key={item}>{item}</button>)}</div></div>
       <PerformanceChart samples={history.filter(sample => !sample.reset_detected && sample.state !== "STALE")} metric={metric} />
       <footer className="performance-meta"><span>source <strong>{source}</strong></span><span>scope <strong>{current?.scope_type || scopeType}:{current?.scope || scope}</strong></span><span>samples <strong>{history.length}</strong></span><span>resolution <strong>{historyKind === "rollup_1m" ? "1 minute rollup" : historyKind || "—"}</strong></span></footer>
@@ -652,8 +674,64 @@ function RbdVolumes() {
 }
 
 export default function App() {
-  const [view, setView] = useState<View>("dashboard"); const [menu, setMenu] = useState(false); const [health, setHealth] = useState<any>({}); const [defaultBucket, setDefaultBucket] = useState("test-data");
-  useEffect(() => { api("/health").then(setHealth).catch(e => setHealth({ status: "degraded", error: e.message })); api("/buckets").then(rows => rows[0]?.name && setDefaultBucket(rows[0].name)).catch(() => {}); }, []);
-  return <div className="shell"><aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div><Database /></div><span><strong>CEPH</strong><small>STORAGE LAB</small></span></div><nav>{nav.map(item => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMenu(false); }}><item.icon /><span>{item.label}</span>{view === item.id && <i />}</button>)}</nav><div className="sidebar-foot"><div className="cluster"><span className={health.status === "ok" ? "online" : "offline"}><i /></span><div><strong>{health.status === "ok" ? "Cluster connected" : "RGW unavailable"}</strong><small>{health.buckets ?? 0} buckets discovered</small></div></div><p>Credentials stay server-side</p></div></aside>
-    <main><button className="mobile-menu" onClick={() => setMenu(!menu)}><Menu /></button><Header view={view} endpoint={health.endpoint} /><CapacityBanner /><div className="content">{view === "dashboard" && <Dashboard />}{view === "performance" && <PerformanceView />}{view === "upload" && <UploadView defaultBucket={defaultBucket} />}{view === "random" && <RandomView defaultBucket={defaultBucket} />}{view === "stream" && <StreamView defaultBucket={defaultBucket} />}{view === "objects" && <ObjectExplorer defaultBucket={defaultBucket} />}{view === "volumes" && <RbdVolumes />}</div></main></div>;
+  const [view, setView] = useState<View>("overview");
+  const [menu, setMenu] = useState(false);
+  const [legacyOpen, setLegacyOpen] = useState(false);
+  const [routeNotice, setRouteNotice] = useState("");
+  const [health, setHealth] = useState<any>({});
+  const [config, setConfig] = useState<RuntimeConfig | null>(null);
+  const [configError, setConfigError] = useState("");
+  const [defaultBucket, setDefaultBucket] = useState("test-data");
+  const loadRuntime = async () => {
+    setConfigError("");
+    try {
+      const next = parseRuntimeConfig(await api("/runtime-config"));
+      setConfig(next);
+      const requested = consoleViewFromHash(window.location.hash);
+      const reason = requested && consoleViewDisabledReason(requested, next);
+      setView(requested && !reason ? requested : visibleConsoleViews(next)[0]);
+      setLegacyOpen(Boolean(requested && !reason && LEGACY_CONSOLE_VIEWS.includes(requested)));
+      setRouteNotice(reason || "");
+    } catch (error: any) { setConfig(null); setConfigError(error?.message || "Không đọc được cấu hình console"); }
+  };
+  useEffect(() => { loadRuntime(); }, []);
+  useEffect(() => {
+    if (!config) return;
+    const change = () => {
+      const requested = consoleViewFromHash(window.location.hash);
+      if (!requested) return;
+      const reason = consoleViewDisabledReason(requested, config);
+      setRouteNotice(reason || "");
+      if (!reason) { setView(requested); if (LEGACY_CONSOLE_VIEWS.includes(requested)) setLegacyOpen(true); }
+    };
+    window.addEventListener("hashchange", change);
+    return () => window.removeEventListener("hashchange", change);
+  }, [config]);
+  useEffect(() => {
+    if (!config) return;
+    let active = true;
+    const load = () => fetch("/api/health").then(response => response.json()).then(value => {
+      if (active) setHealth(value);
+    }).catch(error => { if (active) setHealth({ status: "unavailable", error: error.message }); });
+    load();
+    const timer = window.setInterval(load, 15000);
+    if (config.features.legacy_rgw && !config.console_read_only) api("/buckets").then(rows => rows[0]?.name && setDefaultBucket(rows[0].name)).catch(() => {});
+    return () => { active = false; window.clearInterval(timer); };
+  }, [config]);
+  if (!config) return <div className="console-startup"><section className="panel"><ShieldAlert /><h1>Storage Lab Console</h1>{configError ? <><p>{configError}</p><p>Đăng nhập qua trình duyệt và kiểm tra dịch vụ console.</p><button className="button ghost" onClick={loadRuntime}><RefreshCw />Thử lại</button></> : <p><LoaderCircle className="spin" />Đang đọc cấu hình console…</p>}</section></div>;
+  const visible = visibleConsoleViews(config);
+  const selectedView = visible.includes(view) ? view : visible[0];
+  const consoleReady = health.ready === true;
+  const navigate = (id: View) => {
+    const reason = consoleViewDisabledReason(id, config);
+    if (reason) { setRouteNotice(reason); return; }
+    setRouteNotice(""); setView(id); setMenu(false);
+    window.location.hash = `view=${id}`;
+  };
+  const navButton = (item: typeof nav[number]) => {
+    const reason = consoleViewDisabledReason(item.id, config);
+    return <button key={item.id} className={selectedView === item.id ? "active" : ""} disabled={Boolean(reason)} title={reason || item.label} aria-current={selectedView === item.id ? "page" : undefined} onClick={() => navigate(item.id)}><item.icon /><span>{item.label}{reason && <small>ĐÃ KHÓA</small>}</span>{selectedView === item.id && <i />}</button>;
+  };
+  return <div className="shell"><aside className={`sidebar ${menu ? "open" : ""}`}><div className="brand"><div><Database /></div><span><strong>CEPH</strong><small>CONSOLE</small></span></div><nav aria-label="Điều hướng console">{nav.filter(item => !LEGACY_CONSOLE_VIEWS.includes(item.id)).map(navButton)}<div className="legacy-navigation"><button className={`legacy-toggle ${LEGACY_CONSOLE_VIEWS.includes(selectedView) ? "has-active-child" : ""}`} aria-expanded={legacyOpen} aria-controls="legacy-views" onClick={() => setLegacyOpen(!legacyOpen)}><Archive /><span>Công cụ cũ</span><ChevronDown className={legacyOpen ? "expanded" : ""} /></button>{legacyOpen && <div id="legacy-views" className="legacy-views">{config.console_read_only && <p className="legacy-reason">Công cụ cũ đã khóa trong chế độ chỉ đọc.</p>}{nav.filter(item => LEGACY_CONSOLE_VIEWS.includes(item.id)).map(navButton)}</div>}</div></nav><div className="sidebar-foot"><div className="cluster"><span className={consoleReady ? "online" : "offline"}><i /></span><div><strong>{consoleReady ? "Console sẵn sàng" : health.status ? "Nguồn chưa sẵn sàng" : "Đang kiểm tra kết nối…"}</strong><small>{health.blocking_dependencies?.length ? health.blocking_dependencies.join(", ") : "Trạng thái cụm được đọc khi bấm xem"}</small></div></div><p>{config.console_read_only ? "Đọc Ceph · lưu hiện trạng As-is" : "Thông tin xác thực lưu phía máy chủ"}</p></div></aside>
+    <main><button className="mobile-menu" aria-label={menu ? "Đóng điều hướng" : "Mở điều hướng"} aria-expanded={menu} onClick={() => setMenu(!menu)}><Menu /></button><Header view={selectedView} health={health} config={config} /><CapacityBanner /><div className="content">{routeNotice && <div role="alert" className="rbd-notice error"><ShieldAlert /><span>{routeNotice}</span></div>}{selectedView === "overview" && <ClusterMetrics section="overview" />}{selectedView === "metrics" && <ClusterMetrics />}{selectedView === "comparison" && <Comparison />}{selectedView === "dashboard" && <Dashboard />}{selectedView === "performance" && <PerformanceView source="application" />}{selectedView === "inventory" && <AsIs />}{selectedView === "upload" && <UploadView defaultBucket={defaultBucket} />}{selectedView === "random" && <RandomView defaultBucket={defaultBucket} />}{selectedView === "stream" && <StreamView defaultBucket={defaultBucket} />}{selectedView === "objects" && <ObjectExplorer defaultBucket={defaultBucket} />}{selectedView === "volumes" && <RbdVolumes />}</div></main></div>;
 }

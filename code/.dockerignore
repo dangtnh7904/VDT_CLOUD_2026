@@ -1,0 +1,47 @@
+# The unified image is built with `code/` as its context. Start from a deny-all
+# context so lab data, local configuration, credentials and unrelated source do
+# not become available to Docker build steps or image layers.
+**
+
+!rgw-console/
+!rgw-console/backend/
+!rgw-console/backend/requirements.txt
+!rgw-console/backend/requirements.lock
+!rgw-console/backend/app/
+!rgw-console/backend/app/**
+!rgw-console/frontend/
+!rgw-console/frontend/package.json
+!rgw-console/frontend/package-lock.json
+!rgw-console/frontend/index.html
+!rgw-console/frontend/tsconfig.json
+!rgw-console/frontend/vite.config.ts
+!rgw-console/frontend/src/
+!rgw-console/frontend/src/**
+!rgw-console/rbd-console/
+!rgw-console/rbd-console/package.json
+!rgw-console/rbd-console/package-lock.json
+!rgw-console/rbd-console/src/
+!rgw-console/rbd-console/src/**
+# Runtime image does not need executor unit tests or their lab fixtures.
+rgw-console/rbd-console/src/*.test.js
+!rgw-console/packaging/
+!rgw-console/packaging/**
+
+!osd-info-collector/
+!osd-info-collector/collect_osd.py
+
+# Keep generated and secret-bearing files excluded even if a future allowlist
+# grows to include their parent directory.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/id_rsa*
+**/__pycache__/
+**/*.py[cod]
+**/node_modules/
+**/dist/
+**/.git/
+**/runtime/
+**/*.log
+

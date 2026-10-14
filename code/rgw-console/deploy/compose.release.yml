@@ -1,0 +1,251 @@
+name: ${COMPOSE_PROJECT_NAME:-storage-lab-console}
+
+x-application-environment: &application-environment
+  APP_ENV: ${APP_ENV:-lab}
+  APP_INSTANCE_ID: ${APP_INSTANCE_ID:-storage-lab-console}
+  CLUSTER_CONFIG_PATH: /etc/storage-lab-console/${CLUSTER_PROFILE_FILE:-profiles/lab.yaml}
+  DATABASE_URL_FILE: /run/secrets/database_url
+  EVIDENCE_STORE: filesystem
+  EVIDENCE_ROOT: /var/lib/storage-lab-console/evidence
+
+x-executor-client-environment: &executor-client-environment
+  <<: *application-environment
+  CEPH_EXECUTOR_URL: http://executor:3001
+  RBD_EXECUTOR_URL: http://executor:3001
+  CEPH_EXECUTOR_TOKEN_FILE: /run/secrets/executor_token
+  RBD_EXECUTOR_TOKEN_FILE: /run/secrets/executor_token
+
+x-application-base: &application-base
+  image: ${STORAGE_LAB_CONSOLE_IMAGE:?Set STORAGE_LAB_CONSOLE_IMAGE to the immutable application image reference}
+  pull_policy: ${RELEASE_PULL_POLICY:-never}
+  env_file:
+    - ${RUNTIME_ENV_FILE:-./.env.release}
+  environment: *application-environment
+  networks:
+    - control
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  init: true
+
+x-database-secret: &database-secret
+  source: database_url
+  target: database_url
+  uid: "10001"
+  gid: "10001"
+  mode: 0400
+
+x-executor-token-secret: &executor-token-secret
+  source: executor_token
+  target: executor_token
+  uid: "10001"
+  gid: "10001"
+  mode: 0400
+
+services:
+  # Optional dependency for sites without a supported external PostgreSQL.
+  # This is deliberately a separate image and persistent volume.
+  postgres:
+    profiles: ["bundled-db"]
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE to the tested PostgreSQL image digest}
+    pull_policy: ${RELEASE_PULL_POLICY:-never}
+    environment:
+      POSTGRES_USER: ${BUNDLED_POSTGRES_USER:-storage_lab_console}
+      POSTGRES_DB: ${BUNDLED_POSTGRES_DB:-storage_lab_console}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+        mode: 0400
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - control
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot and idempotent. API/workers cannot start before it succeeds.
+  migrate:
+    <<: *application-base
+    command: ["migrate", "--wait-seconds", "60"]
+    secrets:
+      - *database-secret
+    volumes:
+      - ./config:/etc/storage-lab-console:ro
+    restart: "no"
+
+  api:
+    <<: *application-base
+    command: ["api"]
+    environment: *executor-client-environment
+    secrets:
+      - *database-secret
+      - *executor-token-secret
+    volumes:
+      - ./config:/etc/storage-lab-console:ro
+      - evidence:/var/lib/storage-lab-console/evidence
+    ports:
+      - "${CONSOLE_BIND_ADDRESS:-127.0.0.1}:${CONSOLE_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3).read()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  # Legacy application jobs are opt-in so an upgrade-only deployment does not
+  # require RGW credentials or corpus mounts.
+  worker:
+    <<: *application-base
+    profiles: ["legacy-workers"]
+    command: ["worker"]
+    secrets:
+      - *database-secret
+    volumes:
+      - ./config:/etc/storage-lab-console:ro
+      - evidence:/var/lib/storage-lab-console/evidence
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  performance-collector:
+    <<: *application-base
+    profiles: ["collectors"]
+    command: ["performance-collector"]
+    secrets:
+      - *database-secret
+    volumes:
+      - ./config:/etc/storage-lab-console:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  # Internal-only SSH adapter. No host port is published. Keep this profile off
+  # until the FSID, target host, allowlists and mounted credentials are verified.
+  executor:
+    <<: *application-base
+    profiles: ["ceph-ssh"]
+    command: ["executor"]
+    environment:
+      PORT: "3001"
+      CEPH_EXECUTOR_TOKEN_FILE: /run/secrets/executor_token
+      RBD_EXECUTOR_TOKEN_FILE: /run/secrets/executor_token
+      RBD_SSH_KEY_PATH: /run/secrets/ssh_private_key
+      RBD_SSH_KNOWN_HOSTS_PATH: /run/secrets/ssh_known_hosts
+      RBD_EXECUTOR_STATE_ROOT: /var/lib/rbd-executor
+    secrets:
+      - *executor-token-secret
+      - source: ssh_private_key
+        target: ssh_private_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: ssh_known_hosts
+        target: ssh_known_hosts
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    volumes:
+      - executor-state:/var/lib/rbd-executor
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  capacity-collector:
+    <<: *application-base
+    profiles: ["ceph-ssh"]
+    command: ["capacity-collector"]
+    environment: *executor-client-environment
+    secrets:
+      - *database-secret
+      - *executor-token-secret
+    volumes:
+      - ./config:/etc/storage-lab-console:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      executor:
+        condition: service_healthy
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+  rbd-lifecycle-worker:
+    <<: *application-base
+    profiles: ["ceph-ssh"]
+    command: ["rbd-lifecycle-worker"]
+    environment: *executor-client-environment
+    secrets:
+      - *database-secret
+      - *executor-token-secret
+    volumes:
+      - ./config:/etc/storage-lab-console:ro
+      - evidence:/var/lib/storage-lab-console/evidence
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      executor:
+        condition: service_healthy
+    stop_grace_period: 45s
+    restart: unless-stopped
+
+networks:
+  control:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  evidence:
+  executor-state:
+
+secrets:
+  database_url:
+    file: ${DATABASE_URL_SECRET_FILE:-./secrets/database_url}
+  executor_token:
+    file: ${EXECUTOR_TOKEN_SECRET_FILE:-./secrets/executor_token}
+  ssh_private_key:
+    file: ${SSH_PRIVATE_KEY_FILE:-./secrets/ssh_private_key}
+  ssh_known_hosts:
+    file: ${SSH_KNOWN_HOSTS_FILE:-./secrets/ssh_known_hosts}
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_SECRET_FILE:-./secrets/postgres_password}
