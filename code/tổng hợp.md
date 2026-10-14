@@ -1,6 +1,6 @@
 # Tổng hợp lý thuyết Storage Lab Console
 
-Tài liệu này tập hợp mục đích, kiến trúc, nguyên lý thu thập và cách hiểu dữ liệu của console. Các lệnh cài đặt/cập nhật image nằm trong [README.md](README.md) và [README triển khai](rgw-console/deploy/README.md); không dùng tài gitliệu lý thuyết làm runbook triển khai.
+Tài liệu này tập hợp mục đích, kiến trúc, nguyên lý thu thập và cách hiểu dữ liệu của console. Các lệnh cài đặt/cập nhật image nằm trong [README.md](README.md) và [README triển khai](rgw-console/deploy/README.md); không dùng tài liệu lý thuyết làm runbook triển khai.
 
 ## 1. Mục đích và phạm vi
 
@@ -232,7 +232,7 @@ Tình trạng ngày 14/10/2026, Asia/Saigon:
 | Phạm vi | Phiên bản / trạng thái |
 |---|---|
 | Application đã đăng Docker Hub | 5.1.2-rc.1; dùng cho hướng dẫn cài máy mới |
-| Application localhost | 5.1.2-preview.1; chưa đăng Hub |
+| Application localhost | 5.1.2-rc.1; cài sạch bằng image tải lại từ Hub |
 | Worker lab/offline đã đăng Hub | 16.2.15-minimal-preview.2 |
 | Database schema | 21 |
 | Nghiệm thu production toàn bộ | Chưa đạt |
@@ -245,7 +245,7 @@ App scan ghi 0 findings ở các mức đã báo cáo; không phải bảo đả
 
 Nguyên nhân một lỗi integration lịch sử vẫn chưa được xác nhận. Worker security, integration stability, cluster thứ hai, ARM64/signing và nghiệm thu môi trường đích chưa được đóng thành PASS. Migration lịch sử và report cũ không bị sửa để làm kết quả mới đẹp hơn.
 
-Ngày 14/10/2026 đã dọn 60 container rollback cũ trên máy local; giữ image, volume và dữ liệu. Điều này không đổi phiên bản ứng dụng hoặc chứng minh readiness của môi trường khác.
+Ngày 14/10/2026 đã dọn 60 container rollback cũ, sau đó theo yêu cầu cài sạch đã backup và xóa 29 container Console còn lại, 17 volume/DB cùng các image Console cũ. Các cấu hình/SSH key/secret giữ nguyên checksum; 13 container dự án khác giữ nguyên. Cài lại từ Hub đạt readiness/schema 21, DB ban đầu rỗng. Sau kiểm giao diện có hai collection demo mới gồm MON + OSD; lọc/so sánh OSD và tải As-is đạt. Riêng tải JSON so sánh bị quyền trình duyệt chặn, chưa xác nhận tải được. Kết quả chi tiết ở [manifest 5.1.2-rc.1](rgw-console/deploy/releases/5.1.2-rc.1.yaml). Cài sạch tại lab này không chứng minh readiness của môi trường khác.
 
 ## 16. Tài liệu đối chiếu
 
@@ -253,6 +253,7 @@ Ngày 14/10/2026 đã dọn 60 container rollback cũ trên máy local; giữ im
 - [VALIDATION.md](rgw-console/VALIDATION.md): kết quả/bằng chứng kiểm thử theo từng thời điểm.
 - [Manifest local 5.1.2-preview.1](rgw-console/deploy/releases/5.1.2-preview.1.yaml).
 - [Manifest Hub 5.1.1-rc.1](rgw-console/deploy/releases/5.1.1-rc.1.yaml).
+- [Manifest Hub và cài sạch 5.1.2-rc.1](rgw-console/deploy/releases/5.1.2-rc.1.yaml).
 - [Giới hạn OSDMap](rgw-console/docs/OSDMAP_PREVIEW.md).
 - [Security triage](rgw-console/docs/OSDMAP_SECURITY_TRIAGE.md).
 - [Điều tra integration lịch sử](rgw-console/docs/INTEGRATION_FAILURE_INVESTIGATION.md).

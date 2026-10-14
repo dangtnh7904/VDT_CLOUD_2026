@@ -1,5 +1,5 @@
 schema_version: 1
-status: published_fresh_install_verification_pending
+status: published_fresh_install_verified_comparison_download_browser_blocked
 validated_on: "2026-10-14"
 timezone: Asia/Saigon
 application:
@@ -26,6 +26,7 @@ tests:
   backend: {passed: 319, failed: 0, skipped: 0}
   backend_environment: isolated_PostgreSQL_16_schema_21
   backend_log: ../dist/5.1.2-rc1-backend.log
+  backend_log_sha256: 972559c05cb0793001cdf9152948fbf9ed7f17640c304983d05278c75d2d4f55
   frontend: {passed: 31, failed: 0, skipped: 0}
   typescript: PASS
   ssr_component_contracts: {passed: 10, browser_acceptance: false}
@@ -38,11 +39,51 @@ security:
   packages_indexed: 167
   application_findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
   report: ../dist/5.1.2-rc1-final-cves.md
+  report_sha256: 671dac95485757b2ecc21714087b28ef1ed6104966ce19d29ac6f04defd518eb
   scanner_note: Scan succeeded; Windows locked a temporary scanner archive during cleanup.
 acceptance:
   docker_hub_publication: PASS
-  fresh_install_from_pulled_image: PENDING
+  fresh_install_from_pulled_image: PASS
+  comparison_browser_download: BLOCKED_BROWSER_PERMISSION
   full_production_acceptance: NOT_PASSED
+fresh_install:
+  source: fresh_shallow_clone_of_published_branch_codex_console_5.1.2_rc_1
+  installer: ../start-image-readonly.ps1
+  original_env_and_profile_ssh_key_and_secret_hashes_unchanged: true
+  env_copy_sha256: bf0dc234a25e155b54b91b3aaf79e4b2b8a505ef3755e3a0644a040cadb354fb
+  prior_console_resources_removed: {containers: 29, volumes: 17, selected_image_ids: 34}
+  unrelated_containers_preserved: 13
+  backup: ../../runtime/fresh-install-5.1.2-rc1-20261014
+  backup_volume_archives_verified: 17
+  prior_database_dump_sha256: 791cb06a0eff476cf4d0fed823ab6212e91e201653e538d58b5d4c53eb515a2a
+  new_database_initial_state: {collections: 0, events: 0, schema: 21}
+  downloaded_application_and_worker_by_published_digest: true
+  migrations_0001_through_0021: PASS
+  services: {running: 6, api_ready: true, console_read_only: true}
+  worker_capability: {available: true, parser_version: 2, ceph_version: 16.2.15}
+  browser:
+    inventory_live_catalogue: {daemon_count: 14, rows_per_page: 10}
+    selected_metrics:
+      returned_daemons: [mon.ceph-master, osd.2]
+      completed_local: "2026-10-14T11:14:47+07:00"
+      full_catalogue_preserved: true
+    collection_a: d48f03ef-f78b-51f4-9126-ec87ca0d245e
+    collection_b: 4c3fec3f-c890-55da-93a0-25e9aef49130
+    both_collection_keys: [mon.ceph-master, osd.2]
+    mixed_collection_osd_filter: PASS_only_one_OSD_from_each_two_daemon_collection
+    exact_osd_comparison: PASS_one_osd_2_row_MON_excluded
+    insufficient_quality_cpu_ram_delta: not_computed
+    saved_as_is_download:
+      filename: collection-da-luu-4c3fec3f-c890-55da-93a0-25e9aef49130.json
+      bytes: 286081
+      sha256: 4a07284b2df4d7f4fcd1baeb404181aa62a709f45f408386d7ccfbe4df1ce88d
+      checksum_matches_saved_export_api: true
+    comparison_download: Browser_denied_permission_before_and_after_user_text_confirmation_no_download_verified_no_workaround
+    screenshot: ../dist/5.1.2-rc1-fresh-metrics.jpg
+    screenshot_sha256: 1afcf2175fa3bd365fb05ca28780ad85ee48ceda0c2e2f5b5e424b5de85f0c03
+    captured_app_error_or_warning_logs: 0
+  final_database: {new_demo_collections: 2, events: 2, schema: 21}
+  ceph_mutations: none
 limitations:
   - Worker residual security findings and the unresolved historical integration stability gate remain open.
   - Second-cluster acceptance, ARM64, signing and long-duration concurrent load are not certified.
