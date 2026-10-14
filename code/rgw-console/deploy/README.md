@@ -19,7 +19,7 @@ nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545a
 
 Không dùng `latest`, không tự thay digest khi cài đặt. Kiểm image bằng `docker run --rm --network none <image-ref> version`. Cài sạch localhost với `.env` đã giữ dùng `start-image-readonly.ps1` theo [README chính](../../README.md#cài-localhost-bằng-cấu-hình-đã-giữ); script không phụ thuộc container cũ.
 
-Bộ cài localhost cũ `5.1.2-rc.1`/digest `35dd7b…` vẫn được giữ riêng, không tự cập nhật. Khi tạo deployment mới từ `.env.production.example`, thay `STORAGE_LAB_CONSOLE_IMAGE` bằng digest RC ở trên; không dùng binary cũ cho overlay ba tài khoản. Để cài staging ba tài khoản, làm theo [mục RC trong README chính](../../README.md#cài-rc-520-với-https-và-ba-tài-khoản-riêng); ví dụ cấu hình thủ công bên dưới là một tài khoản nếu chưa thêm `compose.access-control.yml` và `console_users.json`.
+Bộ cài localhost cũ `5.1.2-rc.1`/digest `35dd7b…` vẫn được giữ riêng, không tự cập nhật. Mẫu production/release mới pin RC ở trên; không dùng binary cũ cho overlay ba tài khoản. Để cài staging ba tài khoản, làm theo [mục RC trong README chính](../../README.md#cài-rc-520-với-https-và-ba-tài-khoản-riêng); ví dụ cấu hình thủ công bên dưới là một tài khoản nếu chưa thêm `compose.access-control.yml` và `console_users.json`. Các bước cần quản trị viên tự làm để đưa vào production có lệnh kiểm/rollback trong [PRODUCTION_HANDOFF.md](../docs/PRODUCTION_HANDOFF.md).
 
 ## Cài vào hệ thống thật
 

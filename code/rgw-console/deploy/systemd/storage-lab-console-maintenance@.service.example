@@ -1,0 +1,22 @@
+# Template only: admin must replace all paths/user and approve scheduling.
+# Docker socket authority is equivalent to host administration; not a web role.
+[Unit]
+Description=Storage Lab Console maintenance %i (approved deployment only)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=slc-ops
+Group=slc-ops
+EnvironmentFile=/etc/storage-lab-console/maintenance.env
+ExecStart=/usr/bin/pwsh -NoProfile -NonInteractive -File ${CONSOLE_SOURCE}/deploy/run-production-maintenance.ps1 -Mode %i -DeploymentDirectory ${CONSOLE_DEPLOYMENT} -BackupRoot ${CONSOLE_BACKUP_ROOT} -Python /usr/bin/python3 -BaseUrl ${CONSOLE_BASE_URL} -CaFile ${CONSOLE_CA_FILE} -AuthUserFile ${CONSOLE_ACCOUNTS_FILE} -AlertConfigFile ${CONSOLE_ALERT_CONFIG} -AlertStateFile ${CONSOLE_ALERT_STATE}
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/storage-lab-console-production /srv/backups/storage-lab-console /var/lib/storage-lab-console-monitor
+StandardOutput=journal
+StandardError=journal

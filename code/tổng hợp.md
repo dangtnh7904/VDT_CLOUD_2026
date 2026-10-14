@@ -2,6 +2,8 @@
 
 Tài liệu này tập hợp mục đích, kiến trúc, nguyên lý thu thập và cách hiểu dữ liệu của console. Các lệnh cài đặt/cập nhật image nằm trong [README.md](README.md) và [README triển khai](rgw-console/deploy/README.md); không dùng tài liệu lý thuyết làm runbook triển khai.
 
+Các bước người quản trị tự thực hiện để nghiệm thu nằm trong [bàn giao production](rgw-console/docs/PRODUCTION_HANDOFF.md); bằng chứng hiện có nằm trong [biên bản](rgw-console/docs/PRODUCTION_ACCEPTANCE_STATUS.md). Report PASS của một công cụ chỉ chứng minh phạm vi nó đo; receipt cảnh báo HTTP 2xx, checksum bản sao hay template scheduler chưa thay cho thông báo tới người trực, restore toàn dịch vụ hoặc lịch đã chạy trên host đích.
+
 ## 1. Mục đích và phạm vi
 
 Storage Lab Console hỗ trợ quan sát cluster Ceph, thu bằng chứng hiện trạng và so sánh hai lần thu. Phạm vi theo daemon: MON, MGR, OSD, RGW và MDS; đồng thời giữ ngữ cảnh hệ thống/cụm.

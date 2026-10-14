@@ -1,10 +1,10 @@
 # Storage Lab Console — Kế hoạch v5: Chỉ số trực tiếp, As-is và so sánh daemon
 
-**Phiên bản:** 5.1
+**Phiên bản:** 5.2 — core chỉ đọc, công cụ nghiệm thu production
 
-**Cập nhật:** 13/10/2026
+**Cập nhật:** 15/10/2026
 
-**Trạng thái:** bản chỉ đọc `5.1.0-rc.1` đã phát hành Docker Hub ngày 12/10/2026. Localhost 8080 đang chạy bản sửa app `5.1.1-preview.2` và worker `16.2.15-minimal-preview.2`, chỉ lab/chỉ đọc. Giới hạn ở mục 21, release Hub ở mục 22, lịch sử đổi cấu hình ở mục 26, bản sửa hiện tại ở mục 27. Worker vẫn chưa đạt security/stability gate production.
+**Trạng thái hiện tại:** core `5.2.0-rc.1` đã phát hành Docker Hub và kiểm staging HTTPS 8446; công cụ/hướng dẫn bàn giao production ở mục 33. Localhost 8080 vẫn dùng bộ lab `5.1.2-rc.1`, giữ dữ liệu/cấu hình gốc. Chưa nghiệm thu hệ thống production đích; worker OSDMap có gate riêng. Các release/checkpoint cũ ở dưới là lịch sử.
 
 Đây là plan console hiện hành, thay thế các yêu cầu sản phẩm của v4.2. Không dùng phần kế hoạch cũ trong bản lưu trữ để bổ sung lại chức năng đã bị loại bỏ.
 
@@ -836,3 +836,13 @@ Người dùng chọn staging trên máy hiện tại trước; chưa có SLO/RP
 - Backup/restore riêng kiểm hai As-is/audit, schema 21 và 9 checksum, restore 11.854s. Sửa lỗi ISO/DateTime locale PowerShell và timestamp PowerShell trên Python 3.10; report lỗi giữ lại. Evidence/executor-state rỗng nên non-empty linkage, config/secret/role recovery còn mở. Monitor báo ổ D >85%, không tự xóa.
 - Build từ clone sạch source `f5a573bfe7f2c50fde9a06552791972891c75ebb`, index `91c1540deb28447ef88b73059ce2017f3ea63ef0b2709934597f51867ff0e1c0`: SBOM/provenance thật đúng revision/subject/26 checksum; Scout 167 packages/0 findings. Candidate provenance sai đầu tiên bị loại. Chưa publish/sign bản mới.
 - Dedicated SSH/CephX/guard cần admin root; lab key không coi là least privilege. Scheduler/alert delivery/offsite/retention, signing policy, metric bắt buộc, certificate/domain và SLO/RPO/RTO trên đích chưa duyệt. **CHƯA NGHIỆM THU PRODUCTION.**
+
+## 33. Hoàn thiện vận hành và bàn giao production — 15/10/2026
+
+Người dùng chọn tự thực hiện những phần cần quyền quản trị hoặc chính sách hệ thống đích. [PRODUCTION_HANDOFF.md](rgw-console/docs/PRODUCTION_HANDOFF.md) là runbook hiện hành, có lệnh, kiểm đạt và rollback; README tiếp tục chỉ dùng để cài image, tài liệu tổng hợp giữ lý thuyết.
+
+Đã thêm checker domain HTTPS ràng buộc origin trước credential; monitor xác minh payload readiness/dependency/schema và có report tạo mới. Sender cảnh báo HTTPS lọc dữ liệu, giới hạn thời gian/kích thước, durable dedup và RECOVERY; wrapper giữ lỗi process, state riêng Check/Backup và không gửi recovery giả. Có template lịch systemd Linux và script chuẩn bị lịch Windows, chưa cài lịch trên host đích. Manifest kiểm chứng bản sao cấu hình private đối chiếu hash/identity/secret consistency; không tự backup/encrypt hoặc restore role.
+
+Kiểm thực mới: receiver HTTPS nội bộ nhận ALERT/RECOVERY 204, chống gửi trùng và từ chối CA sai. Một kết nối SSH riêng chỉ đọc FSID đã kiểm inbound stall/socket drop có lỗi bounded và phục hồi; không chứng minh chậm xử lý Ceph hoặc remote process termination. Staging ready 200/schema21 và sáu bộ As-is/audit giữ SHA; dung lượng còn cảnh báo, người dùng không yêu cầu xử lý máy hiện tại.
+
+Các thay đổi là công cụ vận hành ngoài application image, RC `5.2.0-rc.1`/digest `98994c…` và binary source `d1d43a2…` giữ nguyên. Người vận hành cần cài/kiểm SSH/CephX riêng, domain/TLS/quyền secret/firewall; chốt metric/SLO/RPO/RTO và UAT; kiểm lịch cảnh báo tới người nhận, encrypted offsite/full restore; chọn signer/trust policy và ký biên bản. Chỉ promote sau khi từng gate đích có bằng chứng và người duyệt.

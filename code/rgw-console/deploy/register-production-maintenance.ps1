@@ -7,6 +7,10 @@ param(
     [Parameter(Mandatory)][string]$CaFile,
     [Parameter(Mandatory)][string]$AuthUserFile,
     [string]$DaemonKey,
+    [string]$BaseUrl,
+    [string]$AlertConfigFile,
+    [string]$AlertStateFile,
+    [string[]]$AdditionalHostStoragePath = @(),
     [switch]$Install
 )
 # Explicit opt-in only. This script is not run automatically by image install.
@@ -17,7 +21,9 @@ $runtime = Get-Content -LiteralPath (Join-Path $deploymentPath '.env') -Raw
 $match = [regex]::Match($runtime, '(?m)^COMPOSE_PROJECT_NAME=(storage-lab-console-(?:production|staging)[a-z0-9_-]{0,64})\r?$')
 if (-not $match.Success) { throw 'Explicit deployment project required' }
 $project = $match.Groups[1].Value
-foreach ($value in @($deploymentPath, $BackupRoot, $Python, $CaFile, $AuthUserFile, $DaemonKey, $PSScriptRoot)) {
+if ([bool]$AlertConfigFile -ne [bool]$AlertStateFile) { throw 'Alert config and private state paths must be supplied together' }
+if ($AdditionalHostStoragePath.Count -gt 1) { throw 'Windows schedule accepts at most one explicit additional storage path; use the manual probe for multiple disks' }
+foreach ($value in @($deploymentPath, $BackupRoot, $Python, $CaFile, $AuthUserFile, $DaemonKey, $BaseUrl, $AlertConfigFile, $AlertStateFile, $PSScriptRoot) + $AdditionalHostStoragePath) {
     if ($value -match '["\r\n]') { throw 'Unsafe scheduler argument' }
 }
 $shell = (Get-Command pwsh).Source
@@ -31,10 +37,13 @@ foreach ($mode in @('Backup','Check')) {
 foreach ($mode in @('Backup','Check')) {
     $name = "$project-$($mode.ToLowerInvariant())"
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { throw "Task exists; refusing to overwrite: $name" }
-    $arguments = "-NoProfile -NonInteractive -File `"$script`" -Mode $mode -DeploymentDirectory `"$deploymentPath`" -BackupRoot `"$BackupRoot`""
+    $arguments = "-NoProfile -NonInteractive -File `"$script`" -Mode $mode -DeploymentDirectory `"$deploymentPath`" -BackupRoot `"$BackupRoot`" -Python `"$Python`""
+    if ($AlertConfigFile) { $arguments += " -AlertConfigFile `"$AlertConfigFile`" -AlertStateFile `"$AlertStateFile`"" }
     if ($mode -eq 'Check') {
-        $arguments += " -Python `"$Python`" -CaFile `"$CaFile`" -AuthUserFile `"$AuthUserFile`""
+        $arguments += " -CaFile `"$CaFile`" -AuthUserFile `"$AuthUserFile`""
         if ($DaemonKey) { $arguments += " -DaemonKey `"$DaemonKey`"" }
+        if ($BaseUrl) { $arguments += " -BaseUrl `"$BaseUrl`"" }
+        if ($AdditionalHostStoragePath.Count) { $arguments += " -AdditionalHostStoragePath `"$($AdditionalHostStoragePath[0])`"" }
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 5)
     } else { $trigger = New-ScheduledTaskTrigger -Daily -At '02:00' }
     if ($Install -and $PSCmdlet.ShouldProcess($name, 'Register current-user maintenance task')) {

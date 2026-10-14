@@ -197,10 +197,13 @@ try {
     Write-Host "Schema: $schema; registered evidence artifacts: $(@($registry).Count)"
     Write-Host "As-is payloads verified: $($asIsSummary.collections_verified); soft-deleted: $($asIsSummary.deleted_collections_verified)"
 } finally {
-    & docker exec -u postgres $databaseName rm -f $dumpPath *> $null
-    & docker exec -u postgres $databaseName rm -f $asIsExportPath *> $null
-    & docker exec -u postgres $databaseName rm -f $auditExportPath *> $null
     $cleanupFailures = @()
+    foreach ($transientPath in @($dumpPath, $asIsExportPath, $auditExportPath)) {
+        try {
+            & docker exec -u postgres $databaseName rm -f $transientPath *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'Database transient cleanup failed' }
+        } catch { $cleanupFailures += 'DATABASE_TRANSIENT_CLEANUP_FAILED' }
+    }
     try { if (Test-Path -LiteralPath $asIsCheckpointPath) { Remove-Item -LiteralPath $asIsCheckpointPath } } catch { $cleanupFailures += 'TRANSIENT_CHECKPOINT_REMOVAL_FAILED' }
     # Remove only the helper carrying this operation's exact label.
     try {

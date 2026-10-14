@@ -2,6 +2,7 @@ schema_version: 1
 kind: core_readonly_staging_acceptance
 date_local: 2026-10-14
 timezone: Asia/Saigon
+operator_handoff_updated_local: 2026-10-15
 status: CORE_STAGING_PASSED_RC_PUBLISHED_NOT_PRODUCTION_APPROVED
 production_approved: false
 scope:
@@ -12,7 +13,17 @@ source_changes:
   security: [file_based_accounts, viewer_operator_admin, authenticated_audit_actor, append_only_audit_grants, immutable_collection_payload_grants, forced_command_ssh_guard]
   deployment: [isolated_staging_prep, local_ca_hostname_verification, resource_limits, rotated_logs, separate_runtime_db_secret]
   operations: [https_acceptance_harness, read_only_ops_probe, opt_in_maintenance_scheduler, audit_checkpoint_restore_verification, candidate_build_and_signature_scripts]
+  operator_handoff: [deployment_bound_https_domain_checker, strict_dependency_readiness, create_only_redacted_reports, https_redacted_alert_sender, per_kind_durable_dedup, separate_check_backup_state, private_configuration_manifest, linux_systemd_examples, admin_runbook]
 checks:
+  operator_tooling_final:
+    linux_pinned_RC_container: {executed: 203, passed: 203, skipped: 0, failed: 0}
+    ubuntu_WSL_python_3_12: {executed: 203, passed: 203, skipped: 0, failed: 0}
+    windows_python_3_10: {executed: 203, passed: 199, skipped: 4, failed: 0}
+    powershell: {manifest_checks: 42, recovery_doubles: 7, maintenance_doubles: 9, scheduler_action_bindings: 2, parsed_scripts: 19, status: PASS_NO_LIVE_SCHEDULER_OR_BACKUP_ACTIONS}
+    live_staging_checker: PASS_CA_HOSTNAME_VIEWER_SCHEMA_21
+    live_explicit_loopback_ops: {runtime_http: 200, ready_http: 200, readiness_payload_verified: true, fresh_http: 200, metric_quality: VALID, status: ALERT, alerts: [HOST_DISK_HIGH]}
+    original_environment_and_main_git_index_preserved: true
+    skipped_windows_checks_counted_as_PASS: false
   backend: {executed: 446, passed: 446, skipped: 0, failed: 0, environment: packaged_linux_image_with_isolated_postgresql_16_schema_21}
   frontend: {passed: 33, failed: 0}
   executor: {passed: 42, failed: 0, skipped: 0, environment: packaged_linux_node_22_modules_with_tests_only_bind_mounted}
@@ -66,7 +77,43 @@ checks:
     database_history_failure: {http_status: 503, error_code: DATABASE_UNAVAILABLE, duration_seconds: 7.093}
     database_acquire_and_connect_timeout_seconds: 5
     api_interruption: {inflight_http: 502, down_http: 502, error_code: NON_JSON_RESPONSE, recovered_fresh_http: 200}
-    remote_slow_or_lost_ssh: NOT_RUN
+    remote_slow_or_lost_ssh: OWN_CONNECTION_TRANSPORT_SUBSET_PASSED_FULL_API_AND_REMOTE_PROCESS_NOT_ACCEPTED
+  isolated_real_ssh_transport:
+    status: PASS_OWN_VALIDATION_CONNECTION_ONLY
+    read_command: ceph_fsid
+    ceph_mutations_executed: false
+    existing_executor_connection_modified: false
+    inbound_stall: {error_code: EXECUTOR_TIMEOUT, elapsed_ms: 353}
+    own_socket_drop: {error_code: EXECUTOR_UNAVAILABLE, elapsed_ms: 153}
+    expected_fsid_matches_before_after_and_reconnect: true
+    remote_process_termination_proven: false
+    slow_ceph_computation_full_api_fault_and_site_restricted_account: NOT_ACCEPTED
+  controlled_https_alert_pipeline:
+    status: PASS_OWN_LOOPBACK_HTTPS_RECEIVER_ONLY
+    tls_ca_and_hostname_verified: true
+    authorization_and_redacted_payload_verified: true
+    alert: {status: DELIVERED, http_status: 204}
+    repeated_alert: SKIPPED_DUPLICATE_NO_POST
+    recovery: {status: DELIVERED, http_status: 204}
+    wrong_ca: {error_code: TLS_VERIFICATION_FAILED, success_state_written: false}
+    external_receiver_or_oncall_delivery_verified: false
+  configuration_recovery_manifest:
+    status: PASS_23_SYNTHETIC_CASES_NOT_LIVE_RECOVERY
+    private_copy_required: true
+    source_and_restore_identity_checksums_and_secret_consistency_checked: true
+    live_config_or_secret_copy_performed: false
+    encryption_offsite_cert_key_matching_roles_and_target_RPO_RTO: NOT_ACCEPTED
+  maintenance_scheduling:
+    wrapper: PROCESS_ALERTS_NOT_SKIPPED_AND_FAILED_PROBE_CANNOT_SEND_RECOVERY
+    state_separated_by: [endpoint, report_kind, Check_Backup_mode]
+    powershell_recovery_attempts_all_writers_after_cleanup_failure: true
+    windows_tasks_registered: false
+    linux_systemd_templates: PREPARED_NOT_INSTALLED_OR_HOST_VERIFIED
+  latest_staging_readiness_after_tooling:
+    status: PASS_STRICT_CA_HOSTNAME_VIEWER_SCHEMA_21
+    collection_count: 6
+    audit_count: 6
+    metadata_and_payload_checksums_unchanged: true
   shared_ssh_admission:
     status: PASS_LIVE_PRESSURE_REPRODUCTION_AND_RETEST
     maximum_active_commands: 4
@@ -159,6 +206,7 @@ checks:
     live_negative_controls: {wrong_ca: TLS_OR_CONNECTION_FAILED, wrong_password_http: 401, wrong_version: RUNTIME_IDENTITY_OR_READONLY_MISMATCH}
     certificate_revocation_policy_verified: false
   retained_historical_failures:
+    - {phase: final_tooling_container_first_attempt_20261015, cause: Docker_Engine_not_running, tests_executed: 0, after_normal_Desktop_start: PASS_203_OF_203}
     - {phase: first_2_by_20_load, http_200: 40, valid_scope_and_required_metrics: 38, errors: 2, p95_seconds: 18.031, error_codes: [REQUIRED_METRICS_UNAVAILABLE, DAEMON_SCOPE_MISMATCH], exact_original_source_cause: NOT_PROVEN}
     - {phase: engine_unavailable, http_status: null, error_code: NETWORK_UNAVAILABLE, collections_created: 0}
     - {phase: database_outage_before_fix, http_status: 500, error_code: NON_JSON_RESPONSE, duration_seconds: 31.969, cause: unhandled_pool_timeout_default_30_seconds}
@@ -194,11 +242,11 @@ release:
   source_commit_for_new_candidate: d1d43a28a644f8d079dec48d3c280d8377525ea8
   dirty_user_checkout_and_index_preserved: true
 pending:
-  - resolve_host_storage_capacity_without_unauthorized_data_deletion
-  - run_actual_slow_or_lost_SSH_drills_and_sustained_approved_load
+  - approve_target_storage_capacity_or_document_exception_no_local_cleanup_requested
+  - run_full_API_slow_Ceph_remote_process_and_sustained_approved_load_transport_subset_has_passed
   - rehearse_actual_legacy_evidence_and_config_secret_role_recovery_synthetic_linkage_has_passed
   - install_and_verify_dedicated_SSH_account_key_and_readonly_CephX_caps
-  - approve_and_test_scheduler_alert_delivery_offsite_encryption_retention
+  - approve_and_test_target_scheduler_external_alert_delivery_offsite_encryption_retention_local_HTTPS_sender_has_passed
   - define_required_metric_scope_and_approved_SLO_RPO_RTO
   - approve_signer_policy_sign_and_verify_RC
   - trusted_target_certificate_domain_and_receiver_signer_policy
@@ -206,8 +254,20 @@ evidence:
   public_status: ../../docs/PRODUCTION_ACCEPTANCE_STATUS.md
   operations: ../../docs/PRODUCTION_OPERATIONS.md
   ssh_guard: ../../docs/PRODUCTION_SSH.md
+  administrator_handoff: ../../docs/PRODUCTION_HANDOFF.md
+  linux_scheduler: ../systemd/README.md
   private_runtime_reports: retained_locally_not_committed
   receipts_sha256:
+    final_linux_RC_container_tooling_203_cases: b6f90abcb01e1a9c37db01952534a1c011c122bd252f8b1cb07cd5fa378805b7
+    final_WSL_tooling_203_cases: 6e7550d79146c067ccb806a393f3cf383823a290b065b8a387aeb95aa378f2b5
+    final_Windows_tooling_199_PASS_4_skip: 38fcc10e1a2b8479aeee047d2e19002c429655dcb44c0b10ca8575e06d1f280a
+    final_PowerShell_60_checks: 55630132f5e295915ab6b68ba8486321ce7d9025ed4f45a26e099f6c8dad2632
+    final_live_staging_readiness: 2d3333f4ed2c3fab000dfd566f280164e7bfc967aedf40cfb8a05f600c634bed
+    final_live_loopback_bound_operations: 92872d1b85532a2f75d7e3df25aa07486d6aed8e3f9cdb5d8909e10d91bb6860
+    controlled_https_alert_pipeline: e3cac369db2dae061859896719dd95017053097cd3e029a3a903d4839ce34b5f
+    isolated_real_ssh_transport: 3c918c4770d4bc530baf31589742f9abd50c85c39d61bb76715bda0161cea2a6
+    domain_bound_operations_probe: be88af556524135fb18493c9723243db3d1df0c31310575f773cd8b40addf19c
+    latest_staging_readiness_after_tooling: b25453df479f808e22fc597bb170c9af9b5bf0d858bec5f526d0c4d9d53e8921
     strict_nonempty_fixture: b115c597e9e54c0746aff8c5d4cbe11544473e0de26a0cbc5ba0e2d094b8e0cc
     strict_nonempty_backup: 981aff065882d4f024c3a3c8c40ab72d8c6c4ba7676c5c8dcf2d6a64e78e28c5
     strict_nonempty_restore: ef79c34c323669fbaa2dd013f60ad397559c60e2edabde329c1fdd1ff2437f3c

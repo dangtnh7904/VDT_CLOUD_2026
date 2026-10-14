@@ -38,7 +38,7 @@ class StagingInstallReadinessTests(unittest.TestCase):
 
     def ready(self):
         return {'ready':True, 'status':'ready', 'blocking_dependencies':[], 'dependencies':{
-            'database':{'status':'ready','schema_version':21},
+            'database':{'status':'ready','schema_version':21,'required':True},
             **{key:{'status':'ready','required':True} for key in ('config','frontend','ceph_executor')}}}
 
     def prepare(self, root):
@@ -129,8 +129,15 @@ class StagingInstallReadinessTests(unittest.TestCase):
         with self.assertRaises(check.ReadyCheckError): check.validate_ready(self.ready(),22)
 
     def test_required_executor_and_frontend_not_silently_optional(self):
-        for key in ('config','frontend','ceph_executor'):
+        for key in ('database','config','frontend','ceph_executor'):
             row = self.ready(); row['dependencies'][key]['required'] = False
+            with self.assertRaises(check.ReadyCheckError): check.validate_ready(row,21)
+
+    def test_missing_database_required_and_non_integer_schema_are_rejected(self):
+        row = self.ready(); del row['dependencies']['database']['required']
+        with self.assertRaises(check.ReadyCheckError): check.validate_ready(row,21)
+        for schema in (True,21.0,'21',None):
+            row = self.ready(); row['dependencies']['database']['schema_version'] = schema
             with self.assertRaises(check.ReadyCheckError): check.validate_ready(row,21)
 
     def test_main_uses_verified_context_no_proxy_and_does_not_log_auth(self):
@@ -159,10 +166,20 @@ class StagingInstallReadinessTests(unittest.TestCase):
     def test_report_not_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root/'report.json').write_text('preserve')
-            with self.assertRaises(FileExistsError):
-                check.main(['--deployment-directory',directory,'--ca-file',str(root/'ca'),
-                            '--auth-user-file',str(root/'users'),'--report',str(root/'report.json')])
+            captured = io.StringIO()
+            with patch.object(check,'viewer_authorization') as auth, patch.object(check,'get_json') as http, redirect_stdout(captured):
+                code = check.main(['--deployment-directory',directory,'--ca-file',str(root/'ca'),
+                                   '--auth-user-file',str(root/'users'),'--report',str(root/'report.json')])
+            self.assertEqual(code,2)
+            self.assertEqual(json.loads(captured.getvalue())['error_code'],'REPORT_ALREADY_EXISTS')
+            auth.assert_not_called(); http.assert_not_called()
             self.assertEqual((root/'report.json').read_text(),'preserve')
+
+    def test_nested_json_failure_is_redacted(self):
+        with patch.object(check.request.OpenerDirector,'open',return_value=Response(b'{}')), \
+             patch.object(check.json,'loads',side_effect=RecursionError('synthetic-secret')):
+            with self.assertRaisesRegex(check.ReadyCheckError,'^RESPONSE_JSON_INVALID$'):
+                check.get_json(check.request.build_opener(),'https://localhost','Basic synthetic-secret')
 
 
 if __name__ == '__main__': unittest.main()

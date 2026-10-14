@@ -4,6 +4,8 @@ README này chỉ hướng dẫn cài đặt, cấu hình và cập nhật image
 
 Không cần build lại source; các image dưới đây dùng Linux AMD64. Mục đầu cài RC `5.2.0-rc.1` cho staging HTTPS/phân quyền; hướng dẫn lab `5.1.2-rc.1` đã có được giữ ở phần sau.
 
+Để cài vào hệ thống production, làm theo [các bước bàn giao cho quản trị viên](rgw-console/docs/PRODUCTION_HANDOFF.md): SSH/CephX riêng, domain/certificate, secret/RBAC, lịch backup/cảnh báo, ký và kiểm image. Runbook có lệnh kiểm đạt và rollback giữ dữ liệu; RC/staging PASS không tự thay nghiệm thu host đích. Các bước này không dọn dung lượng máy hiện tại.
+
 ## Cài RC 5.2.0 với HTTPS và ba tài khoản riêng
 
 Bản `5.2.0-rc.1` dành cho staging chỉ đọc, **chưa được chấp thuận production**. Không thay bộ cài 8080 hoặc `.env` đang có. Cần Docker Linux AMD64/containerd image store, Compose 2.30+, PowerShell 7.2+, Python 3.10+ và OpenSSL trên PATH. Checker dùng thư viện chuẩn Python, không cần cài pip package. Chọn thư mục/project/cổng mới:

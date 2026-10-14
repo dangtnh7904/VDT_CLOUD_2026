@@ -1,0 +1,12 @@
+# Calendar is explicitly UTC; change only to the approved maintenance window.
+[Unit]
+Description=Daily Storage Lab Console backup
+
+[Timer]
+OnCalendar=*-*-* 19:00:00 UTC
+Persistent=yes
+Unit=storage-lab-console-maintenance@Backup.service
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

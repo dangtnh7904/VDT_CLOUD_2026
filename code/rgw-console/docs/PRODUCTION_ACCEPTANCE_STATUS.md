@@ -1,6 +1,23 @@
-# Trạng thái nghiệm thu core production — 14/10/2026
+# Trạng thái nghiệm thu core production — cập nhật 15/10/2026
 
 Kết luận hiện tại: **CORE STAGING ĐÃ QUA KIỂM, RC ĐÃ PHÁT HÀNH; CHƯA NGHIỆM THU PRODUCTION.** Project riêng `storage-lab-console-staging-20261014`, HTTPS localhost 8446, Docker Linux AMD64. SLO/RPO/RTO vẫn chưa được duyệt. Không thay deployment 8080, ghi/nâng cấp Ceph, factory reset Docker hoặc xóa DB/volume cũ.
+
+## Chốt công cụ vận hành và bàn giao cho quản trị viên
+
+[PRODUCTION_HANDOFF.md](PRODUCTION_HANDOFF.md) có lệnh, người thực hiện, kiểm đạt và rollback cho SSH/CephX riêng, domain/TLS/firewall/quyền secret, metric/SLO/UAT, backup cấu hình và dữ liệu, scheduler/cảnh báo, ký/verify image. Người dùng chọn tự làm những bước cần quyền hoặc thông tin hệ thống đích; các bước đó vẫn có trạng thái riêng trong biên bản.
+
+- Checker production và monitor nhận domain HTTPS được ràng buộc `CORS_ORIGINS` trước khi đọc mật khẩu. Kiểm CA/hostname, viewer/identity/readonly, feature và từng dependency/schema; không coi HTTP 200 là readiness. Receipt tạo mới trước network; lỗi ghi report hoặc HTTP protocol có mã ổn định, không in credential/response fragment. Checker staging sửa cùng hợp đồng report/dependency và lượt thật mới PASS, schema 21.
+- Sender cảnh báo chỉ gửi status/thời điểm/mã alert đã lọc tới HTTPS receiver được cấu hình riêng, có timeout, giới hạn dữ liệu và durable dedup theo endpoint/report kind. Kiểm đầu-cuối **receiver nội bộ do lượt test tạo**: ALERT HTTP 204, lượt lặp không gửi, RECOVERY HTTP 204, CA sai bị chặn và không ghi success state. Chưa gửi kênh ngoài hoặc xác nhận ca trực nhận thông báo.
+- Wrapper giữ report lỗi, gửi ALERT ngay cả khi probe exit khác 0/khởi chạy bị lỗi, không gửi RECOVERY từ report PASS của process đã hỏng. Check/Backup dùng state riêng; lỗi sender trả job failed và receipt riêng, không suy đoán đã gửi thành công. Có script chuẩn bị lịch Windows và template systemd Linux; chưa đăng ký task/timer hoặc kiểm trên host systemd thật.
+- Config recovery manifest kiểm checksum/identity/DB-secret consistency của **bản sao private được khai báo rõ**, đối chiếu bản phục hồi riêng với hash manifest đã pin; 23 ca synthetic đạt. Công cụ không copy/encrypt secret, restore DB role hoặc chứng minh RPO/RTO. Diễn tập cấu hình/secret/role thật và offsite còn do người vận hành thực hiện.
+- Thử riêng kết nối SSH thật từ executor staging, chỉ đọc `ceph fsid`: treo luồng nhận của **socket kiểm thử riêng** trả `EXECUTOR_TIMEOUT` 353 ms; ngắt socket trả `EXECUTOR_UNAVAILABLE` 153 ms; sau resume/reconnect FSID khớp. Kết nối executor phục vụ Console giữ nguyên. Đây không phải chậm xử lý Ceph, remote process termination, fault qua toàn API hay account hạn chế trên cluster đích.
+- Lượt monitor domain mới chỉ đọc ready/fresh metric 200/VALID, giữ ALERT `HOST_DISK_HIGH` (C 90.42%, D 86.27%, ngưỡng đề xuất 85%). Người dùng không yêu cầu xử lý dung lượng: giữ cảnh báo, không sửa ngưỡng. Sáu collection/sáu audit của staging và checksum metadata/payload giữ nguyên; `.env` gốc không đổi.
+
+**Lượt chốt 15/10/2026:** 203/203 ca Python chạy trên Linux trong RC container, 0 skip; cùng 203 ca trên Ubuntu WSL Python 3.12 đạt, 0 skip. Windows có 199 PASS/4 skip (điều kiện Linux/POSIX), không cộng skip thành PASS. PowerShell có 60 check đạt: 42 manifest, 7 recovery, 9 maintenance và 2 scheduler action bindings; 19 file parse đạt. Backup recovery vẫn thử mọi writer ngay cả khi lệnh cleanup native đầu tiên throw/nonzero; kiểm bằng doubles, không chạy backup mới hoặc fault live để tạo kết quả này.
+
+Engine tắt ở lượt đầu 15/10 nên test container không chạy được; giữ log lỗi. Sau khởi động Desktop, Engine chạy lại và lượt 203/203 ở trên đạt. Checker staging thật mới PASS CA/hostname/viewer/schema21; monitor `--base-url=https://localhost:8446` xác minh readiness payload và fresh metric 200/VALID, ALERT chỉ `HOST_DISK_HIGH`. FSID/SSH/socket fault cũ giữ phạm vi đã ghi; không dùng loopback làm nghiệm thu domain đích. Collection registry SHA `26d83cb0…` và audit SHA `44eb54aa…` vẫn khớp sáu bộ/sáu event; `.env` và index chính giữ SHA gốc.
+
+Thay đổi lượt này là scripts/docs/templates/tests vận hành nằm ngoài Docker COPY. Application image vẫn RC `5.2.0-rc.1`/digest `98994c…`, binary source `d1d43a2…`; không thay label/provenance bằng commit công cụ. Chữ ký, PKI/trust/browser UAT, SSH hạn chế, workload/SLO dài, backup/alert đích và quyết định đủ dung lượng vẫn cần bằng chứng môi trường nhận trước nghiệm thu.
 
 ## Kiểm sau khi người dùng khởi động lại Docker
 

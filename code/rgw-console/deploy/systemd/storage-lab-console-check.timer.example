@@ -1,0 +1,12 @@
+# Proposed cadence, not an approved SLO. No installation by the app.
+[Unit]
+Description=Check Storage Lab Console every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+Unit=storage-lab-console-maintenance@Check.service
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

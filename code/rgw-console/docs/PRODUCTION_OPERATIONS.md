@@ -2,6 +2,8 @@
 
 Phạm vi đầu tiên là **chỉ số trực tiếp, thu/lưu/xuất As-is và so sánh**. Không benchmark, nâng cấp Ceph, shell/RBD/terminal hay OSDMap worker trong biên bản đầu tiên. `PASS` của unit test hoặc staging không thay cho nghiệm thu hệ thống đích.
 
+Các bước quản trị viên tự thực hiện, lệnh kiểm đạt và rollback nằm trong [PRODUCTION_HANDOFF.md](PRODUCTION_HANDOFF.md). Checker domain `deploy/check-production-ready.py`, `--base-url` của monitor và `-BaseUrl` của wrapper kiểm origin khai báo trong deployment trước khi đọc mật khẩu. Wrapper hỗ trợ `-AlertConfigFile/-AlertStateFile`; sender chỉ gửi HTTPS receiver đã cấu hình, state tách Check/Backup. Template lịch Linux nằm trong [deploy/systemd](../deploy/systemd/README.md); chưa cài/chưa chạy trên host đích.
+
 ## Cấu hình và tài khoản
 
 `prepare-production-staging.ps1` tạo thư mục mới, không ghi đè `.env`/DB localhost. CA thử nghiệm chỉ dành cho client được truyền `--ca-file`, không cài vào Windows trust store. Ba tài khoản `viewer`, `operator`, `admin` có mật khẩu ngẫu nhiên riêng; server chỉ mount hash JSON. Viewer xem/xuất/so sánh; operator thêm quyền lưu collection; admin xóa mềm/khôi phục. Mọi tài khoản đều chỉ đọc Ceph. Audit lấy username đã xác thực, không nhận `X-Actor` của client.
@@ -54,7 +56,7 @@ Trên Docker Desktop, filesystem Linux có thể là thin-provisioned: còn nhi�
 & ./run-production-maintenance.ps1 -Mode Check -DeploymentDirectory 'D:/deploy/storage-lab-console-staging-new' -BackupRoot 'D:/deploy/storage-lab-console-staging-new/backups' -Python 'C:/path/to/python.exe' -CaFile 'D:/deploy/storage-lab-console-staging-new/client/staging-ca.crt' -AuthUserFile 'D:/deploy/storage-lab-console-staging-new/client/accounts.json' -AdditionalHostStoragePath 'C:/path/to/verified/docker-disk-directory'
 ```
 
-Task wrapper nhận alert và trả lỗi/nonzero có chủ đích; không hạ ngưỡng hoặc bỏ kiểm để tạo PASS. Chưa đo quota riêng của volume/inode, không tự tìm được mọi đĩa Docker ở host khác. Scheduler hiện không tự thêm đường dẫn storage bổ sung; phải cấu hình và kiểm thực đường dẫn trên host đích trước nghiệm thu.
+Task wrapper nhận alert và trả lỗi/nonzero có chủ đích; không hạ ngưỡng hoặc bỏ kiểm để tạo PASS. Chưa đo quota riêng của volume/inode, không tự tìm được mọi đĩa Docker ở host khác. Scheduler Windows nhận `-AdditionalHostStoragePath` tối đa một đường dẫn đã kiểm; probe riêng nhận tối đa tám. Phải cấu hình và kiểm thực đường dẫn trên host đích trước nghiệm thu.
 
 Windows: `register-production-maintenance.ps1` mặc định chỉ chuẩn bị; chỉ `-Install` mới đăng ký task current-user limited, không ghi password vào command line. Cần Docker Desktop và user đang đăng nhập. Trên Linux dùng scheduler của đơn vị gọi `pwsh -NoProfile -NonInteractive -File run-production-maintenance.ps1` với đường dẫn private config; service account chỉ cần quyền vận hành deployment riêng. Docker socket tương đương quyền mạnh trên host, không cấp cho tài khoản web. Kênh email/webhook/monitoring nhận JSON/exit code phải được chọn và thử gửi cảnh báo; chưa có kênh thì gate cảnh báo còn mở.
 

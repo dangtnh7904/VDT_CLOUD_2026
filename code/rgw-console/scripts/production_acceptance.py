@@ -12,6 +12,7 @@ import argparse
 import base64
 import concurrent.futures
 import hashlib
+from http.client import HTTPException
 import json
 import math
 import re
@@ -204,18 +205,22 @@ class Client:
         request = urllib.request.Request(self.base_url + path, data=body,
                                          headers=headers, method=method)
         start = time.monotonic()
+        observed_status = None
         try:
             try:
                 stream = self.opener.open(request, timeout=self.timeout)
             except urllib.error.HTTPError as exc:
                 stream = exc
             with stream:
+                observed_status = stream.code
                 content = stream.read(MAX_RESPONSE_BYTES + 1)
                 if len(content) > MAX_RESPONSE_BYTES:
                     return self.remember(method, path, Response(stream.code, {}, b"", time.monotonic() - start,
                                                                "RESPONSE_TOO_LARGE"))
                 response_headers = {key.lower(): value for key, value in stream.headers.items()}
                 return self.remember(method, path, Response(stream.code, response_headers, content, time.monotonic() - start))
+        except HTTPException:
+            return self.remember(method, path, Response(observed_status, {}, b"", time.monotonic() - start, "HTTP_PROTOCOL_INVALID"))
         except (TimeoutError, socket.timeout):
             return self.remember(method, path, Response(None, {}, b"", time.monotonic() - start, "CLIENT_TIMEOUT"))
         except ssl.SSLError:

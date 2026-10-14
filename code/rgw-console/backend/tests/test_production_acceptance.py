@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from http.client import BadStatusLine, IncompleteRead
 import importlib.util
 import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -47,6 +49,36 @@ def arguments(*extra):
 
 
 class SafetyTests(unittest.TestCase):
+    def test_http_protocol_failure_has_stable_code_no_remote_fragments(self):
+        client = acceptance.Client.__new__(acceptance.Client)
+        client.base_url = 'https://localhost:8446'
+        client.timeout = 1
+        client.events = []
+        client.opener = Mock()
+        client.opener.open.side_effect = BadStatusLine('fake-password-or-response')
+        result = client.request('GET', '/api/ready', None)
+        self.assertEqual(result.error, 'HTTP_PROTOCOL_INVALID')
+        self.assertIsNone(result.status)
+        self.assertEqual(result.content, b'')
+        self.assertNotIn('fake-password', json.dumps(client.events))
+
+    def test_incomplete_http_body_keeps_observed_status_without_partial_body(self):
+        client = acceptance.Client.__new__(acceptance.Client)
+        client.base_url = 'https://localhost:8446'
+        client.timeout = 1
+        client.events = []
+        stream = Mock(code=503)
+        stream.__enter__ = Mock(return_value=stream)
+        stream.__exit__ = Mock(return_value=None)
+        stream.read.side_effect = IncompleteRead(b'fake-private-partial-body')
+        client.opener = Mock()
+        client.opener.open.return_value = stream
+        result = client.request('GET', '/api/ready', None)
+        self.assertEqual(result.error, 'HTTP_PROTOCOL_INVALID')
+        self.assertEqual(result.status, 503)
+        self.assertEqual(result.content, b'')
+        self.assertNotIn('fake-private', json.dumps(client.events))
+
     def test_failed_observation_keeps_source_codes_not_values_or_messages(self):
         payload = observation()
         payload['sources'] = {'ceph.osd_df': {'quality':'UNAVAILABLE','reason':'EXECUTOR_TIMEOUT','message':'password=secret'},

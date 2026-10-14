@@ -29,6 +29,35 @@ def limited_text(path: Path, maximum: int) -> str:
     return path.read_text(encoding='utf-8')
 
 
+def reserve_report(path: Path | None):
+    """Reserve create-only output before reading credentials or doing I/O."""
+    if path is None:
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path.open('x', encoding='utf-8')
+    except FileExistsError:
+        raise ReadyCheckError('REPORT_ALREADY_EXISTS') from None
+    except (OSError, ValueError):
+        raise ReadyCheckError('REPORT_WRITE_FAILED') from None
+
+
+def finish_report(output, result: dict) -> None:
+    if output is None:
+        return
+    try:
+        json.dump(result, output, sort_keys=True)
+        output.write('\n')
+        output.flush()
+    except (OSError, ValueError, TypeError):
+        result.update(status='FAIL', error_code='REPORT_WRITE_FAILED')
+    finally:
+        try:
+            output.close()
+        except (OSError, ValueError):
+            result.update(status='FAIL', error_code='REPORT_WRITE_FAILED')
+
+
 def staging_identity(directory: Path) -> tuple[str, int]:
     if not (directory / 'compose.production.yml').is_file():
         raise ReadyCheckError('STAGING_COMPOSE_REQUIRED')
@@ -95,7 +124,7 @@ def get_json(opener, url: str, authorization: str) -> dict:
         raise ReadyCheckError('HTTP_PROTOCOL_INVALID', observed_status) from None
     except (error.URLError, ssl.SSLError, TimeoutError, OSError):
         raise ReadyCheckError('TLS_OR_CONNECTION_FAILED') from None
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         raise ReadyCheckError('RESPONSE_JSON_INVALID', observed_status) from None
 
 
@@ -114,8 +143,10 @@ def validate_ready(ready: dict, schema: int) -> None:
         raise ReadyCheckError('READINESS_SHAPE_INVALID')
     if (ready.get('ready') is not True or ready.get('status') != 'ready'
             or ready.get('blocking_dependencies') != []
+            or type(dependencies['database'].get('schema_version')) is not int
             or dependencies['database'].get('schema_version') != schema
-            or dependencies['database'].get('status') != 'ready'):
+            or dependencies['database'].get('status') != 'ready'
+            or dependencies['database'].get('required') is not True):
         raise ReadyCheckError('DEPENDENCY_OR_SCHEMA_NOT_READY')
     for key in ('config', 'frontend', 'ceph_executor'):
         item = dependencies.get(key)
@@ -135,7 +166,9 @@ def main(argv=None) -> int:
     result = {'kind': 'STAGING_INSTALL_READINESS', 'checked_at': datetime.now(timezone.utc).isoformat(),
               'status': 'FAIL', 'not_a_production_signoff': True,
               'certificate_revocation_policy_not_validated': True}
+    output = None
     try:
+        output = reserve_report(args.report)
         if not 1 <= args.expected_schema <= 9999 or not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', args.expected_version):
             raise ReadyCheckError('EXPECTED_RELEASE_INVALID')
         project, port = staging_identity(args.deployment_directory)
@@ -154,11 +187,7 @@ def main(argv=None) -> int:
         result.update(error_code=str(exc), http_status=exc.http_status)
     except (OSError, ValueError, TypeError, KeyError):
         result.update(error_code='INSTALL_CHECK_CONFIGURATION_INVALID')
-    if args.report:
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        with args.report.open('x', encoding='utf-8') as output:
-            json.dump(result, output, sort_keys=True)
-            output.write('\n')
+    finish_report(output, result)
     print(json.dumps(result, sort_keys=True))
     return 0 if result['status'] == 'PASS' else 2
 

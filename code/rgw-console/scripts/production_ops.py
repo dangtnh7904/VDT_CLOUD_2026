@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -11,9 +12,12 @@ import subprocess
 import time
 
 from production_acceptance import AcceptanceError, Client, canonical_bytes, load_accounts, utc_now
+from production_target import approved_api_base
 
 
 PROJECT = re.compile(r'^storage-lab-console-(?:production|staging)[a-z0-9_-]{0,64}$')
+EXPECTED_DATABASE_SCHEMA_VERSION = 21
+SAFE_ALERT_CODE = re.compile(r'[A-Z][A-Z0-9_]{0,95}\Z')
 VOLUME_TARGETS = (
     ('postgres', 'postgres-data', '/var/lib/postgresql/data', True),
     ('api', 'evidence', '/var/lib/storage-lab-console/evidence', True),
@@ -38,6 +42,79 @@ def deployment_identity(directory: Path) -> tuple[str, int]:
     if not 1024 <= port <= 65535:
         raise AcceptanceError('INVALID_HTTPS_PORT')
     return project, port
+
+
+def validate_operator_runtime(payload, project: str) -> None:
+    expected_scope = 'staging' if project.startswith('storage-lab-console-staging') else 'production'
+    if (not isinstance(payload, dict) or payload.get('environment') != 'production'
+            or payload.get('deployment_scope') != expected_scope or payload.get('deployment_id') != project
+            or payload.get('console_read_only') is not True or payload.get('ceph_mutations_enabled') is not False
+            or payload.get('console_role') != 'viewer'):
+        raise AcceptanceError('RUNTIME_IDENTITY_NOT_VERIFIED')
+    features = payload.get('features')
+    if not isinstance(features, dict) or any(features.get(key) is not False for key in ('lab', 'legacy_rgw', 'legacy_rbd')):
+        raise AcceptanceError('READONLY_FEATURE_SCOPE_NOT_VERIFIED')
+
+
+def validate_readiness_payload(payload) -> None:
+    """An HTTP 200 alone must not certify the core-readonly dependencies."""
+    if (not isinstance(payload, dict) or payload.get('ready') is not True
+            or payload.get('status') != 'ready'
+            or not isinstance(payload.get('blocking_dependencies'), list)
+            or payload['blocking_dependencies']):
+        raise AcceptanceError('DEPENDENCY_READINESS_PAYLOAD_INVALID')
+    features = payload.get('features')
+    if (not isinstance(features, dict) or features.get('upgrade') is not True
+            or any(features.get(key) is not False for key in ('lab', 'legacy_rgw', 'legacy_rbd'))):
+        raise AcceptanceError('DEPENDENCY_READINESS_FEATURE_SCOPE_INVALID')
+    dependencies = payload.get('dependencies')
+    if not isinstance(dependencies, dict):
+        raise AcceptanceError('DEPENDENCY_READINESS_PAYLOAD_INVALID')
+    for name in ('config', 'database', 'frontend', 'ceph_executor'):
+        item = dependencies.get(name)
+        if (not isinstance(item, dict) or item.get('required') is not True
+                or item.get('status') != 'ready'):
+            raise AcceptanceError('REQUIRED_DEPENDENCY_NOT_VERIFIED')
+    version = dependencies['database'].get('schema_version')
+    if type(version) is not int or version != EXPECTED_DATABASE_SCHEMA_VERSION:
+        raise AcceptanceError('DATABASE_SCHEMA_VERSION_NOT_VERIFIED')
+    rgw = dependencies.get('rgw')
+    if (not isinstance(rgw, dict) or rgw.get('required') is not False
+            or rgw.get('status') != 'disabled'):
+        raise AcceptanceError('DEPENDENCY_READINESS_FEATURE_SCOPE_INVALID')
+    # Any additional dependency marked required must also be ready. Reject a
+    # malformed shape instead of silently ignoring contradictory health data.
+    for item in dependencies.values():
+        if (not isinstance(item, dict) or type(item.get('required')) is not bool
+                or not isinstance(item.get('status'), str)
+                or (item['required'] and item['status'] != 'ready')):
+            raise AcceptanceError('DEPENDENCY_READINESS_PAYLOAD_INVALID')
+
+
+def reserve_report(path: Path):
+    """Reserve a private, create-only output before credentials or network."""
+    descriptor = None
+    try:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError:
+            # A non-directory parent is a create/storage error, not evidence
+            # that the requested report already exists.
+            raise OSError from None
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        handle = os.fdopen(descriptor, 'wb')
+        descriptor = None
+        return handle
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def print_summary(report: dict) -> None:
+    # Report paths and raw checks stay local; an output error reports only a
+    # stable code, never an OSError string containing filesystem/user details.
+    print(json.dumps({'status': report['status'], 'alerts': report['alerts']}))
 
 
 def run_docker(arguments: list[str]) -> str:
@@ -229,6 +306,7 @@ def main(argv=None) -> int:
     command = argparse.ArgumentParser(description=__doc__)
     command.add_argument('--deployment-directory', required=True, type=Path)
     command.add_argument('--ca-file', required=True, type=Path)
+    command.add_argument('--base-url', help='Explicit HTTPS origin present in deployment CORS_ORIGINS (required for domain-only certificates)')
     command.add_argument('--auth-user-file', required=True, type=Path)
     command.add_argument('--backup-root', required=True, type=Path)
     command.add_argument('--max-backup-age-hours', type=float, default=26)
@@ -243,6 +321,16 @@ def main(argv=None) -> int:
               'thresholds_status': 'PROPOSED_NOT_APPROVED', 'not_a_production_signoff': True,
               'alerts': [], 'checks': {}}
     try:
+        report_handle = reserve_report(args.report)
+    except FileExistsError:
+        report.update(status='ALERT', alerts=['OPERATIONS_REPORT_ALREADY_EXISTS'])
+        print_summary(report)
+        return 2
+    except OSError:
+        report.update(status='ALERT', alerts=['OPERATIONS_REPORT_CREATE_FAILED'])
+        print_summary(report)
+        return 2
+    try:
         if not 0 < args.disk_alert_percent < 100 or not 0 < args.max_backup_age_hours <= 168:
             raise AcceptanceError('INVALID_OPERATIONS_THRESHOLDS')
         if len(args.host_storage_path) > 8:
@@ -250,19 +338,32 @@ def main(argv=None) -> int:
         if len(args.daemon_key) > 2 or any(not re.fullmatch(r'(mon|mgr|osd|rgw|mds)\.[A-Za-z0-9_.-]{1,128}', key) for key in args.daemon_key):
             raise AcceptanceError('FRESH_PROBE_REQUIRES_ZERO_TO_TWO_EXPLICIT_DAEMONS')
         project, port = deployment_identity(args.deployment_directory)
+        base_url = approved_api_base(args.deployment_directory, args.base_url, port)
         accounts = load_accounts(args.auth_user_file, None, None, 'viewer')
-        client = Client(f'https://localhost:{port}', args.ca_file, 90)
+        client = Client(base_url, args.ca_file, 90)
         runtime = client.request('GET', '/api/runtime-config', accounts['viewer'])
         report['checks']['runtime'] = runtime.summary()
-        if runtime.status != 200 or runtime.json().get('environment') != 'production' or runtime.json().get('deployment_id') != project:
+        if runtime.status != 200:
             raise AcceptanceError('RUNTIME_IDENTITY_NOT_VERIFIED')
+        validate_operator_runtime(runtime.json(), project)
         report['checks']['containers'] = container_checks(project)
         if not report['checks']['containers']['healthy']:
             report['alerts'].append('CONTAINER_UNHEALTHY')
         ready = client.request('GET', '/api/ready', accounts['viewer'])
         report['checks']['ready'] = ready.summary()
+        report['checks']['ready']['payload_verified'] = False
         if ready.status != 200:
             report['alerts'].append('DEPENDENCY_NOT_READY')
+        else:
+            try:
+                if getattr(ready, 'error', None):
+                    raise AcceptanceError('DEPENDENCY_READINESS_PAYLOAD_INVALID')
+                validate_readiness_payload(ready.json())
+                report['checks']['ready']['payload_verified'] = True
+            except AcceptanceError as exc:
+                code = str(exc)
+                report['alerts'].append(code if SAFE_ALERT_CODE.fullmatch(code)
+                                        else 'DEPENDENCY_READINESS_PAYLOAD_INVALID')
         report['checks']['host_disk'] = host_disk_check(args.deployment_directory, args.disk_alert_percent)
         report['checks']['backup_host_disk'] = host_disk_check(args.backup_root, args.disk_alert_percent)
         report['checks']['additional_host_disks'] = [host_disk_check(path, args.disk_alert_percent)
@@ -292,12 +393,37 @@ def main(argv=None) -> int:
                 report['checks']['metric_source'] = {key: source.get(key) for key in ('quality', 'reason', 'http_status', 'window_seconds', 'identity_binding')}
                 if source.get('quality') != 'VALID':
                     report['alerts'].append('METRIC_SOURCE_NOT_VALID')
-    except (AcceptanceError, OSError, ValueError) as exc:
-        report['alerts'].append(str(exc) if isinstance(exc, AcceptanceError) else 'OPERATIONS_CONFIGURATION_FAILED')
+    except (AcceptanceError, OSError, ValueError, TypeError, AttributeError, KeyError, RecursionError) as exc:
+        code = (str(exc) if isinstance(exc, AcceptanceError) else
+                'OPERATIONS_RESPONSE_INVALID' if isinstance(exc, (TypeError, AttributeError, KeyError, RecursionError))
+                else 'OPERATIONS_CONFIGURATION_FAILED')
+        report['alerts'].append(code if SAFE_ALERT_CODE.fullmatch(code)
+                                else 'OPERATIONS_RESPONSE_INVALID')
+    except BaseException:
+        # Do not hide interpreter/programming/interrupt failures, but release
+        # the reserved descriptor. The maintenance wrapper records process
+        # failure separately rather than treating an empty report as PASS.
+        try:
+            report_handle.close()
+        except OSError:
+            pass
+        raise
     report.update(status='ALERT' if report['alerts'] else 'PASS', duration_seconds=round(time.monotonic()-started, 3))
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_bytes(canonical_bytes(report) + b'\n')
-    print(json.dumps({'status': report['status'], 'alerts': report['alerts'], 'report': str(args.report)}))
+    write_failed = False
+    try:
+        report_handle.write(canonical_bytes(report) + b'\n')
+        report_handle.flush()
+        os.fsync(report_handle.fileno())
+    except (OSError, ValueError, TypeError, RecursionError):
+        write_failed = True
+    finally:
+        try:
+            report_handle.close()
+        except OSError:
+            write_failed = True
+    if write_failed:
+        report.update(status='ALERT', alerts=[*report['alerts'], 'OPERATIONS_REPORT_WRITE_FAILED'])
+    print_summary(report)
     return 2 if report['alerts'] else 0
 
 
