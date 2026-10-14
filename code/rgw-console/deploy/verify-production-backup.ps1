@@ -12,7 +12,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $backupPath = [IO.Path]::GetFullPath($BackupDirectory)
 $metadata = Get-Content -LiteralPath (Join-Path $backupPath 'backup-metadata.json') -Raw | ConvertFrom-Json
-if ($metadata.format_version -ne 1 -or $metadata.status -ne 'COMPLETE' -or $metadata.schema_version -lt 1 -or $metadata.schema_version -gt 9999) { throw 'Unsupported or incomplete backup metadata' }
+. (Join-Path $PSScriptRoot 'backup-manifest-validation.ps1')
+Assert-BackupManifest $metadata
 # PowerShell 7.5+ materializes JSON ISO timestamps as DateTime by default.
 # Re-parsing their culture-dependent string representation breaks on hosts
 # whose date order differs; retain an existing typed instant, parse strings
@@ -127,6 +128,8 @@ try {
         if ($role -notin @('db', 'evidence', 'executor-state')) { throw 'Unexpected volume role in backup metadata' }
         $volumeName = "$prefix-$role"
         Invoke-Docker @('volume', 'create', '--label', "storage-lab-console.rehearsal=$operationId", $volumeName) | Out-Null
+        $newVolume = (Invoke-Docker @('volume', 'inspect', $volumeName) | ConvertFrom-Json)[0]
+        if ($newVolume.Name -ne $volumeName -or $newVolume.Labels.'storage-lab-console.rehearsal' -ne $operationId) { throw 'New restore volume identity mismatch before mount' }
         $createdVolumes += $volumeName
     }
     Invoke-Docker @('run', '-d', '--name', $dbContainer, '--label', "storage-lab-console.rehearsal=$operationId", '--network', 'none', '-e', 'POSTGRES_USER=storage_lab_console', '-e', 'POSTGRES_DB=storage_lab_console', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', '--mount', "type=volume,source=$prefix-db,target=/var/lib/postgresql/data", $metadata.postgres_image_id) | Out-Null
@@ -157,7 +160,10 @@ try {
         $asIsSql = "SELECT json_build_object('id',id,'cluster_id',cluster_id,'fsid',fsid,'phase',phase,'sha256',sha256,'deleted_at',deleted_at,'deleted_by',deleted_by,'payload',payload)::text FROM as_is_collections ORDER BY id"
         Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '--output', $asIsExportPath, '-c', $asIsSql) | Out-Null
         Invoke-Docker @('cp', "${dbContainer}:$asIsExportPath", $asIsCheckpointPath) | Out-Null
-        $asIsSummary = Invoke-Docker @('run', '--name', $helperName, '--label', "storage-lab-console.rehearsal=$operationId", '--network', 'none', '--read-only', '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m,mode=1777', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--user', '10001:10001', '--mount', "type=bind,source=$backupPath,target=/backup,readonly", '--mount', "type=bind,source=$outputPath,target=/checkpoint,readonly", '--entrypoint', 'python', $metadata.application_image_id, '-c', $asIsCheckCode) | ConvertFrom-Json
+        # Private 0700 operator directories stay private on Linux. Only this
+        # fixed networkless integrity helper gets read-through permission;
+        # both source mounts/rootfs stay RO, no secret or Docker socket mount.
+        $asIsSummary = Invoke-Docker @('run', '--name', $helperName, '--label', "storage-lab-console.rehearsal=$operationId", '--network', 'none', '--read-only', '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m,mode=1777', '--cap-drop', 'ALL', '--cap-add', 'DAC_OVERRIDE', '--security-opt', 'no-new-privileges:true', '--user', '0:0', '--memory', '512m', '--cpus', '1', '--pids-limit', '32', '--mount', "type=bind,source=$backupPath,target=/backup,readonly", '--mount', "type=bind,source=$outputPath,target=/checkpoint,readonly", '--entrypoint', 'python', $metadata.application_image_id, '-c', $asIsCheckCode) | ConvertFrom-Json
         Invoke-Docker @('rm', $helperName) | Out-Null
         Remove-Item -LiteralPath $asIsCheckpointPath
     }
@@ -171,6 +177,7 @@ try {
     $expectedRegistry = @(Get-Content -LiteralPath (Join-Path $backupPath 'evidence-registry.json') -Raw | ConvertFrom-Json)
     if (($registry | ConvertTo-Json -Depth 10 -Compress) -ne ($expectedRegistry | ConvertTo-Json -Depth 10 -Compress)) { throw 'Restored evidence registry does not match source checkpoint' }
     $registryCount = $registry.Count
+    if ($registryCount -ne [long]$metadata.registry_rows) { throw 'Restored evidence count does not match backup manifest' }
     if ($RequireEvidence -and $registryCount -eq 0) { throw 'RequireEvidence requires at least one backed-up evidence registry row' }
     if ($registryCount -and -not ($metadata.volumes | Where-Object { $_.role -eq 'evidence' -and $_.status -eq 'BACKED_UP' })) { throw 'Evidence registry rows require a backed-up evidence volume' }
     [IO.File]::WriteAllText((Join-Path $outputPath 'restored-evidence-registry.json'), (ConvertTo-Json -InputObject $registry -Depth 10) + "`n", $utf8)

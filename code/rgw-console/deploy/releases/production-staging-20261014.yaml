@@ -104,6 +104,30 @@ checks:
     isolated_restore_network: none
     source_modified_by_restore: false
     config_secret_role_and_target_RPO_RTO: NOT_ACCEPTED
+  synthetic_nonempty_backup_restore:
+    status: PASS_ISOLATED_FIXTURE_NOT_SITE_SIGNOFF
+    network: none
+    live_stage_modified: false
+    source_backup_unchanged: true
+    backup_duration_seconds: 9.816
+    restore_duration_seconds: 13.012
+    as_is_payloads_verified: 6
+    audit_checkpoint_verified: true
+    registered_evidence_rows: 1
+    evidence_files_verified: 1
+    evidence_bytes: 115
+    executor_state_files_verified: 1
+    registry_links_verified: 1
+    archive_hashes_verified: 9
+    migration_checksums_verified: 21
+    fixture_container_and_three_volumes_removed: true
+    manifest_pure_checks: {status: PASS, cases: 42}
+    recovery_docker_double_checks: {status: PASS, cases: 5}
+    preflight_negative_controls: {status: PASS, cases: [omitted_volume_hash, duplicate_volume_role, corrupt_copied_dump], docker_calls: 0}
+    linux_private_checkpoint_control: PASS_READ_WITH_SCOPED_DAC_OVERRIDE_WRITE_BLOCKED_EROFS
+    integrity_helper_privilege: UID_0_CAP_DROP_ALL_DAC_OVERRIDE_NETWORK_NONE_SOURCE_RO_NO_SECRETS_OR_SOCKET
+    application_privilege_changed: false
+    actual_legacy_evidence_config_secret_role_and_target_RPO_RTO: NOT_ACCEPTED
   operations_probe:
     status: ALERT
     alerts: [HOST_DISK_HIGH]
@@ -172,7 +196,7 @@ release:
 pending:
   - resolve_host_storage_capacity_without_unauthorized_data_deletion
   - run_actual_slow_or_lost_SSH_drills_and_sustained_approved_load
-  - rehearse_nonempty_evidence_and_config_secret_role_recovery
+  - rehearse_actual_legacy_evidence_and_config_secret_role_recovery_synthetic_linkage_has_passed
   - install_and_verify_dedicated_SSH_account_key_and_readonly_CephX_caps
   - approve_and_test_scheduler_alert_delivery_offsite_encryption_retention
   - define_required_metric_scope_and_approved_SLO_RPO_RTO
@@ -184,6 +208,12 @@ evidence:
   ssh_guard: ../../docs/PRODUCTION_SSH.md
   private_runtime_reports: retained_locally_not_committed
   receipts_sha256:
+    strict_nonempty_fixture: b115c597e9e54c0746aff8c5d4cbe11544473e0de26a0cbc5ba0e2d094b8e0cc
+    strict_nonempty_backup: 981aff065882d4f024c3a3c8c40ab72d8c6c4ba7676c5c8dcf2d6a64e78e28c5
+    strict_nonempty_restore: ef79c34c323669fbaa2dd013f60ad397559c60e2edabde329c1fdd1ff2437f3c
+    private_linux_checkpoint_permissions: 401d6c931c73a052308f6d54c2bb9b7331752eeb392dca4efe0653a1135734f3
+    backup_preflight_negative_controls: 022e75c350c40d87d0cb76391d0f343791d2dde0d8c2596936e4413e054d35fe
+    backup_manifest_and_recovery_units: f01f835a72f9f3fcd8eb7f54de409e34cba550898a19ad215abf09763575512c
     final_linux_staging_checker_protocol_units: c441b85f52f3b053972b9cb68a3ec0352a5d256deb137e8ac5eb43ed238983c2
     final_live_staging_install_readiness: 3e71b7d71f0b5e4ce828a6468051ee1cb566dfeaa0e49534759c78b10306ef22
     final_linux_filesystem_monitor_units: ab92455543674e8fe85dbce4cbfbea62832f1dead92018e783b1d8d3cea17f74

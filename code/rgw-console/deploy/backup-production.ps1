@@ -39,7 +39,8 @@ function Write-Json([string]$Name, $Value) {
 $databaseIds = @((Invoke-Docker @('ps', '-q', '--filter', "label=com.docker.compose.project=$project", '--filter', 'label=com.docker.compose.service=postgres')) -split '\s+' | Where-Object { $_ })
 if ($databaseIds.Count -ne 1) { throw 'Expected exactly one running bundled PostgreSQL container; external PostgreSQL is not supported by this script' }
 $database = Inspect-Container $databaseIds[0]
-$databaseName = $database.Name.TrimStart('/')
+$databaseName = $database.Id # Immutable ID: a replacement name cannot redirect exec/cp/cleanup.
+if ($databaseName -notmatch '^[a-f0-9]{64}$' -or $database.Config.Labels.'com.docker.compose.project' -ne $project -or $database.Config.Labels.'com.docker.compose.service' -ne 'postgres' -or -not $database.State.Running) { throw 'Exact running source PostgreSQL identity required' }
 $databaseImage = $database.Image
 $applicationImageReference = Read-RuntimeValue 'STORAGE_LAB_CONSOLE_IMAGE'
 $applicationImage = (Invoke-Docker @('image', 'inspect', $applicationImageReference) | ConvertFrom-Json)[0].Id
@@ -64,6 +65,11 @@ if ($IsWindows) {
 
 $runningIds = @((Invoke-Docker @('ps', '-q', '--filter', "label=com.docker.compose.project=$project")) -split '\s+' | Where-Object { $_ -and $_ -ne $databaseIds[0] })
 $writers = @($runningIds | ForEach-Object { Inspect-Container $_ })
+$ownerIds = @((Invoke-Docker @('ps', '-aq', '--filter', "label=com.docker.compose.project=$project")) -split '\s+' | Where-Object { $_ })
+$allSourceContainers = @($ownerIds | ForEach-Object { Inspect-Container $_ })
+foreach ($owner in $allSourceContainers) {
+    if ($owner.Id -notmatch '^[a-f0-9]{64}$' -or $owner.Config.Labels.'com.docker.compose.project' -ne $project) { throw 'Exact source container identity required' }
+}
 $stopped = @()
 $dumpPath = "/tmp/slc-$operationId.dump"
 $asIsExportPath = "/tmp/slc-$operationId-as-is.jsonl"
@@ -115,9 +121,10 @@ with tarfile.open(output/(name+'.tar.gz'),'w:gz') as archive:
 
 try {
     foreach ($writer in $writers) {
-        $name = $writer.Name.TrimStart('/')
-        Invoke-Docker @('stop', '-t', '45', $name) | Out-Null
+        if ($writer.Id -notmatch '^[a-f0-9]{64}$' -or $writer.Config.Labels.'com.docker.compose.project' -ne $project) { throw 'Exact checkpoint writer identity required' }
+        # Register recovery first, including a stop that partially succeeds.
         $stopped += $writer.Id
+        Invoke-Docker @('stop', '-t', '45', $writer.Id) | Out-Null
     }
     # Check the application namespace stayed quiescent; service restarters must
     # be disabled during this maintenance window by the deployment operator.
@@ -138,9 +145,11 @@ try {
         # full collection payloads in PowerShell or print them to the terminal.
         Invoke-Docker @('exec', '-u', 'postgres', $databaseName, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '--output', $asIsExportPath, '-c', $asIsSql) | Out-Null
         Invoke-Docker @('cp', "${databaseName}:$asIsExportPath", $asIsCheckpointPath) | Out-Null
-        # The disposable non-root helper writes its result into its own /tmp
-        # layer so docker cp can retrieve it after exit (tmpfs vanishes then).
-        $asIsSummary = Invoke-Docker @('run', '--name', $helperName, '--label', "storage-lab-console.backup=$operationId", '--network', 'none', '--memory', '512m', '--cpus', '1', '--pids-limit', '32', '--user', '10001:10001', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--mount', "type=bind,source=$outputPath,target=/checkpoint,readonly", '--entrypoint', 'python', $applicationImage, '-c', $asIsCheckCode) | ConvertFrom-Json
+        # The fixed integrity helper reads an operator-private 0700 Linux
+        # directory via a READ-ONLY mount. UID0/DAC_OVERRIDE is scoped to this
+        # networkless disposable helper, not the API; no secrets/socket mount.
+        # Its only output is its own /tmp layer for docker cp after exit.
+        $asIsSummary = Invoke-Docker @('run', '--name', $helperName, '--label', "storage-lab-console.backup=$operationId", '--network', 'none', '--memory', '512m', '--cpus', '1', '--pids-limit', '32', '--user', '0:0', '--cap-drop', 'ALL', '--cap-add', 'DAC_OVERRIDE', '--security-opt', 'no-new-privileges:true', '--mount', "type=bind,source=$outputPath,target=/checkpoint,readonly", '--entrypoint', 'python', $applicationImage, '-c', $asIsCheckCode) | ConvertFrom-Json
         Invoke-Docker @('cp', "${helperName}:/tmp/as-is-registry.jsonl", (Join-Path $outputPath 'as-is-registry.jsonl')) | Out-Null
         Invoke-Docker @('rm', $helperName) | Out-Null
         # The DB dump retains the data. Remove only this duplicate transient
@@ -153,6 +162,14 @@ try {
         if (-not $volumes.Count) {
             $volumeMetadata += @{ role=$role; status='NOT_PRESENT'; source_volume=$null }
             continue
+        }
+        $volumeIdentity = (Invoke-Docker @('volume', 'inspect', $volumes[0]) | ConvertFrom-Json)[0]
+        if ($volumeIdentity.Name -ne $volumes[0] -or $volumeIdentity.Labels.'com.docker.compose.project' -ne $project -or $volumeIdentity.Labels.'com.docker.compose.volume' -ne $role) { throw 'Source volume identity mismatch' }
+        $ownerService = if ($role -eq 'evidence') { 'api' } else { 'executor' }
+        $expectedTarget = if ($role -eq 'evidence') { '/var/lib/storage-lab-console/evidence' } else { '/var/lib/rbd-executor' }
+        foreach ($writer in $allSourceContainers | Where-Object { $_.Config.Labels.'com.docker.compose.service' -eq $ownerService }) {
+            $mount = @($writer.Mounts | Where-Object Destination -eq $expectedTarget)
+            if ($mount.Count -ne 1 -or $mount[0].Type -ne 'volume' -or $mount[0].Name -ne $volumes[0]) { throw 'Selected source volume is not the application mount' }
         }
         Invoke-Docker @('run', '--name', $helperName, '--label', "storage-lab-console.backup=$operationId", '--network', 'none', '--user', '10001:10001', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--mount', "type=volume,source=$($volumes[0]),target=/source,readonly", '--entrypoint', 'python', $applicationImage, '-c', $archiveCode, $role) | Out-Null
         Invoke-Docker @('cp', "${helperName}:/tmp/$role.tar.gz", (Join-Path $outputPath "$role.tar.gz")) | Out-Null
@@ -183,15 +200,22 @@ try {
     & docker exec -u postgres $databaseName rm -f $dumpPath *> $null
     & docker exec -u postgres $databaseName rm -f $asIsExportPath *> $null
     & docker exec -u postgres $databaseName rm -f $auditExportPath *> $null
-    if (Test-Path -LiteralPath $asIsCheckpointPath) { Remove-Item -LiteralPath $asIsCheckpointPath }
+    $cleanupFailures = @()
+    try { if (Test-Path -LiteralPath $asIsCheckpointPath) { Remove-Item -LiteralPath $asIsCheckpointPath } } catch { $cleanupFailures += 'TRANSIENT_CHECKPOINT_REMOVAL_FAILED' }
     # Remove only the helper carrying this operation's exact label.
-    $helper = & docker inspect $helperName 2>$null | ConvertFrom-Json
-    if ($LASTEXITCODE -eq 0 -and $helper[0].Config.Labels.'storage-lab-console.backup' -eq $operationId) {
-        & docker rm -f $helperName *> $null
-    }
+    try {
+        $helper = & docker inspect $helperName 2>$null | ConvertFrom-Json
+        if ($LASTEXITCODE -eq 0 -and $helper[0].Config.Labels.'storage-lab-console.backup' -eq $operationId) {
+            & docker rm -f $helper[0].Id *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'Helper removal failed' }
+        }
+    } catch { $cleanupFailures += 'DISPOSABLE_BACKUP_HELPER_REMOVAL_FAILED' }
     foreach ($id in $stopped) {
-        $container = Inspect-Container $id
-        if ($container.Config.Labels.'com.docker.compose.project' -ne $project) { throw 'Checkpoint restart target failed project identity check' }
-        Invoke-Docker @('start', $id) | Out-Null
+        try {
+            $container = Inspect-Container $id
+            if ($container.Id -ne $id -or $container.Config.Labels.'com.docker.compose.project' -ne $project) { throw 'Checkpoint restart target failed project identity check' }
+            Invoke-Docker @('start', $id) | Out-Null
+        } catch { $cleanupFailures += "CHECKPOINT_RESTART_FAILED_$id" }
     }
+    if ($cleanupFailures.Count) { throw ('Backup cleanup/recovery incomplete; all remaining targets attempted: ' + ($cleanupFailures -join ', ')) }
 }
