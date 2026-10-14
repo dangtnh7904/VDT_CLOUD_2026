@@ -345,6 +345,43 @@ def validate_saved(payload: Any, expected_fsid: str, daemon_keys: list[str]) -> 
     return collection_id
 
 
+def observation_failure_diagnostics(payload: Any, required_metrics: list[str]) -> dict:
+    """Keep source codes/scope on failed reads, never raw evidence or messages."""
+    if not isinstance(payload, dict):
+        return {"payload_shape": "NOT_OBJECT"}
+    def code(value):
+        return value if isinstance(value, str) and re.fullmatch(r'[A-Z][A-Z0-9_:|]{0,199}', value) else None
+    def keys(values):
+        return [key for key in values[:128] if isinstance(key, str) and DAEMON_KEY.fullmatch(key)] if isinstance(values, list) else []
+    rows = payload.get('daemons') or []
+    rows = [row for row in rows[:128] if isinstance(row, dict)] if isinstance(rows, list) else []
+    sources = payload.get('sources') or {}
+    source_rows = []
+    if isinstance(sources, dict):
+        for name, source in list(sources.items())[:64]:
+            if (not isinstance(name, str) or not re.fullmatch(r'(?:ceph\.[a-z_]+|prometheus)', name)
+                    or not isinstance(source, dict) or source.get('quality') == 'VALID'):
+                continue
+            source_rows.append({'source': name, 'quality': code(source.get('quality')),
+                                'reason': code(source.get('reason')), 'http_status': source.get('http_status')
+                                if isinstance(source.get('http_status'), int) else None})
+    metrics = []
+    for row in rows:
+        if not isinstance(row.get('key'), str) or not DAEMON_KEY.fullmatch(row['key']):
+            continue
+        metric_rows = row.get('metrics') or []
+        metric_rows = metric_rows[:128] if isinstance(metric_rows, list) else []
+        for metric in metric_rows:
+            if isinstance(metric, dict) and metric.get('metric_id') in required_metrics:
+                metrics.append({'daemon_key': row['key'], 'metric_id': metric['metric_id'],
+                                'quality': code(metric.get('quality')), 'reason': code(metric.get('reason'))})
+    return {'quality': code(payload.get('quality')),
+            'actual_daemon_keys': keys([row.get('key') for row in rows]),
+            'requested_daemon_keys': keys(payload.get('requested_daemon_keys')),
+            'missing_daemon_keys': keys(payload.get('missing_daemon_keys')),
+            'nonvalid_sources': source_rows, 'required_metric_quality': metrics}
+
+
 def percentile95(values: list[float]) -> float | None:
     return sorted(values)[max(0, math.ceil(len(values) * .95) - 1)] if values else None
 
@@ -532,8 +569,10 @@ class Harness:
                 is_export = iteration % 2 == 1
                 response = self.client.request("POST", "/api/v1/as-is/export" if is_export else "/api/v1/as-is/observe",
                                                self.account, self.observe_payload)
-                record = {"worker": worker, "iteration": iteration, **response.summary()}
+                record = {"worker": worker, "iteration": iteration,
+                          "requested_at": requested, "completed_at": utc_now(), **response.summary()}
                 if response.status == 200 and not response.error:
+                    payload = {}
                     try:
                         payload = verified_export(response) if is_export else response.json()
                         validate_observation(payload, self.args.expected_fsid, self.args.daemon_key,
@@ -541,6 +580,7 @@ class Harness:
                         record["scope_and_freshness_verified"] = True
                     except AcceptanceError as exc:
                         record["error_code"] = str(exc)
+                        record["observation_diagnostics"] = observation_failure_diagnostics(payload, self.args.required_metric)
                 rows.append(record)
             return rows
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.args.load_workers) as pool:

@@ -1,8 +1,8 @@
 schema_version: 1
-kind: core_readonly_production_preparation
+kind: core_readonly_staging_acceptance
 date_local: 2026-10-14
 timezone: Asia/Saigon
-status: PREPARED_RUNTIME_BLOCKED
+status: CORE_STAGING_CANDIDATE_VALIDATING
 production_approved: false
 scope:
   included: [fresh_metrics, as_is_collections, exports, same_daemon_type_comparison]
@@ -13,14 +13,14 @@ source_changes:
   deployment: [isolated_staging_prep, local_ca_hostname_verification, resource_limits, rotated_logs, separate_runtime_db_secret]
   operations: [https_acceptance_harness, read_only_ops_probe, opt_in_maintenance_scheduler, audit_checkpoint_restore_verification, candidate_build_and_signature_scripts]
 checks:
-  backend: {executed: 389, passed: 364, skipped: 25, failed: 0, environment: windows_host_python_3_10}
+  backend: {executed: 444, passed: 444, skipped: 0, failed: 0, environment: packaged_linux_image_with_isolated_postgresql_16_schema_21}
   frontend: {passed: 33, failed: 0}
   executor: {passed: 31, failed: 0}
   typescript: PASS
   frontend_build: PASS_WITH_BUNDLE_SIZE_WARNING
   ssr_component_contracts: {assertions: 10, status: PASS_NOT_BROWSER_ACCEPTANCE}
   powershell_parser: PASS
-  compose_staging_merge: PASS_STATIC_ONLY
+  compose_staging_merge: PASS_RUNNING_ISOLATED_PROJECT
   staging_certificate_hostname_chain: PASS_LOCAL_CA_ONLY
   server_client_account_hash_roundtrip: PASS
   fresh_source_probe:
@@ -32,12 +32,65 @@ checks:
     global_mgr_prometheus_scrape_interval_seconds: 15
     daemon_overrides_and_target_site_trust: NOT_VERIFIED
   staging_http:
-    status: FAIL
-    failed_check: staging_target_and_readiness
-    http_status: null
-    error_code: NETWORK_UNAVAILABLE
-    created_collection_count: 0
-    cause: Docker_Desktop_inference_socket_startup_failure_engine_pipe_unavailable
+    status: PASS
+    smoke_checks: 8
+    smoke_created_collection_count: 2
+    smoke_load: {requests: 4, successful: 4, p95_seconds: 17.922, errors: 0, queue_busy: 0, slo_status: PROPOSED_NOT_APPROVED}
+    final_load: RUNNING_2_CLIENTS_20_ITERATIONS
+    tls: EXPLICIT_LOCAL_CA_HOSTNAME_VERIFIED_NOT_TARGET_TRUST
+    browser_uat: NOT_RUN
+  runtime_db_role:
+    status: PASS
+    role: storage_lab_runtime
+    unsafe_role_flags: false
+    role_memberships: 0
+    owned_objects: 0
+    audit_permissions: [SELECT, INSERT]
+    collection_column_updates: [deleted_at, deleted_by]
+    physical_delete_or_payload_update: false
+  runtime_secrets:
+    status: PASS_WITH_TARGET_LINUX_PERMISSION_LIMITATION
+    windows_file_mode_observed: '0777'
+    mount_read_only: true
+    host_private_acl: true
+    target_linux_0400_ownership: NOT_VERIFIED
+  fault_drill:
+    status: PASS
+    scope: exact_staging_api_postgres_executor_ids_only
+    duration_seconds: 185.578
+    collection_and_audit_hashes_unchanged: true
+    database_history_failure: {http_status: 503, error_code: DATABASE_UNAVAILABLE, duration_seconds: 7.109}
+    database_acquire_and_connect_timeout_seconds: 5
+    api_interruption: {inflight_http: 504, down_http: 502, error_code: NON_JSON_RESPONSE, recovered_fresh_http: 200}
+    remote_slow_or_lost_ssh: NOT_RUN
+  first_backup_restore:
+    status: PASS
+    backup_duration_seconds: 11.680
+    restore_duration_seconds: 11.854
+    as_is_payloads_verified: 2
+    audit_checkpoint_verified: true
+    archive_hashes_verified: 9
+    migration_checksums_verified: 21
+    registered_evidence_rows: 0
+    evidence_and_executor_state_file_count: 0
+    nonempty_evidence_linkage: NOT_EXERCISED
+    config_secret_and_role_recovery: NOT_EXERCISED
+    recovery_objectives: MEASURED_LOCAL_REHEARSAL_NOT_APPROVED_RPO_RTO
+  operations_probe:
+    status: ALERT
+    alerts: [HOST_DISK_HIGH]
+    host_disk_used_percent: 86.24
+    proposed_alert_percent: 85
+    latest_backup_healthy: true
+    docker_vm_disk_measured: false
+    scheduler_registered: false
+    alert_delivery_channel: NOT_CONFIGURED
+  retained_historical_failures:
+    - {phase: engine_unavailable, http_status: null, error_code: NETWORK_UNAVAILABLE, collections_created: 0}
+    - {phase: database_outage_before_fix, http_status: 500, error_code: NON_JSON_RESPONSE, duration_seconds: 31.969, cause: unhandled_pool_timeout_default_30_seconds}
+    - {phase: restore_receipt_before_fix, cause: PowerShell_typed_DateTime_reparsed_using_host_locale}
+    - {phase: ops_backup_age_before_fix, cause: Python_3_10_rejected_PowerShell_ISO_Z_seven_fractional_digits}
+    - {phase: first_candidate, cause: provenance_read_main_HEAD_instead_of_declared_source_commit}
 preservation:
   original_env_sha256: bf0dc234a25e155b54b91b3aaf79e4b2b8a505ef3755e3a0644a040cadb354fb
   original_env_modified: false
@@ -47,18 +100,25 @@ preservation:
   secrets_in_git_or_image: false
 release:
   last_published_application: 5.1.2-rc.1
-  new_image_build: NOT_RUN
+  new_image_build: PASS_FROM_CLEAN_ISOLATED_COMMIT
+  version: 5.2.0-rc.1
+  local_tag: storage-lab-console:5.2.0-staging-fixed
+  index_digest: sha256:91c1540deb28447ef88b73059ce2017f3ea63ef0b2709934597f51867ff0e1c0
+  amd64_manifest_digest: sha256:fea8cffda97644e384a1349cd309aea1da1e22e1c42d9f59a2dd9711bca3d11c
   new_image_push: NOT_RUN
-  new_image_scan: NOT_RUN
-  new_sbom_provenance_inspection: NOT_RUN
+  new_image_scan: {status: PASS, packages: 167, findings: 0, scanner: Docker_Scout_1_20_4, warning: temporary_archive_cleanup_locked_by_Windows}
+  new_sbom_provenance_inspection: PASS_ACTUAL_BLOBS_SOURCE_AND_SUBJECT
+  blob_checksums_verified: 26
+  spdx_digest: sha256:5cf1c5c17a2578e5c6d0ebb1d5a001de16cb301779ba39f71f603c9a49845028
+  provenance_digest: sha256:661cd27f729cda98a26032a175619240d931bb16bd0c6b227829c8edf8fd7aa1
+  slsa_level_claimed: false
   new_signature_verification: NOT_RUN
-  source_commit_for_new_candidate: NOT_CREATED
+  source_commit_for_new_candidate: f5a573bfe7f2c50fde9a06552791972891c75ebb
+  dirty_user_checkout_and_index_preserved: true
 pending:
-  - restore_Docker_Linux_Engine_without_reset_or_data_loss
-  - run_skipped_postgresql_and_linux_guard_checks
-  - run_HTTPS_auth_RBAC_and_DB_role_checks_in_new_staging_containers
-  - run_load_abort_API_DB_executor_restart_and_slow_SSH_drills
-  - run_new_backup_restore_audit_evidence_rehearsal
+  - finish_final_load_and_backup_restore_checkpoint
+  - run_actual_slow_or_lost_SSH_drills_and_sustained_approved_load
+  - rehearse_nonempty_evidence_and_config_secret_role_recovery
   - install_and_verify_dedicated_SSH_account_key_and_readonly_CephX_caps
   - approve_and_test_scheduler_alert_delivery_offsite_encryption_retention
   - define_required_metric_scope_and_approved_SLO_RPO_RTO
@@ -69,3 +129,10 @@ evidence:
   operations: ../../docs/PRODUCTION_OPERATIONS.md
   ssh_guard: ../../docs/PRODUCTION_SSH.md
   private_runtime_reports: retained_locally_not_committed
+  receipts_sha256:
+    linux_final_fixed_unit_results: 762e8bda59d08b66acf0bdfa7bdd0b7d045c1b584e3dc7bfb647c59f011e9155
+    fault_drill_fixed: bd8f3250593c0985725bc9e119823cbf7c3fcf4d2e76bc721f4e0c3c4ba9f823
+    app_fixed_scout_sarif: de925ff64e87497cbe0d3cb94eae8e718513322f874cd64329f8fa9d5e9f7c32
+    actual_attestation_check: c4c3f5db5610c9fdb9a78a5d3eeebb75731fd2ca7067bc235ae5e8441088fa15
+    first_restore_fixed: 9aea91adaac56774b3dd92f9c579117a387443328c077969b31120e9bbf49bd9
+    first_backup_metadata: 565dc2a205052276c8ba5c4d740cf7be799f20585d1aad78ab2cd762570bbc2c

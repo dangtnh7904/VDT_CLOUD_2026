@@ -26,6 +26,10 @@ Ngưỡng ban đầu **đề xuất, chưa phê duyệt**: 2 client × 2 lượt
 
 ## Backup, phục hồi và cảnh báo
 
+SSH exec của tất cả lượt xem/xuất/collector dùng chung admission: mặc định 4 lệnh đồng thời, tối đa 32 lệnh chờ, FIFO, deadline bao gồm chờ + mở kênh + output. Không mặc định exit 0 nếu SSH đóng mà thiếu exit status. Phải đặt giới hạn phù hợp MaxSessions thực của account đích; admission không chứng minh process remote đã bị kill. Bài kiểm áp lực 12 caller trước sửa đã tái hiện SSH channel-open failure; không tự gán nguyên nhân đó cho hai kết quả thiếu nguồn lịch sử chưa lưu đủ chi tiết.
+
+`production_fault_drill.py` cần marker HTTPS production/staging, flag cho phép lỗi và đúng container ID/nhãn project trước mỗi stop/start. Nó không thao tác Ceph, localhost lab hoặc container khác; `finally` phục hồi đúng ID và kiểm hash collection/audit. DB mất kết nối trả JSON 503 `DATABASE_UNAVAILABLE`, `retryable=true`, request ID và `Retry-After: 2`; pool acquire/connect được giới hạn 5 giây, không rút ngắn thời gian chạy truy vấn SQL. Lỗi schema/lập trình không bị đổi thành lỗi kết nối. Proxy khi API dừng có thể trả HTTP 502/504 HTML; report vẫn giữ mã HTTP và `NON_JSON_RESPONSE`, không ghi thành thành công/empty history.
+
 `backup-production.ps1` quiesce đúng project, backup DB/evidence/executor-state, checksum payload và lưu audit checkpoint. Trong lúc backup ứng dụng tạm ngừng nhận yêu cầu; phải có maintenance window. `verify-production-backup.ps1` restore vào DB/volume mới không network, kiểm migration, collection/soft-delete/hash, audit actor/history và DB-evidence linkage; chỉ xóa các đối tượng rehearsal do chính lượt đó tạo. Nó lưu cả report FAIL và thời gian restore. Config, secret, role DB và khả năng chạy lại API trên host khác còn phải diễn tập riêng.
 
 Đề xuất ban đầu: backup mỗi ngày 02:00, kiểm vận hành mỗi 5 phút, alert dung lượng host ≥85%, checkpoint backup quá 26 giờ; RPO ≤24 giờ và RTO ≤30 phút chỉ là mục tiêu đề xuất. Thời gian restore đo được và tuổi checkpoint không tự chứng minh toàn bộ RPO/RTO. Chưa tự xóa backup cũ; cần chốt dung lượng/retention và encryption/offsite.
@@ -36,7 +40,7 @@ Windows: `register-production-maintenance.ps1` mặc định chỉ chuẩn bị;
 
 ## Bản phát hành
 
-`build-production-candidate.ps1` yêu cầu Git commit đúng các image input, xuất OCI Linux AMD64 với `--sbom=true --provenance=mode=max`; không tự push. Cần kiểm attestations thật, scan, pull đúng digest rồi chạy lại staging/restore trước phát hành. [Docker attestations](https://docs.docker.com/build/metadata/attestations/)
+`build-production-candidate.ps1` build từ clone sparse sạch, detached đúng Git commit được chỉ định; giữ nguyên checkout/index chính. Label `VCS_REF` không tự sửa provenance BuildKit nếu build từ checkout khác. Script xuất OCI Linux AMD64 với `--sbom=true --provenance=mode=max`; `-Load -ImageTag` chỉ load local khi containerd store giữ được attestations, không tự push. `scripts/verify_oci_candidate.py` kiểm checksum blobs, descriptor, Linux AMD64, subject binding, SPDX và revision provenance/OCI; không tự tuyên bố đạt SLSA hay chữ ký. Cần scan, pull đúng digest rồi chạy staging/restore trước phát hành. [Docker attestations](https://docs.docker.com/build/metadata/attestations/)
 
 `sign-production-image.ps1` chỉ nhận digest repo của người dùng, ký rồi verify bằng public key riêng; password/key ở file private, không trong `.env`/Git/image. Phải dùng Cosign đã được đơn vị kiểm nguồn/checksum và public key đã duyệt. Script không bật `--insecure-ignore-*` hay bỏ qua transparency verification. [Cosign signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/), [Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/)
 

@@ -107,6 +107,80 @@ test("SSH command timeout has a stable error code", async () => {
   } finally { disconnect(); __resetForTests(); delete process.env.RBD_COMMAND_TIMEOUT_MS; }
 });
 
+test("SSH channel opening itself has a bounded deadline", async () => {
+  const client = new FakeClient(); client.exec = () => {};
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    await assert.rejects(exec("ceph fsid", { timeout: 10 }), error => error.code === "EXECUTOR_TIMEOUT");
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("synchronous SSH open failure releases admission and clears deadline", async () => {
+  const client = new FakeClient(); client.exec = () => { throw new Error("private-host-secret"); };
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await assert.rejects(exec("ceph fsid"), error => error.code === "EXECUTOR_UNAVAILABLE" && !error.message.includes("secret"));
+    }
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("late-opened stream after deadline is destroyed without executing output", async () => {
+  let destroyed = 0;
+  const client = new FakeClient();
+  client.exec = (_command, callback) => setTimeout(() => {
+    const stream = new EventEmitter(); stream.stderr = new EventEmitter(); stream.destroy = () => { destroyed += 1; };
+    callback(null, stream);
+  }, 20);
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    await assert.rejects(exec("ceph fsid", { timeout: 5 }), error => error.code === "EXECUTOR_TIMEOUT");
+    await new Promise(resolve => setTimeout(resolve, 30)); assert.equal(destroyed, 1);
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("rejected SSH open has a stable code without leaking the description", async () => {
+  const client = new FakeClient();
+  client.exec = (_command, callback) => callback(Object.assign(new Error("private-host-secret"), { reason: 4 }));
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    await assert.rejects(exec("ceph fsid"), error => error.code === "SSH_CHANNEL_OPEN_FAILED" && !error.message.includes("secret"));
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("command stream closed without exit status cannot be marked successful", async () => {
+  const client = new FakeClient();
+  client.exec = (_command, callback) => {
+    const stream = new EventEmitter(); stream.stderr = new EventEmitter(); stream.destroy = () => {};
+    callback(null, stream); queueMicrotask(() => stream.emit("close"));
+  };
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    await assert.rejects(exec("ceph fsid"), error => error.code === "SSH_EXIT_STATUS_UNAVAILABLE");
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("all SSH commands share four slots even across independent callers", async () => {
+  let active = 0; let peak = 0;
+  const client = new FakeClient();
+  client.exec = (_command, callback) => {
+    active += 1; peak = Math.max(peak, active);
+    const stream = new EventEmitter(); stream.stderr = new EventEmitter(); stream.destroy = () => {};
+    callback(null, stream);
+    setTimeout(() => { active -= 1; stream.emit("close", 0); }, 5);
+  };
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect(); await Promise.all(Array.from({ length: 12 }, () => exec("ceph fsid", { timeout: 1000 })));
+    assert.equal(peak, 4); assert.equal(active, 0);
+  } finally { disconnect(); __resetForTests(); }
+});
+
 test("initial SSH failure schedules and completes reconnect", async () => {
   let attempts = 0;
   __setClientFactoryForTests(() => {

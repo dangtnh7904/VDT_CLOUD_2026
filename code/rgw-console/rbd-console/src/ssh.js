@@ -9,6 +9,13 @@ import { Client } from "ssh2";
 import { createHash, timingSafeEqual } from "crypto";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { performance } from "node:perf_hooks";
+import { CommandAdmission } from "./command-admission.js";
+
+const commandAdmission = new CommandAdmission(
+  Number(process.env.RBD_SSH_COMMAND_CONCURRENCY || 4),
+  Number(process.env.RBD_SSH_COMMAND_MAX_WAITING || 32),
+);
 
 /** @type {Client | null} */
 let conn = null;
@@ -220,10 +227,29 @@ function scheduleReconnect() {
  * @param {boolean} [opts.sudo] - Prepend sudo -n (default false).
  * @returns {Promise<{stdout: string, stderr: string, code: number}>}
  */
-export function exec(command, opts = {}) {
+export async function exec(command, opts = {}) {
+  const timeout = opts.timeout ?? parseInt(process.env.RBD_COMMAND_TIMEOUT_MS || "15000", 10);
+  const connection = conn;
+  if (!connection || !connected) throw Object.assign(new Error("SSH not connected"), { code: "EXECUTOR_UNAVAILABLE" });
+  const deadline = performance.now() + timeout;
+  const release = await commandAdmission.acquire(timeout);
+  try {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw Object.assign(new Error("SSH command deadline exceeded in queue"), { code: "EXECUTOR_TIMEOUT" });
+    if (!connected || conn !== connection) throw Object.assign(new Error("SSH connection changed while command was queued"), { code: "EXECUTOR_UNAVAILABLE" });
+    return await execAdmitted(command, { ...opts, timeout: remaining }, connection);
+  } finally {
+    release();
+  }
+}
+
+function execAdmitted(command, opts, connection) {
   const timeout = opts.timeout ?? parseInt(process.env.RBD_COMMAND_TIMEOUT_MS || "15000", 10);
   const maxOutputBytes = opts.maxOutputBytes ?? parseInt(process.env.RBD_MAX_OUTPUT_BYTES || String(5 * 1024 * 1024), 10);
   const actualCmd = opts.sudo ? `sudo -n ${command}` : command;
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 128 * 1024 * 1024) {
+    return Promise.reject(Object.assign(new Error("Invalid SSH output limit"), { code: "EXECUTOR_NOT_CONFIGURED" }));
+  }
 
   return new Promise((resolve, reject) => {
     if (!conn || !connected) {
@@ -234,19 +260,33 @@ export function exec(command, opts = {}) {
     const binaryChunks = [];
     let stderr = "";
     let finished = false;
-    let timer = null;
+    let commandStream = null;
     let outputBytes = 0;
+    // The same budget covers admission, channel opening and output. Starting
+    // this timer only inside the open callback leaves a lost-open unbounded.
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        commandStream?.destroy();
+        reject(Object.assign(new Error("SSH command deadline exceeded"), { code: "EXECUTOR_TIMEOUT" }));
+      }
+    }, timeout);
+    const fail = error => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      commandStream?.destroy();
+      reject(error);
+    };
 
-    conn.exec(actualCmd, (err, stream) => {
-      if (err) return reject(err);
-
-      timer = setTimeout(() => {
-        if (!finished) {
-          finished = true;
-          stream.destroy();
-          reject(Object.assign(new Error(`Command timed out after ${timeout}ms: ${redactCmd(actualCmd)}`), { code: "EXECUTOR_TIMEOUT" }));
-        }
-      }, timeout);
+    try { connection.exec(actualCmd, (err, stream) => {
+      if (finished) { stream?.destroy(); return; }
+      if (err) {
+        const channelFailure = Number.isInteger(err.reason) && err.reason >= 1 && err.reason <= 4;
+        return fail(Object.assign(new Error(channelFailure ? "SSH channel opening was rejected" : "SSH channel could not be opened"),
+          { code: channelFailure ? "SSH_CHANNEL_OPEN_FAILED" : "EXECUTOR_UNAVAILABLE" }));
+      }
+      commandStream = stream;
 
       const collect = (target, chunk) => {
         if (finished) return;
@@ -264,14 +304,21 @@ export function exec(command, opts = {}) {
       };
       stream.on("data", (chunk) => collect("stdout", chunk));
       stream.stderr.on("data", (chunk) => collect("stderr", chunk));
+      stream.on("error", () => fail(Object.assign(new Error("SSH command stream failed"), { code: "EXECUTOR_UNAVAILABLE" })));
 
       stream.on("close", (code) => {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
-        resolve({ stdout: opts.binary ? Buffer.concat(binaryChunks) : stdout, stderr, code: code ?? 0 });
+        if (!Number.isInteger(code)) {
+          reject(Object.assign(new Error("SSH command closed without exit status"), { code: "SSH_EXIT_STATUS_UNAVAILABLE" }));
+        } else {
+          resolve({ stdout: opts.binary ? Buffer.concat(binaryChunks) : stdout, stderr, code });
+        }
       });
-    });
+    }); } catch {
+      fail(Object.assign(new Error("SSH channel could not be opened"), { code: "EXECUTOR_UNAVAILABLE" }));
+    }
   });
 }
 

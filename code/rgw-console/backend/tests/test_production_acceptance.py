@@ -47,6 +47,24 @@ def arguments(*extra):
 
 
 class SafetyTests(unittest.TestCase):
+    def test_failed_observation_keeps_source_codes_not_values_or_messages(self):
+        payload = observation()
+        payload['sources'] = {'ceph.osd_df': {'quality':'UNAVAILABLE','reason':'EXECUTOR_TIMEOUT','message':'password=secret'},
+                              'prometheus': {'quality':'PARTIAL','reason':'https://private/secret','http_status':200}}
+        payload['missing_daemon_keys'] = ['mon.example']
+        payload['daemons'][0]['metrics'][0].update(quality='UNAVAILABLE',reason='EXECUTOR_TIMEOUT',value='password=secret')
+        result = acceptance.observation_failure_diagnostics(payload, ['osd.utilization_percent'])
+        self.assertEqual(result['nonvalid_sources'][0]['reason'],'EXECUTOR_TIMEOUT')
+        self.assertEqual(result['missing_daemon_keys'],['mon.example'])
+        self.assertNotIn('secret',json.dumps(result))
+        self.assertNotIn('https',json.dumps(result))
+
+    def test_failed_observation_malformed_rows_cannot_mask_original_failure(self):
+        result = acceptance.observation_failure_diagnostics({'daemons':[None, {'key':'osd.2','metrics':{}}],
+                                                               'sources':None,'missing_daemon_keys':None}, [])
+        self.assertEqual(result['actual_daemon_keys'],['osd.2'])
+        self.assertEqual(result['required_metric_quality'],[])
+
     def test_target_rejects_plain_http_remote_userinfo_or_nonstaging(self):
         for target in ("http://localhost:8446", "https://example.test", "https://user:secret@localhost",
                        "https://localhost/path", "https://localhost?secret=yes", "https://localhost:99999",
