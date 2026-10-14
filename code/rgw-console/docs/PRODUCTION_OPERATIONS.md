@@ -8,6 +8,8 @@ Phạm vi đầu tiên là **chỉ số trực tiếp, thu/lưu/xuất As-is và
 
 API dùng `storage_lab_runtime` không superuser/DDL/CREATEROLE/CREATEDB. Job migration/provisioning dùng secret riêng, không mount vào API. Audit chỉ được SELECT/INSERT; collection không được xóa vật lý hoặc sửa payload/danh tính; chỉ được UPDATE hai cột xóa mềm. Đây không phải bảo vệ khỏi DBA/root: cần hạn chế tài khoản quản trị, bảo vệ backup và audit ngoài máy theo chính sách đơn vị.
 
+`deploy/check-staging-ready.py` là smoke cài staging localhost bằng stdlib Python, không cần pip: CA/hostname được kiểm, Basic viewer lấy từ file private, không proxy/redirect; kiểm runtime đúng marker/phiên bản/chỉ đọc và readiness/schema/DB/frontend/executor. Chỉ GET, không thu/lưu As-is. Windows curl Schannel có thể không chấp nhận revocation status của CA thử; smoke stdlib không tắt TLS của curl/trình duyệt nhưng cũng **không kiểm chính sách CRL/OCSP của production**. Không dùng CA thử hoặc smoke localhost làm bằng chứng certificate/domain/UAT đích được tin cậy.
+
 Compose giới hạn CPU/RAM/PID và xoay log 10 MiB × 3 mỗi container. File secret trên Linux phải có ownership/mode mà UID container thực sự đọc được; khai báo Compose `uid/gid/mode` không đảm bảo sửa quyền của bind-mounted file. Kiểm cả quyền host và trong container trước nghiệm thu.
 
 ## Nguồn metric

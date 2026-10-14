@@ -123,6 +123,17 @@ checks:
     capacity_acceptance: HOLD_BOTH_BACKING_AND_BACKUP_HOST_STORAGE_ABOVE_PROPOSED_85_PERCENT
     scheduler_registered: false
     alert_delivery_channel: NOT_CONFIGURED
+  installer_review:
+    public_clone_commit: 7fd903d773a51fcad829271174c97f2eb42041ac
+    fresh_configuration_generation_and_compose_merge: PASS
+    application_postgres_nginx_pull_with_explicit_policy: PASS_CACHED_LAYERS
+    new_application_or_database_started: false
+    full_fresh_host_install: NOT_RUN
+    windows_schannel_curl_with_staging_ca: {status: FAIL, exit_code: 60, cause: revocation_status_unknown_before_HTTP}
+    stdlib_staging_ready_checker: PASS_CA_HOSTNAME_VIEWER_MARKER_READONLY_VERSION_SCHEMA_DEPENDENCIES
+    stdlib_checker_units: {windows: 15, linux: 15, status: PASS}
+    live_negative_controls: {wrong_ca: TLS_OR_CONNECTION_FAILED, wrong_password_http: 401, wrong_version: RUNTIME_IDENTITY_OR_READONLY_MISMATCH}
+    certificate_revocation_policy_verified: false
   retained_historical_failures:
     - {phase: first_2_by_20_load, http_200: 40, valid_scope_and_required_metrics: 38, errors: 2, p95_seconds: 18.031, error_codes: [REQUIRED_METRICS_UNAVAILABLE, DAEMON_SCOPE_MISMATCH], exact_original_source_cause: NOT_PROVEN}
     - {phase: engine_unavailable, http_status: null, error_code: NETWORK_UNAVAILABLE, collections_created: 0}
@@ -173,6 +184,14 @@ evidence:
   ssh_guard: ../../docs/PRODUCTION_SSH.md
   private_runtime_reports: retained_locally_not_committed
   receipts_sha256:
+    final_linux_staging_checker_protocol_units: c441b85f52f3b053972b9cb68a3ec0352a5d256deb137e8ac5eb43ed238983c2
+    final_live_staging_install_readiness: 3e71b7d71f0b5e4ce828a6468051ee1cb566dfeaa0e49534759c78b10306ef22
+    final_linux_filesystem_monitor_units: ab92455543674e8fe85dbce4cbfbea62832f1dead92018e783b1d8d3cea17f74
+    linux_staging_checker_units: f03e074a620fe31d1766630cbd10ab81a47239d21bab76fe2655fd82014e0a69
+    live_staging_install_readiness: facb8c534444ecdd2e80d64e57931d12b7bd2ab3de94dfafb2fb643640a21568
+    install_wrong_ca_negative_control: b77bfc8070ec6fcbf550e86d0f6ed3087fca7c3fc1a698b2db2ad4fdf90daaba
+    install_wrong_password_negative_control: 172c016dbd72e58fc7e37c8d59192455f199dd32aa21557f3d3d98b1d9359537
+    install_wrong_version_negative_control: a39b2ab11e61f978a7f35006e2f5e33b49b39fa6e4edc318d6fb0539c3feb7c3
     latest_filesystem_and_backing_host_probe: 9ddee3f089475af6b544102e0e4b86e90434399c5ee3fe33d07de02d7be8f66c
     linux_operations_filesystem_units: 9f6a78c3dce70ecabe2da3d3a361832c890ecf3da73942661b59448f410c7c23
     latest_fault_drill: acb740b812274654f8a7cbe4c026aab3c7e475933ac7ca65e8c1da827f1cb854

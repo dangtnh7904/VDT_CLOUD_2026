@@ -6,7 +6,7 @@ Không cần build lại source; các image dưới đây dùng Linux AMD64. M�
 
 ## Cài RC 5.2.0 với HTTPS và ba tài khoản riêng
 
-Bản `5.2.0-rc.1` dành cho staging chỉ đọc, **chưa được chấp thuận production**. Không thay bộ cài 8080 hoặc `.env` đang có. Cần Docker Linux AMD64/containerd image store, Compose 2.30+, PowerShell 7.2+ và OpenSSL trên PATH. Chọn thư mục/project/cổng mới:
+Bản `5.2.0-rc.1` dành cho staging chỉ đọc, **chưa được chấp thuận production**. Không thay bộ cài 8080 hoặc `.env` đang có. Cần Docker Linux AMD64/containerd image store, Compose 2.30+, PowerShell 7.2+, Python 3.10+ và OpenSSL trên PATH. Checker dùng thư viện chuẩn Python, không cần cài pip package. Chọn thư mục/project/cổng mới:
 
 ```powershell
 git clone --branch codex/console-production-readonly https://github.com/dangtnh7904/VDT_CLOUD_2026.git storage-lab-console-staging-install
@@ -29,15 +29,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Không tải được dependency' }
 docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly up -d
 if ($LASTEXITCODE -ne 0) { throw 'Không khởi động được staging' }
 docker compose --env-file .env -f compose.production.yml -f compose.access-control.yml -f compose.staging.yml --profile bundled-db --profile ceph-readonly ps -a
-curl.exe --fail --show-error --cacert ./client/staging-ca.crt --user staging-viewer https://localhost:8446/api/ready
+python (Join-Path $DeployScripts 'check-staging-ready.py') --deployment-directory $DeploymentDirectory --ca-file ./client/staging-ca.crt --auth-user-file ./client/accounts.json
 if ($LASTEXITCODE -ne 0) { throw 'TLS/auth/readiness chưa đạt' }
 ```
 
 Thay tất cả đường dẫn/hostname mẫu trước khi chạy. `cluster.env` là cấu hình riêng có FSID, SSH host/user, fingerprint đã xác minh và allowlist; có thể dùng `.env.local-readonly` hiện tại **chỉ cho cùng cluster lab**. Với cluster khác, tạo cấu hình riêng từ mẫu, không sao chép FSID/key/secret lab. Điền URL exporter từ MGR active đã xác minh, không dùng endpoint standby cũ. SSH/helper cần được cài đúng trước bước này; quyền production theo [hướng dẫn SSH](rgw-console/docs/PRODUCTION_SSH.md).
 
-Kết quả cần version `5.2.0-rc.1`, schema 21, `migrate`/`database-permissions` exit 0 và API/executor healthy. Tài khoản: `staging-viewer`, `staging-operator`, `staging-admin`; mật khẩu trong `client/viewer.password`, `client/operator.password`, `client/admin.password`. Xem riêng bằng editor, không gửi lên chat/Git hoặc đưa vào command line; `curl` hỏi mật khẩu. CA chỉ thử localhost, không được script cài vào trust store; browser/máy đích cần certificate được quản trị viên tin cậy, không bỏ kiểm TLS. Không bật profile `collectors` hoặc OSDMap worker trong bộ cài RC này.
+Kết quả cần checker `status=PASS`, version `5.2.0-rc.1`, schema 21, `migrate`/`database-permissions` exit 0 và API/executor healthy. Checker xác minh CA/hostname, viewer, marker staging và `ready=true`; lỗi HTTP, sai cluster deployment/version/schema hoặc TLS đều trả nonzero. Nó chỉ đọc hai endpoint, không tạo collection. Tài khoản: `staging-viewer`, `staging-operator`, `staging-admin`; mật khẩu trong `client/viewer.password`, `client/operator.password`, `client/admin.password`. Checker đọc file viewer riêng, không đưa mật khẩu vào command line/log. Xem mật khẩu bằng editor, không gửi lên chat/Git. CA chỉ thử localhost, không được script cài vào trust store; browser/máy đích cần certificate được quản trị viên tin cậy, không bỏ kiểm TLS. Checker staging không kiểm chính sách CRL/OCSP của production. Không bật profile `collectors` hoặc OSDMap worker trong bộ cài RC này.
 
-Lệnh `pull --policy always` tải cả application, PostgreSQL và Nginx đã pin; giữ `RELEASE_PULL_POLICY=never` cho bước khởi động. Nếu đổi cổng ở tham số `-Port`, đổi URL kiểm tra tương ứng. Docker Linux containers trên Windows khác với Docker Engine trên host Linux; với host Linux, phải làm [bước quyền file secret](rgw-console/deploy/README.md#quyền-file-trên-host-linux) trước khi `up`.
+Lệnh `pull --policy always` tải cả application, PostgreSQL và Nginx đã pin; giữ `RELEASE_PULL_POLICY=never` cho bước khởi động. Checker tự lấy cổng từ deployment `.env`. `curl.exe` mặc định Windows có thể dừng với `schannel: the revocation status is unknown` khi dùng CA thử; quy trình staging trên dùng checker xác minh CA rõ ràng, không tắt kiểm chứng TLS của curl/trình duyệt. Docker Linux containers trên Windows khác với Docker Engine trên host Linux; với host Linux, phải làm [bước quyền file secret](rgw-console/deploy/README.md#quyền-file-trên-host-linux) trước khi `up`.
 
 Trước cập nhật, gọi script từ thư mục repo đã lưu (script không được chép vào deployment):
 
