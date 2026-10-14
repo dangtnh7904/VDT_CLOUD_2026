@@ -14,6 +14,8 @@ $backupPath = [IO.Path]::GetFullPath($BackupDirectory)
 $metadata = Get-Content -LiteralPath (Join-Path $backupPath 'backup-metadata.json') -Raw | ConvertFrom-Json
 if ($metadata.format_version -ne 1 -or $metadata.status -ne 'COMPLETE' -or $metadata.schema_version -lt 1 -or $metadata.schema_version -gt 9999) { throw 'Unsupported or incomplete backup metadata' }
 $operationId = [guid]::NewGuid().ToString('N')
+$restoreTimer = [Diagnostics.Stopwatch]::StartNew()
+$restoreStartedAt = [DateTime]::UtcNow
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path (Split-Path -Parent $backupPath) "restore-check-$operationId" }
 $outputPath = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $outputPath) { throw "Refusing to overwrite rehearsal report: $outputPath" }
@@ -51,6 +53,7 @@ if ($IsWindows) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict rehearsal report directory permissions' }
 }
 $asIsExportPath = "/tmp/slc-$operationId-as-is.jsonl"
+$auditCheckpointPath = Join-Path $outputPath 'restored-as-is-audit.jsonl'
 $asIsCheckpointPath = Join-Path $outputPath 'as-is-payload-checkpoint.jsonl'
 $asIsSummary = @{ collections_verified=0; deleted_collections_verified=0 }
 $asIsCheckCode = @'
@@ -128,6 +131,14 @@ try {
     $schema = [int](Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '-c', 'SELECT max(version) FROM schema_migrations'))
     if ($schema -ne [int]$metadata.schema_version) { throw 'Restored schema version does not match the source checkpoint' }
     if ($schema -ge 21) {
+        if ($metadata.audit_checkpoint) {
+            if ($metadata.audit_checkpoint -ne 'as-is-audit.jsonl' -or -not ($metadata.artifacts | Where-Object name -eq 'as-is-audit.jsonl')) { throw 'Missing bounded audit checkpoint' }
+            $auditSql = "SELECT row_to_json(x)::text FROM (SELECT id,collection_id,event_type,actor,occurred_at,sha256 FROM as_is_collection_events ORDER BY id) x"
+            $auditTemp = "/tmp/slc-$operationId-audit.jsonl"
+            Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '--output', $auditTemp, '-c', $auditSql) | Out-Null
+            Invoke-Docker @('cp', "${dbContainer}:$auditTemp", $auditCheckpointPath) | Out-Null
+            if ((Get-FileHash -LiteralPath $auditCheckpointPath -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $backupPath 'as-is-audit.jsonl') -Algorithm SHA256).Hash) { throw 'Restored collection audit actors/history differ from backup' }
+        }
         $asIsSql = "SELECT json_build_object('id',id,'cluster_id',cluster_id,'fsid',fsid,'phase',phase,'sha256',sha256,'deleted_at',deleted_at,'deleted_by',deleted_by,'payload',payload)::text FROM as_is_collections ORDER BY id"
         Invoke-Docker @('exec', '-u', 'postgres', $dbContainer, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '--output', $asIsExportPath, '-c', $asIsSql) | Out-Null
         Invoke-Docker @('cp', "${dbContainer}:$asIsExportPath", $asIsCheckpointPath) | Out-Null
@@ -160,14 +171,25 @@ try {
         archive_hashes_verified=@($metadata.artifacts).Count; restored_schema_version=$schema; migration_checksums_verified=$migrations.Count; registry_rows_verified=$registryCount
         volume_results=$volumeResults; source_modified=$false; network='none'; restore_mode='Fresh PostgreSQL database with --no-owner --no-acl'
         as_is_integrity=$asIsSummary
+        audit_checkpoint_verified=[bool]$metadata.audit_checkpoint
+        restore_duration_seconds=[math]::Round($restoreTimer.Elapsed.TotalSeconds,3)
+        checkpoint_age_at_restore_seconds=($restoreStartedAt - [DateTime]::Parse($metadata.started_at).ToUniversalTime()).TotalSeconds
+        recovery_objectives_status='MEASURED_REHEARSAL_ONLY_SLO_NOT_APPROVED'
         limitations=@('Bundled PostgreSQL only', 'Synthetic/local rehearsal does not validate site RPO/RTO', 'Credentials/config and database role recovery must be rehearsed separately')
     }
     [IO.File]::WriteAllText((Join-Path $outputPath 'restore-report.json'), ($report | ConvertTo-Json -Depth 20) + "`n", $utf8)
     Write-Host "Restore rehearsal PASS: $(Join-Path $outputPath 'restore-report.json')"
     Write-Host "Schema: $schema; DB/evidence links verified: $registryCount"
     Write-Host "As-is payloads restored/verified: $($asIsSummary.collections_verified); soft-deleted: $($asIsSummary.deleted_collections_verified)"
+} catch {
+    # Keep a failed rehearsal report too. Raw driver/Docker errors may reveal
+    # local configuration, so only a stable code is exported here.
+    $failure = @{status='FAIL'; operation_id=$operationId; checked_at=[DateTime]::UtcNow.ToString('o'); error_code='RESTORE_REHEARSAL_FAILED'; restore_duration_seconds=[math]::Round($restoreTimer.Elapsed.TotalSeconds,3); source_modified=$false; not_a_production_signoff=$true}
+    [IO.File]::WriteAllText((Join-Path $outputPath 'restore-report.json'), ($failure | ConvertTo-Json -Depth 10) + "`n", $utf8)
+    throw 'Restore rehearsal failed; inspect its private report and local diagnostics'
 } finally {
     if (Test-Path -LiteralPath $asIsCheckpointPath) { Remove-Item -LiteralPath $asIsCheckpointPath }
+    if (Test-Path -LiteralPath $auditCheckpointPath) { Remove-Item -LiteralPath $auditCheckpointPath }
     foreach ($name in @($helperName, $dbContainer)) {
         $object = & docker inspect $name 2>$null | ConvertFrom-Json
         if ($LASTEXITCODE -eq 0) {

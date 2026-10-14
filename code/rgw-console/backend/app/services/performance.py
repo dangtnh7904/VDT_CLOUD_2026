@@ -5,8 +5,11 @@ import math
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from typing import Any, Iterable
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import UUID
 
 from ..config import get_settings
 from ..db import connection
@@ -45,6 +48,45 @@ SUPPORTED_SCOPES = {
 
 class PerformanceTelemetryError(RuntimeError):
     """A performance source could not produce trustworthy telemetry."""
+
+    def __init__(self, code: str, message: str | None = None, *, http_status: int | None = None):
+        # Only stable codes and authored messages reach exports/logs. HTTP error
+        # bodies, configured URLs and exception strings can contain secrets.
+        super().__init__(message or code)
+        self.code = code
+        self.http_status = http_status
+
+    def diagnostics(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"quality": "UNAVAILABLE", "reason": self.code}
+        if self.http_status is not None:
+            result["http_status"] = self.http_status
+        return result
+
+
+class PrometheusText(str):
+    """Text-compatible scrape result retaining non-sensitive HTTP evidence."""
+
+    def __new__(cls, value: str, *, http_status: int | None = None):
+        result = super().__new__(cls, value)
+        result.http_status = http_status
+        return result
+
+
+MAX_PROMETHEUS_BYTES = 16 * 1024 * 1024
+
+
+class _NoMetricsRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        # The operator and the verified MGR service name one endpoint. Following
+        # a redirect changes that identity and can forward its bearer token.
+        try:
+            fp.close()
+        finally:
+            raise PerformanceTelemetryError("METRICS_REDIRECT_REJECTED", http_status=code) from None
+
+
+def _open_prometheus_request(request: Request, timeout: float):
+    return build_opener(_NoMetricsRedirects()).open(request, timeout=timeout)
 
 
 @dataclass
@@ -87,7 +129,9 @@ def _parse_labels(raw: str | None) -> dict[str, str]:
     while position < len(raw):
         match = PROMETHEUS_LABEL_RE.match(raw, position)
         if not match:
-            raise PerformanceTelemetryError("invalid Prometheus label set")
+            raise PerformanceTelemetryError("METRICS_PARSE_FAILED", "invalid Prometheus label set")
+        if match.group(1) in labels:
+            raise PerformanceTelemetryError("METRICS_PARSE_FAILED", "duplicate Prometheus label name")
         labels[match.group(1)] = _unescape_prometheus_label(match.group(2))
         position = match.end()
     return labels
@@ -102,12 +146,19 @@ def parse_prometheus_counters(text: str) -> tuple[dict[str, dict[str, float]], d
     """
 
     parsed: dict[str, list[tuple[dict[str, str], float]]] = {}
+    relevant_names = {name for aliases in COUNTER_ALIASES.values() for name in aliases}
+    had_data_line = False
+    if not isinstance(text, str) or not text.strip():
+        raise PerformanceTelemetryError("METRICS_RESPONSE_EMPTY")
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
+        had_data_line = True
         match = PROMETHEUS_LINE_RE.fullmatch(line)
         if not match:
+            if any(line.startswith(name + suffix) for name in relevant_names for suffix in ("{", " ")):
+                raise PerformanceTelemetryError("METRICS_PARSE_FAILED")
             continue
         value = float(match.group("value"))
         if not math.isfinite(value):
@@ -131,6 +182,8 @@ def parse_prometheus_counters(text: str) -> tuple[dict[str, dict[str, float]], d
             if not daemon.startswith("osd."):
                 continue
             osd_id = daemon.removeprefix("osd.")
+            if not osd_id.isascii() or not osd_id.isdigit() or value < 0:
+                raise PerformanceTelemetryError("METRICS_INVALID_COUNTER")
             key = (osd_id, semantic)
             if semantic in counters.setdefault(osd_id, {}):
                 duplicates.add(key)
@@ -138,11 +191,64 @@ def parse_prometheus_counters(text: str) -> tuple[dict[str, dict[str, float]], d
             counters[osd_id][semantic] = value
 
     if duplicates:
-        duplicate_text = ", ".join(f"osd.{osd}:{metric}" for osd, metric in sorted(duplicates))
-        raise PerformanceTelemetryError(f"duplicate Prometheus counter series: {duplicate_text}")
+        raise PerformanceTelemetryError("METRICS_DUPLICATE_SERIES", "duplicate Prometheus counter series")
     if not counters:
-        raise PerformanceTelemetryError("no Ceph OSD client-I/O counters were found")
+        code = "METRICS_PARSE_FAILED" if had_data_line and not parsed else "METRICS_OSD_COUNTERS_MISSING"
+        raise PerformanceTelemetryError(code)
     return counters, selected_names
+
+
+def _metrics_endpoint(url: str | None) -> tuple[str, str, int, str] | None:
+    """Canonicalize only the MGR's root and documented /metrics route."""
+    try:
+        parts = urlsplit(url or "")
+        path = parts.path.rstrip("/")
+        if (parts.scheme not in {"http", "https"} or not parts.hostname
+            or parts.username is not None or parts.password is not None
+            or parts.query or parts.fragment or path not in {"", "/metrics"}):
+            return None
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+        if not 1 <= port <= 65535:
+            return None
+        return (parts.scheme, parts.hostname.lower(), port, "/metrics")
+    except (TypeError, ValueError):
+        return None
+
+
+def prometheus_identity_binding(
+    text: str,
+    expected_fsid: str,
+    *,
+    configured_url: str | None = None,
+    verified_service_url: str | None = None,
+) -> str:
+    """Bind used counter series, or a live FSID-verified MGR service endpoint.
+
+    Callers must only pass verified_service_url from a fresh CLI response whose
+    enclosing FSID was checked. Merely configuring CEPH_EXPECTED_FSID does not
+    prove the origin of an unrelated HTTP scrape.
+    """
+    relevant_names = {name for aliases in COUNTER_ALIASES.values() for name in aliases}
+    bound_counters = []
+    for raw_line in text.splitlines():
+        match = PROMETHEUS_LINE_RE.fullmatch(raw_line.strip())
+        if not match:
+            continue
+        labels = _parse_labels(match.group("labels"))
+        source_ids = [labels[key] for key in ("fsid", "cluster_fsid") if key in labels]
+        try:
+            if any(str(UUID(value)) != expected_fsid for value in source_ids):
+                raise PerformanceTelemetryError("METRICS_FSID_MISMATCH")
+        except (ValueError, AttributeError):
+            raise PerformanceTelemetryError("METRICS_FSID_MISMATCH") from None
+        if match.group("name") in relevant_names and labels.get("ceph_daemon", "").startswith("osd."):
+            bound_counters.append(bool(source_ids))
+    if bound_counters and all(bound_counters):
+        return "source_fsid_labels"
+    endpoint = _metrics_endpoint(configured_url)
+    if endpoint is not None and endpoint == _metrics_endpoint(verified_service_url):
+        return "verified_ceph_mgr_service_endpoint"
+    return "unverified"
 
 
 def fetch_prometheus_text(
@@ -155,14 +261,34 @@ def fetch_prometheus_text(
     if bearer_token:
         headers["Authorization"] = f"Bearer {bearer_token}"
     request = Request(url, headers=headers)
-    with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - URL is operator config
-        content_type = response.headers.get_content_type()
-        if content_type not in {"text/plain", "application/openmetrics-text", "application/octet-stream"}:
-            raise PerformanceTelemetryError(f"unexpected metrics content type: {content_type}")
-        payload = response.read(16 * 1024 * 1024 + 1)
-    if len(payload) > 16 * 1024 * 1024:
-        raise PerformanceTelemetryError("metrics response exceeds 16 MiB limit")
-    return payload.decode("utf-8")
+    status = None
+    try:
+        with _open_prometheus_request(request, timeout_seconds) as response:  # noqa: S310 - URL is operator config
+            status = response.status
+            content_type = response.headers.get_content_type()
+            if content_type not in {"text/plain", "application/openmetrics-text", "application/octet-stream"}:
+                raise PerformanceTelemetryError("METRICS_CONTENT_TYPE_INVALID", http_status=status)
+            payload = response.read(MAX_PROMETHEUS_BYTES + 1)
+    except HTTPError as exc:
+        status = exc.code
+        exc.close()
+        raise PerformanceTelemetryError("METRICS_HTTP_ERROR", http_status=status) from None
+    except TimeoutError:
+        raise PerformanceTelemetryError("METRICS_TIMEOUT", http_status=status) from None
+    except URLError as exc:
+        reason = "METRICS_TIMEOUT" if isinstance(exc.reason, TimeoutError) else "METRICS_CONNECTION_FAILED"
+        raise PerformanceTelemetryError(reason, http_status=status) from None
+    except OSError:
+        raise PerformanceTelemetryError("METRICS_CONNECTION_FAILED", http_status=status) from None
+    if len(payload) > MAX_PROMETHEUS_BYTES:
+        raise PerformanceTelemetryError("METRICS_RESPONSE_TOO_LARGE", http_status=status)
+    try:
+        decoded = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise PerformanceTelemetryError("METRICS_ENCODING_INVALID", http_status=status) from None
+    if not decoded.strip():
+        raise PerformanceTelemetryError("METRICS_RESPONSE_EMPTY", http_status=status)
+    return PrometheusText(decoded, http_status=status)
 
 
 def _counter_rates(
@@ -200,12 +326,17 @@ def counter_sample(
     previous_counters: dict[str, float] | None,
     previous_captured_at: datetime | None,
     metric_names: dict[str, str],
+    elapsed_seconds: float | None = None,
 ) -> PerformanceSample:
     elapsed = (
         (captured_at - previous_captured_at).total_seconds()
         if previous_captured_at is not None
         else 0.0
     )
+    if elapsed_seconds is not None:
+        if not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0:
+            raise PerformanceTelemetryError("METRICS_WINDOW_INVALID")
+        elapsed = elapsed_seconds
     rates, reset, reasons = _counter_rates(counters, previous_counters, elapsed)
     sample = PerformanceSample(
         fsid=fsid,
@@ -398,7 +529,7 @@ def collect_ceph_samples(
     if settings.performance_source != "prometheus":
         return []
     if not settings.performance_prometheus_url or not settings.ceph_expected_fsid:
-        raise PerformanceTelemetryError("Prometheus performance source is not fully configured")
+        raise PerformanceTelemetryError("METRICS_NOT_CONFIGURED")
     captured_at = captured_at or datetime.now(timezone.utc)
     if fetcher is fetch_prometheus_text:
         token = (
@@ -409,7 +540,12 @@ def collect_ceph_samples(
         text = fetcher(settings.performance_prometheus_url, bearer_token=token)
     else:
         text = fetcher(settings.performance_prometheus_url)
-    counters_by_osd, metric_names = parse_prometheus_counters(text)
+    try:
+        counters_by_osd, metric_names = parse_prometheus_counters(text)
+        binding = prometheus_identity_binding(text, settings.ceph_expected_fsid)
+    except PerformanceTelemetryError as exc:
+        exc.http_status = exc.http_status or getattr(text, "http_status", None)
+        raise
 
     cluster_counters = {
         semantic: sum(values.get(semantic, 0.0) for values in counters_by_osd.values())
@@ -442,6 +578,12 @@ def collect_ceph_samples(
             previous_captured_at=previous_time,
             metric_names=metric_names,
         )
+        sample.metadata["identity_binding"] = binding
+        if getattr(text, "http_status", None) is not None:
+            sample.metadata["http_status"] = text.http_status
+        if binding == "unverified":
+            sample.partial = True
+            sample.metadata["reasons"].append("TELEMETRY_IDENTITY_UNVERIFIED")
         store_sample(sample, db_conn=db_conn)
         samples.append(sample)
     return samples

@@ -14,7 +14,7 @@ READ_ONLY_ACTIONS = frozenset(
         "health", "capabilities", "ceph.status", "ceph.fsid", "ceph.versions",
         "ceph.osd_df", "ceph.osd_tree", "ceph.pool_ls_detail", "ceph.capacity_inventory",
         "ceph.osd_info_collect", "ceph.osd_map_export", "ceph.osd_dump", "ceph.daemon_ls", "ceph.crush_dump", "ceph.pg_dump", "ceph.osdmap_preview_context",
-        "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules",
+        "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules", "ceph.mgr_services",
         "ceph.host_ls", "ceph.health_detail", "ceph.df", "ceph.fs_dump", "ceph.client_environment",
         "ceph.crush_rule_dump", "rbd.pool.list", "rbd.image.list",
         "rbd.image.info", "rbd.device.list",

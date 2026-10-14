@@ -14,7 +14,7 @@ export const INVENTORY_ACTIONS = new Set([
   "ceph.osd_dump", "ceph.daemon_ls", "ceph.crush_dump", "ceph.pg_dump",
   "ceph.status", "ceph.fsid", "ceph.versions", "ceph.osd_df", "ceph.osd_tree",
   "ceph.pool_ls_detail", "ceph.crush_rule_dump",
-  "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules",
+  "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules", "ceph.mgr_services",
   "ceph.host_ls", "ceph.health_detail", "ceph.df",
 ]);
 export const RBD_READ_ACTIONS = new Set([
@@ -45,7 +45,7 @@ export const READ_ONLY_ACTIONS = new Set([
   "health", "capabilities", "ceph.fsid", "ceph.status", "ceph.versions",
   "ceph.osd_df", "ceph.osd_tree", "ceph.pool_ls_detail",
   "ceph.capacity_inventory", "ceph.osd_info_collect",
-  "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules",
+  "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules", "ceph.mgr_services",
   "ceph.host_ls", "ceph.health_detail", "ceph.df",
 ]);
 
@@ -78,6 +78,7 @@ const INVENTORY_COMMANDS = {
   "ceph.quorum_status": ["ceph", "quorum_status", "--format=json"],
   "ceph.mgr_dump": ["ceph", "mgr", "dump", "--format=json"],
   "ceph.mgr_modules": ["ceph", "mgr", "module", "ls", "--format=json"],
+  "ceph.mgr_services": ["ceph", "mgr", "services", "--format=json"],
   "ceph.host_ls": ["ceph", "orch", "host", "ls", "--format=json"],
   "ceph.health_detail": ["ceph", "health", "detail", "--format=json"],
   "ceph.df": ["ceph", "df", "detail", "--format=json"],

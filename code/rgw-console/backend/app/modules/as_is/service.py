@@ -13,7 +13,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from ...platform.config import build_config_snapshot, resolve_settings
 from ...services.executor_client import ExecutorClient, ExecutorClientError
-from ...services.performance import fetch_prometheus_text, parse_prometheus_counters, counter_sample
+from ...services.performance import (fetch_prometheus_text, parse_prometheus_counters, counter_sample,
+    PerformanceTelemetryError, prometheus_identity_binding)
 from ..cluster_metrics.normalization import normalize, samples
 from ..cluster_metrics.service import ACTIONS
 from ..osd_info_collector.domain import validate_collection, OsdInfoError
@@ -62,6 +63,16 @@ class CollectionControl:
     def timeout(self, maximum):
         self.check()
         return min(maximum, max(0.001, self.deadline - monotonic_time.monotonic()))
+
+
+def wait_for_metric_window(control, sampled_at, minimum_seconds):
+    """Wait cooperatively so cancellation/deadlines still release the request."""
+    while True:
+        control.check()
+        remaining = sampled_at + minimum_seconds - monotonic_time.monotonic()
+        if remaining <= 0:
+            return
+        control.cancelled.wait(min(CONTROL_POLL_SECONDS, remaining))
 
 
 @contextmanager
@@ -136,16 +147,23 @@ class AsIsService:
             if key.startswith('osd.') and key[4:] not in allowed:
                 raise AsIsError('DAEMON_SCOPE_REJECTED', 'OSD nằm ngoài phạm vi được cấu hình.', 403)
 
-    def _scrape(self, control):
+    def _scrape(self, control, *, verified_service_url=None):
         token = self.settings.performance_prometheus_bearer_token
         text = self.fetcher(self.settings.performance_prometheus_url, timeout_seconds=control.timeout(10),
                             bearer_token=token.get_secret_value() if token else None)
         control.check()
-        labels = set(re.findall(r'\b(?:fsid|cluster_fsid)="([^"\n]+)"', text))
-        if labels and labels != {self.settings.ceph_expected_fsid}:
-            raise AsIsError('FSID_MISMATCH', 'Nguồn chỉ số thuộc cluster FSID khác.')
-        counters, metric_names = parse_prometheus_counters(text)
-        return {'at': now(), 'counters': counters, 'metric_names': metric_names}
+        try:
+            counters, metric_names = parse_prometheus_counters(text)
+            binding = prometheus_identity_binding(text, self.settings.ceph_expected_fsid,
+                configured_url=self.settings.performance_prometheus_url, verified_service_url=verified_service_url)
+        except PerformanceTelemetryError as exc:
+            if exc.code == 'METRICS_FSID_MISMATCH':
+                raise AsIsError('FSID_MISMATCH', 'Nguồn chỉ số thuộc cluster FSID khác.') from None
+            exc.http_status = exc.http_status or getattr(text, 'http_status', None)
+            raise
+        return {'at': now(), 'counters': counters, 'metric_names': metric_names,
+            'text': text, 'http_status': getattr(text, 'http_status', None), 'identity_binding': binding,
+            'monotonic_at': monotonic_time.monotonic()}
 
     def observe(self, *, daemon_types=None, daemon_keys=None, deep=False, control=None):
         identity = self.identity()
@@ -181,6 +199,8 @@ class AsIsService:
                 first = self._scrape(control)
             except AsIsError:
                 raise
+            except PerformanceTelemetryError as exc:
+                sources['prometheus'] = exc.diagnostics()
             except Exception:
                 sources['prometheus'] = {'quality': 'UNAVAILABLE', 'reason': 'TELEMETRY_READ_FAILED'}
         actions = list(dict.fromkeys(action for scope in ['cluster', 'host', 'pool', 'osd', 'mon', 'mgr', *daemon_types] for action in ACTIONS[scope]))
@@ -309,21 +329,32 @@ class AsIsService:
         performance = {}
         if first:
             try:
-                second = self._scrape(control)
-                window = (second['at'] - first['at']).total_seconds()
+                mgr_services = evidence.get('ceph.mgr_services', {})
+                verified_service_url = ((mgr_services.get('data') or {}).get('prometheus')
+                    if mgr_services.get('quality') == 'VALID' else None)
+                first['identity_binding'] = prometheus_identity_binding(first['text'], identity['fsid'],
+                    configured_url=self.settings.performance_prometheus_url, verified_service_url=verified_service_url)
+                wait_for_metric_window(control, first['monotonic_at'], self.settings.performance_live_min_window_seconds)
+                second = self._scrape(control, verified_service_url=verified_service_url)
+                identity_verified = all(row['identity_binding'] != 'unverified' for row in (first, second))
+                window = second['monotonic_at'] - first['monotonic_at']
+                utc_window = (second['at'] - first['at']).total_seconds()
                 if window <= 0:
-                    raise ValueError('non-monotonic measurement')
+                    raise PerformanceTelemetryError('METRICS_WINDOW_INVALID', http_status=second['http_status'])
+                if abs(utc_window - window) > 1:
+                    raise PerformanceTelemetryError('METRICS_CLOCK_SHIFT', http_status=second['http_status'])
                 for osd_id, counters in second['counters'].items():
                     if osd_id not in allowed:
                         continue
                     measured = counter_sample(fsid=identity['fsid'], scope_type='osd', scope_id=osd_id,
                         captured_at=second['at'], counters=counters, previous_counters=first['counters'].get(osd_id),
-                        previous_captured_at=first['at'], metric_names=second['metric_names'])
+                        previous_captured_at=first['at'], metric_names=second['metric_names'], elapsed_seconds=window)
                     performance[osd_id] = [{'metric_id': f'osd.{field}', 'value': getattr(measured, field),
                         'unit': 'ops/s' if 'iops' in field else 'bytes/s', 'kind': 'rate',
                         'observed_at': second['at'].isoformat(), 'window_seconds': window,
-                        'quality': 'UNAVAILABLE' if measured.partial else 'VALID',
-                        'reason': ','.join(measured.metadata['reasons']) or None}
+                        'quality': 'UNAVAILABLE' if measured.partial else 'VALID' if identity_verified else 'PARTIAL',
+                        'reason': ','.join(measured.metadata['reasons'] +
+                            ([] if identity_verified else ['TELEMETRY_IDENTITY_UNVERIFIED'])) or None}
                         for field in ('read_iops', 'write_iops', 'total_iops', 'read_bytes_per_second', 'write_bytes_per_second', 'total_bytes_per_second')]
                     for metric in performance[osd_id]:
                         value = metric['value']
@@ -331,7 +362,14 @@ class AsIsService:
                             metric.update(value=None, quality='UNAVAILABLE', reason='NUMERIC_OUT_OF_RANGE')
                 sources['prometheus'] = {'quality': 'PARTIAL' if any(m['quality'] != 'VALID' for entries in performance.values() for m in entries) or not performance else 'VALID', 'started_at': first['at'].isoformat(),
                     'completed_at': second['at'].isoformat(), 'window_seconds': window,
-                    'identity_binding': 'configured_endpoint_and_verified_ceph_fsid'}
+                    'minimum_window_seconds': self.settings.performance_live_min_window_seconds,
+                    'sample_time_semantics': 'HTTP_RESPONSE_OBSERVED_TIME',
+                    'elapsed_time_source': 'monotonic_clock',
+                    'identity_binding': second['identity_binding'] if first['identity_binding'] == second['identity_binding'] else 'mixed_verified_bindings' if identity_verified else 'unverified',
+                    'identity_bindings': [first['identity_binding'], second['identity_binding']],
+                    'reason': None if identity_verified else 'TELEMETRY_IDENTITY_UNVERIFIED'}
+                if second['http_status'] is not None:
+                    sources['prometheus']['http_status'] = second['http_status']
                 # A cluster total is valid only with the identical complete OSD population in both samples.
                 present = {r['id'] for r in normalize('osd', evidence)}
                 complete = present and present == set(first['counters']) == set(second['counters']) and present <= allowed
@@ -347,6 +385,8 @@ class AsIsService:
                     limitations.append('Chưa đủ quần thể OSD đồng nhất để tính tổng I/O toàn cluster.')
             except AsIsError:
                 raise
+            except PerformanceTelemetryError as exc:
+                sources['prometheus'] = exc.diagnostics()
             except Exception:
                 sources['prometheus'] = {'quality': 'UNAVAILABLE', 'reason': 'TELEMETRY_READ_FAILED'}
         elif not prometheus:
@@ -460,7 +500,13 @@ class AsIsService:
             raise AsIsError('INVALID_COLLECTION', 'Chọn daemon và một trong ba giai đoạn thu thập.', 422)
         identity = self.identity()
         request_hash = digest({'keys': sorted(daemon_keys), 'phase': phase, 'note': note})
-        collection_id = uuid5(NAMESPACE_URL, f"as-is:{identity['cluster_id']}:{identity['fsid']}:{idempotency_key}") if idempotency_key else uuid4()
+        # Authenticated users each own their retry namespace. Sharing a client
+        # key must not replay another user's collection/audit actor. Anonymous
+        # lab installs retain their historical UUID derivation unchanged.
+        authenticated = bool(self.settings.console_auth_users or self.settings.console_auth_username)
+        namespace = (f"as-is-authenticated:{identity['cluster_id']}:{identity['fsid']}:{actor}"
+                     if authenticated else f"as-is:{identity['cluster_id']}:{identity['fsid']}")
+        collection_id = uuid5(NAMESPACE_URL, f"{namespace}:{idempotency_key}") if idempotency_key else uuid4()
         previous = self.repository.get(collection_id, **identity, include_deleted=True)
         if previous:
             if previous['request_hash'] != request_hash:

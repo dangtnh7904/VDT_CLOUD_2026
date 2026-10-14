@@ -248,6 +248,7 @@ test("daemon inventory uses fixed FSID-bound read commands and rejects extra par
     if (command === "ceph fsid") return ok(FSID);
     if (command === "ceph mon dump --format=json") return ok('{"epoch":4,"mons":[{"name":"a","rank":0}]}');
     if (command === "ceph mgr dump --format=json") return ok('{"active_name":"mgr-a","available":true}');
+    if (command === "ceph mgr services --format=json") return ok('{"prometheus":"http://mgr-a:9283/"}');
     throw new Error("Unexpected command");
   } };
   try {
@@ -256,8 +257,12 @@ test("daemon inventory uses fixed FSID-bound read commands and rejects extra par
     assert.equal(mon.fsid, FSID);
     assert.equal(mon.data.mons[0].name, "a");
     assert.equal((await executor.dispatch("ceph.mgr_dump")).data.active_name, "mgr-a");
+    const services = await executor.dispatch("ceph.mgr_services");
+    assert.equal(services.fsid, FSID);
+    assert.equal(services.data.prometheus, "http://mgr-a:9283/");
     const before = commands.length;
     await assert.rejects(() => executor.dispatch("ceph.mon_dump", { command: "ceph auth export" }), error => error.code === "INVALID_REQUEST");
+    await assert.rejects(() => executor.dispatch("ceph.mgr_services", { command: "ceph mgr fail mgr-a" }), error => error.code === "INVALID_REQUEST");
     assert.equal(commands.length, before);
   } finally { env(); }
 });

@@ -258,3 +258,13 @@ Ngày 14/10/2026 đã dọn 60 container rollback cũ, sau đó theo yêu cầu 
 - [Security triage](rgw-console/docs/OSDMAP_SECURITY_TRIAGE.md).
 - [Điều tra integration lịch sử](rgw-console/docs/INTEGRATION_FAILURE_INVESTIGATION.md).
 - [Kịch bản demo riêng](rgw-console/docs/DEMO.md).
+
+## 17. Nguyên tắc nghiệm thu production chỉ đọc
+
+Tài khoản web và quyền Ceph là hai lớp độc lập: viewer/operator/admin chỉ phân quyền dữ liệu Console; ngay cả admin web không được ghi vào Ceph. Actor audit phải xuất phát từ tài khoản xác thực, không từ header do người dùng cung cấp. DB runtime không quản trị schema; audit chỉ append và collection chỉ xóa mềm. DBA/root vẫn là phạm vi tin cậy riêng, không phải audit chống mọi quản trị viên.
+
+Endpoint có HTTP 200 chưa chắc có metric: MGR standby có thể trả body rỗng. Nguồn counter phải được gắn với cụm/daemon đúng; xác minh cluster bằng Ceph CLI không tự xác minh một HTTP exporter bất kỳ. Với exporter không có nhãn FSID, chỉ endpoint service từ MGR đã kiểm FSID mới có thể làm binding. Rate cần hai counter, đơn vị và khoảng đo monotonic; UTC dùng để truy vết. Khoảng chờ phải phù hợp cache thật, không suy ra IOPS từ placement hoặc biến thiếu dữ liệu thành 0.
+
+Staging có production flags không đồng nghĩa đã nghiệm thu production. Cần kiểm secret/DB role, HTTPS và tài khoản thật, tải/cancellation/restart, restore checksum/audit/evidence, scheduler/cảnh báo và image supply chain trên môi trường nhận. CA localhost, SSH account lab, unit test/mock, test bị skip hoặc file script chưa chạy đều không đóng gate môi trường đích. Worker OSDMap có phạm vi và gate riêng.
+
+Lượt triển khai 14/10/2026 đã sửa source và chuẩn bị staging riêng, nhưng runtime bị Docker Engine không khởi động; chưa phát hành image mới. [Biên bản cụ thể](rgw-console/docs/PRODUCTION_ACCEPTANCE_STATUS.md) phân biệt việc đã kiểm và gate còn mở; [quy trình vận hành](rgw-console/docs/PRODUCTION_OPERATIONS.md) mô tả backup/restore/tải/phát hành. README tiếp tục chỉ dùng cho hướng dẫn cài image đã phát hành.

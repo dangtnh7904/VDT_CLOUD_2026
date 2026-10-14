@@ -104,19 +104,14 @@ docker compose --env-file .env -f compose.production.yml --profile bundled-db ps
 
 Mở [https://localhost:8445](https://localhost:8445/). Tài khoản là `console-admin`; lấy mật khẩu tại `secrets/console_password` trong thư mục triển khai bằng trình soạn thảo riêng. Không gửi file secret, không đưa mật khẩu vào Git hoặc ảnh chụp.
 
-Kiểm readiness bằng PowerShell; bỏ kiểm certificate chỉ trong bộ cài thử tự ký này:
+Kiểm readiness với certificate của đúng bộ cài; `curl` hỏi mật khẩu nên không đưa secret vào command line:
 
 ```powershell
-$DemoPassword = (Get-Content -LiteralPath secrets/console_password -Raw).Trim()
-$DemoCredential = [PSCredential]::new('console-admin', (ConvertTo-SecureString $DemoPassword -AsPlainText -Force))
-try {
-    Invoke-RestMethod -Uri https://localhost:8445/api/ready -Authentication Basic -Credential $DemoCredential -SkipCertificateCheck
-} finally {
-    Remove-Variable DemoPassword, DemoCredential
-}
+curl.exe --cacert ./secrets/tls_certificate.pem --user console-admin https://localhost:8445/api/ready
+if ($LASTEXITCODE -ne 0) { throw 'TLS hoặc readiness chưa đạt; dừng cài đặt và kiểm cấu hình' }
 ```
 
-Kết quả cần `ready=true`. Với certificate tin cậy, bỏ `-SkipCertificateCheck`.
+Kết quả cần `ready=true`. Không bỏ kiểm certificate. Với certificate do CA của hệ thống tin cậy cấp, dùng trust store hoặc CA đã được quản trị viên xác minh.
 
 ## 6. Kết nối cluster Ceph
 

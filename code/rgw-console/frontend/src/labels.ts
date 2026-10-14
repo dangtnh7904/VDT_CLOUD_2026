@@ -16,5 +16,15 @@ REASON_LABELS.INVALID_SOURCE_TIMESTAMP = "Thời điểm nguồn nằm trong tư
 REASON_LABELS.INVALID_DAEMON_SOURCE_SCHEMA = "Nguồn không đúng cấu trúc daemon đã hỗ trợ";
 REASON_LABELS.KIND_CHANGED = "Loại chỉ số khác nhau; không tính chênh lệch";
 REASON_LABELS.SOURCE_NONFINITE = "Nguồn trả giá trị số không hữu hạn";
-export function reasonLabel(value?: string | null): string { return value ? REASON_LABELS[value] || value : "—"; }
+export function reasonLabel(value?: string | null): string { return value ? value.split(",").map(reason => REASON_LABELS[reason] || reason).join("; ") : "—"; }
 Object.assign(REASON_LABELS, { INVALID_SOURCE_SCHEMA: "Nguồn không đúng cấu trúc đã hỗ trợ", SOURCE_PREDATES_REQUEST: "Nguồn có trước yêu cầu đọc này", INVALID_SOURCE_FIELD: "Trường dữ liệu nguồn không hợp lệ", METRIC_KIND_CHANGED: "Loại chỉ số đã thay đổi", METRIC_VALUE_INVALID: "Giá trị chỉ số không hợp lệ", NUMERIC_OUT_OF_RANGE: "Chênh lệch số vượt giới hạn" });
+Object.assign(REASON_LABELS, {
+  METRICS_RESPONSE_EMPTY: "Nguồn metric trả về dữ liệu rỗng", METRICS_HTTP_ERROR: "Nguồn metric trả mã HTTP lỗi",
+  METRICS_TIMEOUT: "Nguồn metric hết thời gian chờ", METRICS_CONNECTION_FAILED: "Không kết nối được nguồn metric",
+  METRICS_CONTENT_TYPE_INVALID: "Nguồn metric trả sai kiểu nội dung", METRICS_RESPONSE_TOO_LARGE: "Dữ liệu metric vượt giới hạn",
+  METRICS_ENCODING_INVALID: "Dữ liệu metric sai mã hóa", METRICS_PARSE_FAILED: "Không đọc được cấu trúc metric",
+  METRICS_OSD_COUNTERS_MISSING: "Nguồn chưa có counter I/O OSD", METRICS_DUPLICATE_SERIES: "Nguồn có series metric trùng",
+  METRICS_INVALID_COUNTER: "Counter metric không hợp lệ", METRICS_FSID_MISMATCH: "Nguồn metric thuộc cụm khác",
+  METRICS_REDIRECT_REJECTED: "Nguồn metric chuyển hướng; cần xác minh lại endpoint", METRICS_WINDOW_INVALID: "Khoảng đo metric không hợp lệ",
+  METRICS_CLOCK_SHIFT: "Đồng hồ thay đổi trong khoảng đo; không sử dụng rate", TELEMETRY_IDENTITY_UNVERIFIED: "Chưa xác minh metric đúng cụm",
+});

@@ -51,6 +51,10 @@ def source_valid(action, value):
         return ('active_name' in value or 'standbys' in value) and isinstance(value.get('active_name', ''), str) and isinstance(value.get('standbys', []), list) and all(_named(row, 'name') for row in value.get('standbys', []))
     if action == 'ceph.mgr_modules':
         return isinstance(value.get('enabled_modules'), list) and all(isinstance(name, str) for name in value['enabled_modules'])
+    if action == 'ceph.mgr_services':
+        # A missing Prometheus module is a valid service list; it cannot bind a
+        # metric endpoint. URLs stay in internal evidence and are not exported.
+        return all(isinstance(name, str) and isinstance(url, str) for name, url in value.items())
     if action in {'ceph.osd_df', 'ceph.osd_tree'}:
         return isinstance(value.get('nodes'), list) and all(isinstance(row, dict) and _integer(row.get('id')) for row in value['nodes'])
     if action == 'ceph.osd_dump':

@@ -78,6 +78,12 @@ class DatabasePermissionsIntegrationTests(unittest.TestCase):
         self.conn.execute(sql.SQL(
             "CREATE TABLE {} (version INTEGER PRIMARY KEY)"
         ).format(sql.Identifier(self.schema, "schema_migrations")))
+        self.conn.execute(sql.SQL(
+            "CREATE TABLE {} (id BIGSERIAL PRIMARY KEY, deleted_at TIMESTAMPTZ, deleted_by TEXT)"
+        ).format(sql.Identifier(self.schema, "as_is_collections")))
+        self.conn.execute(sql.SQL(
+            "CREATE TABLE {} (id BIGSERIAL PRIMARY KEY, collection_id BIGINT NOT NULL REFERENCES {} (id) ON DELETE CASCADE, actor TEXT NOT NULL)"
+        ).format(sql.Identifier(self.schema, "as_is_collection_events"), sql.Identifier(self.schema, "as_is_collections")))
         self.conn.execute(sql.SQL("INSERT INTO {} VALUES (19)").format(sql.Identifier(self.schema, "schema_migrations")))
         self.conn.execute(sql.SQL("GRANT CREATE ON SCHEMA {} TO PUBLIC").format(sql.Identifier(self.schema)))
 
@@ -117,13 +123,24 @@ class DatabasePermissionsIntegrationTests(unittest.TestCase):
 
     def test_runtime_can_store_metadata_but_cannot_modify_schema_or_migrations(self):
         self.configure()
+        migrations = sql.Identifier(self.schema, "schema_migrations")
+        # The permission refresh must preserve read access while discarding
+        # every unsafe old column grant, including grants inherited by PUBLIC.
+        self.conn.execute(sql.SQL("GRANT ALL (version) ON TABLE {} TO {}").format(migrations, sql.Identifier(self.role)))
+        self.conn.execute(sql.SQL("GRANT ALL (version) ON TABLE {} TO PUBLIC").format(migrations))
+        self.configure()
         self.as_runtime()
         observations = sql.Identifier(self.schema, "observations")
-        migrations = sql.Identifier(self.schema, "schema_migrations")
         row_id = self.conn.execute(sql.SQL("INSERT INTO {} (payload) VALUES ('inventory') RETURNING id").format(observations)).fetchone()[0]
         self.conn.execute(sql.SQL("UPDATE {} SET payload='dry-run' WHERE id=%s").format(observations), (row_id,))
         self.assertEqual(self.conn.execute(sql.SQL("SELECT payload FROM {}").format(observations)).fetchone()[0], "dry-run")
         self.assertEqual(self.conn.execute(sql.SQL("SELECT version FROM {}").format(migrations)).fetchone()[0], 19)
+        for privilege in ("INSERT", "UPDATE", "REFERENCES"):
+            with self.subTest(migration_column_privilege=privilege):
+                self.assertFalse(self.conn.execute(
+                    "SELECT has_column_privilege(current_user, %s, 'version', %s)",
+                    (migrations.as_string(self.conn), privilege),
+                ).fetchone()[0])
         for statement in (
             sql.SQL("CREATE TABLE {} (id INTEGER)").format(sql.Identifier(self.schema, "unsafe")),
             sql.SQL("ALTER TABLE {} ADD COLUMN unsafe TEXT").format(observations),
@@ -156,6 +173,37 @@ class DatabasePermissionsIntegrationTests(unittest.TestCase):
         self.configure()
         self.as_runtime()
         self.conn.execute(sql.SQL("INSERT INTO {} VALUES ('new metadata')").format(sql.Identifier(self.schema, "new_inventory")))
+
+    def test_audit_is_append_only_and_physical_collection_delete_cannot_cascade(self):
+        self.configure()
+        # Provisioning must also remove old column-level grants, not only
+        # table-level grants, before enforcing append-only/immutable payload.
+        self.conn.execute(sql.SQL("GRANT UPDATE (actor) ON TABLE {} TO {}").format(sql.Identifier(self.schema, "as_is_collection_events"), sql.Identifier(self.role)))
+        self.conn.execute(sql.SQL("GRANT UPDATE (id) ON TABLE {} TO {}").format(sql.Identifier(self.schema, "as_is_collections"), sql.Identifier(self.role)))
+        self.conn.execute(sql.SQL("GRANT UPDATE (actor) ON TABLE {} TO PUBLIC").format(sql.Identifier(self.schema, "as_is_collection_events")))
+        self.conn.execute(sql.SQL("GRANT UPDATE (id) ON TABLE {} TO PUBLIC").format(sql.Identifier(self.schema, "as_is_collections")))
+        # Re-running after migration must not accidentally re-grant audit DML.
+        self.configure()
+        self.as_runtime()
+        collections = sql.Identifier(self.schema, "as_is_collections")
+        events = sql.Identifier(self.schema, "as_is_collection_events")
+        collection_id = self.conn.execute(sql.SQL("INSERT INTO {} DEFAULT VALUES RETURNING id").format(collections)).fetchone()[0]
+        self.conn.execute(sql.SQL("INSERT INTO {} (collection_id, actor) VALUES (%s, 'operator-person')").format(events), (collection_id,))
+        self.conn.execute(sql.SQL("UPDATE {} SET deleted_at=now(), deleted_by='admin-person' WHERE id=%s").format(collections), (collection_id,))
+        self.conn.execute(sql.SQL("INSERT INTO {} (collection_id, actor) VALUES (%s, 'admin-person')").format(events), (collection_id,))
+        self.conn.execute(sql.SQL("UPDATE {} SET deleted_at=NULL, deleted_by=NULL WHERE id=%s").format(collections), (collection_id,))
+        self.assertEqual(self.conn.execute(sql.SQL("SELECT actor FROM {} ORDER BY id").format(events)).fetchall(), [("operator-person",), ("admin-person",)])
+        for statement in (
+            sql.SQL("UPDATE {} SET actor='spoofed'").format(events),
+            sql.SQL("DELETE FROM {}").format(events),
+            sql.SQL("TRUNCATE {}").format(events),
+            sql.SQL("DELETE FROM {}").format(collections),
+            sql.SQL("TRUNCATE {} CASCADE").format(collections),
+            sql.SQL("UPDATE {} SET id=id").format(collections),
+        ):
+            with self.subTest(statement=statement.as_string(self.conn)):
+                self.assert_denied(statement)
+        self.assertEqual(self.conn.execute(sql.SQL("SELECT count(*) FROM {}").format(events)).fetchone()[0], 2)
 
     def test_dedicated_database_acl_denies_create_schema_and_temporary_tables(self):
         # The DB-level production branch is exercised only in a new disposable

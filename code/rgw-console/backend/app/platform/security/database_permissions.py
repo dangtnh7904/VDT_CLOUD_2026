@@ -136,13 +136,48 @@ def _configure_runtime_role(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}"
     ).format(schema, role))
     conn.execute(sql.SQL("REVOKE ALL ON TABLE {} FROM {}").format(migration_table, role))
+    _revoke_column_privileges(conn, schema_name, "schema_migrations", role, privilege="ALL")
+    _revoke_column_privileges(conn, schema_name, "schema_migrations", sql.SQL("PUBLIC"), privilege="ALL")
     conn.execute(sql.SQL("GRANT SELECT ON TABLE {} TO {}").format(migration_table, role))
+    # Collection create/delete/restore record audit events atomically. The
+    # runtime can append an event but must never rewrite or remove history.
+    events_table = sql.Identifier(schema_name, "as_is_collection_events")
+    if conn.execute("SELECT to_regclass(%s)", (events_table.as_string(conn),)).fetchone()[0]:
+        _revoke_column_privileges(conn, schema_name, "as_is_collection_events", role)
+        _revoke_column_privileges(conn, schema_name, "as_is_collection_events", sql.SQL("PUBLIC"))
+        conn.execute(sql.SQL("REVOKE ALL ON TABLE {} FROM {}").format(events_table, role))
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON TABLE {} TO {}").format(events_table, role))
+    collections_table = sql.Identifier(schema_name, "as_is_collections")
+    if conn.execute("SELECT to_regclass(%s)", (collections_table.as_string(conn),)).fetchone()[0]:
+        # Deletion/restoration changes deleted_at through UPDATE. A runtime
+        # physical DELETE must not bypass retention or cascade audit records.
+        _revoke_column_privileges(conn, schema_name, "as_is_collections", role)
+        _revoke_column_privileges(conn, schema_name, "as_is_collections", sql.SQL("PUBLIC"))
+        conn.execute(sql.SQL("REVOKE UPDATE, DELETE, TRUNCATE ON TABLE {} FROM {}").format(collections_table, role))
+        conn.execute(sql.SQL("GRANT UPDATE (deleted_at, deleted_by) ON TABLE {} TO {}").format(collections_table, role))
     conn.execute(sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA {} FROM {}").format(schema, role))
     conn.execute(sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA {} FROM PUBLIC").format(schema))
     conn.execute(sql.SQL("GRANT USAGE ON ALL SEQUENCES IN SCHEMA {} TO {}").format(schema, role))
     # Do not inherit arbitrary SECURITY DEFINER functions exposed via PUBLIC.
     conn.execute(sql.SQL("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {} FROM {}").format(schema, role))
     conn.execute(sql.SQL("REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA {} FROM PUBLIC").format(schema))
+
+
+def _revoke_column_privileges(conn, schema_name, table_name, role, *, privilege="UPDATE"):
+    # Explicitly clear old column grants before applying the protected-table
+    # policy. Migration columns are read-only; audit/collection updates are
+    # limited to append-only events and the two soft-delete fields.
+    if privilege not in {"ALL", "UPDATE"}:
+        raise ValueError("unsupported protected-table column privilege")
+    rows = conn.execute("""SELECT attribute.attname FROM pg_attribute attribute
+        JOIN pg_class relation ON relation.oid=attribute.attrelid
+        JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace
+        WHERE namespace.nspname=%s AND relation.relname=%s
+          AND attribute.attnum>0 AND NOT attribute.attisdropped
+        ORDER BY attribute.attnum""", (schema_name, table_name)).fetchall()
+    if rows:
+        columns = sql.SQL(', ').join(sql.Identifier(row[0]) for row in rows)
+        conn.execute(sql.SQL("REVOKE {} ({}) ON TABLE {} FROM {}").format(sql.SQL(privilege), columns, sql.Identifier(schema_name, table_name), role))
 
 
 def main() -> int:

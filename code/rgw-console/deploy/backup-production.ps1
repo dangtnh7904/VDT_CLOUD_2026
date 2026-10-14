@@ -23,6 +23,7 @@ function Read-RuntimeValue([string]$Name) {
 $project = Read-RuntimeValue 'COMPOSE_PROJECT_NAME'
 if ($project -notmatch '^[a-z0-9][a-z0-9_-]{0,127}$') { throw 'Invalid Compose project name' }
 $operationId = [guid]::NewGuid().ToString('N')
+$backupTimer = [Diagnostics.Stopwatch]::StartNew()
 $helperName = "slc-backup-$operationId"
 $utf8 = [Text.UTF8Encoding]::new($false)
 function Invoke-Docker([string[]]$Arguments) {
@@ -66,6 +67,7 @@ $writers = @($runningIds | ForEach-Object { Inspect-Container $_ })
 $stopped = @()
 $dumpPath = "/tmp/slc-$operationId.dump"
 $asIsExportPath = "/tmp/slc-$operationId-as-is.jsonl"
+$auditExportPath = "/tmp/slc-$operationId-audit.jsonl"
 $asIsCheckpointPath = Join-Path $outputPath 'as-is-payload-checkpoint.jsonl'
 $asIsSummary = @{ collections_verified=0; deleted_collections_verified=0 }
 $volumeMetadata = @()
@@ -129,6 +131,9 @@ try {
     if ($migrations.Count -ne $expectedSchema -or (@($migrations.version) -join ',') -ne ((1..$expectedSchema) -join ',')) { throw 'Expected the complete contiguous migration history at the backup checkpoint' }
     Write-Json 'migrations.json' $migrations
     if ($schema -ge 21) {
+        $auditSql = "SELECT row_to_json(x)::text FROM (SELECT id,collection_id,event_type,actor,occurred_at,sha256 FROM as_is_collection_events ORDER BY id) x"
+        Invoke-Docker @('exec', '-u', 'postgres', $databaseName, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '--output', $auditExportPath, '-c', $auditSql) | Out-Null
+        Invoke-Docker @('cp', "${databaseName}:$auditExportPath", (Join-Path $outputPath 'as-is-audit.jsonl')) | Out-Null
         # Stream one row at a time to a fixed operation file; never aggregate
         # full collection payloads in PowerShell or print them to the terminal.
         Invoke-Docker @('exec', '-u', 'postgres', $databaseName, 'psql', '-U', 'storage_lab_console', '-d', 'storage_lab_console', '-At', '-v', 'ON_ERROR_STOP=1', '--output', $asIsExportPath, '-c', $asIsSql) | Out-Null
@@ -163,6 +168,7 @@ try {
     })
     Write-Json 'backup-metadata.json' @{
         format_version=1; status='COMPLETE'; operation_id=$operationId; started_at=$startedAt; completed_at=[DateTime]::UtcNow.ToString('o')
+        duration_seconds=[math]::Round($backupTimer.Elapsed.TotalSeconds,3); audit_checkpoint='as-is-audit.jsonl'
         source_project=$project; schema_version=$schema; application_image_reference=$applicationImageReference; application_image_id=$applicationImage
         postgres_image_id=$databaseImage; database='storage_lab_console'; database_user='storage_lab_console'
         volumes=$volumeMetadata; artifacts=$artifacts; registry_rows=@($registry).Count
@@ -176,6 +182,7 @@ try {
 } finally {
     & docker exec -u postgres $databaseName rm -f $dumpPath *> $null
     & docker exec -u postgres $databaseName rm -f $asIsExportPath *> $null
+    & docker exec -u postgres $databaseName rm -f $auditExportPath *> $null
     if (Test-Path -LiteralPath $asIsCheckpointPath) { Remove-Item -LiteralPath $asIsCheckpointPath }
     # Remove only the helper carrying this operation's exact label.
     $helper = & docker inspect $helperName 2>$null | ConvertFrom-Json

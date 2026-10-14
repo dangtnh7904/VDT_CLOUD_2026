@@ -10,6 +10,10 @@ export type ConsoleView = "overview" | "metrics" | "inventory" | "comparison" | 
 export type RuntimeConfig = {
   console_read_only: boolean;
   application_version: string;
+  console_role?: "viewer" | "operator" | "admin" | null;
+  environment?: string;
+  deployment_scope?: string;
+  deployment_id?: string;
   features: { upgrade: boolean; lab: boolean; legacy_rgw: boolean; legacy_rbd: boolean };
 };
 
@@ -17,7 +21,8 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfig {
   const config = value as Partial<RuntimeConfig> | null;
   const names = ["upgrade", "lab", "legacy_rgw", "legacy_rbd"] as const;
   if (!config || typeof config.console_read_only !== "boolean" || typeof config.application_version !== "string"
-      || !config.application_version || !config.features || names.some(name => typeof config.features?.[name] !== "boolean")) {
+      || !config.application_version || !config.features || names.some(name => typeof config.features?.[name] !== "boolean")
+      || (config.console_role != null && !["viewer", "operator", "admin"].includes(config.console_role))) {
     throw new Error("Cấu hình giao diện không hợp lệ hoặc chưa sẵn sàng.");
   }
   return config as RuntimeConfig;

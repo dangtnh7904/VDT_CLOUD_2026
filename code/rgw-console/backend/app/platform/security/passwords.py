@@ -14,6 +14,8 @@ def validate_password_hash(encoded: str) -> tuple[int, bytes, bytes]:
     """Decode a bounded PBKDF2-SHA256 record without exposing its contents."""
 
     try:
+        if not isinstance(encoded, str) or len(encoded) > 256:
+            raise ValueError
         algorithm, iterations_text, salt_text, digest_text = encoded.split("$")
         iterations = int(iterations_text)
         salt = base64.b64decode(salt_text, validate=True)

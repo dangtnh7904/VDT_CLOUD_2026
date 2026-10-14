@@ -31,6 +31,12 @@ x-application: &application
   init: true
   stop_grace_period: 45s
   restart: unless-stopped
+  cpus: ${APPLICATION_CPUS:-1.0}
+  mem_limit: ${APPLICATION_MEMORY:-512m}
+  pids_limit: ${APPLICATION_PIDS:-256}
+  logging: &bounded-logging
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
 
 x-database-secret: &database-secret
   source: database_url
@@ -71,6 +77,10 @@ services:
       timeout: 3s
       retries: 30
     restart: unless-stopped
+    cpus: ${DATABASE_CPUS:-1.0}
+    mem_limit: ${DATABASE_MEMORY:-768m}
+    pids_limit: 256
+    logging: *bounded-logging
 
   migrate:
     <<: *application
@@ -141,6 +151,10 @@ services:
     depends_on:
       api: {condition: service_healthy}
     restart: unless-stopped
+    cpus: ${INGRESS_CPUS:-0.5}
+    mem_limit: ${INGRESS_MEMORY:-128m}
+    pids_limit: 64
+    logging: *bounded-logging
 
   executor:
     <<: *application

@@ -1,0 +1,30 @@
+# Optional multi-account overlay. The private JSON is never baked into an image.
+# Use together with compose.production.yml; do not enable in a writable lab.
+x-accounts-environment: &accounts-environment
+  CONSOLE_AUTH_USERNAME: ""
+  CONSOLE_AUTH_PASSWORD_HASH_FILE: ""
+  CONSOLE_AUTH_USERS_FILE: /run/secrets/console_users
+x-accounts-secret: &accounts-secret
+  source: console_users
+  target: console_users
+  uid: "10001"
+  gid: "10001"
+  mode: 0400
+services:
+  migrate:
+    environment: *accounts-environment
+    secrets: [*accounts-secret]
+  database-permissions:
+    environment: *accounts-environment
+    secrets: [*accounts-secret]
+  api:
+    environment: *accounts-environment
+    secrets: [*accounts-secret]
+  capacity-collector:
+    environment: *accounts-environment
+    secrets: [*accounts-secret]
+  performance-collector:
+    environment: *accounts-environment
+    secrets: [*accounts-secret]
+secrets:
+  console_users: {file: ./secrets/console_users.json}

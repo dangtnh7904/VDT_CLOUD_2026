@@ -9,6 +9,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .platform.security.passwords import validate_password_hash
+from .platform.security.accounts import ConsoleAccount, load_console_accounts
 
 
 def _csv_set(value: str) -> frozenset[str]:
@@ -58,6 +59,8 @@ class Settings(BaseSettings):
     console_auth_username: str = ""
     console_auth_password_hash_file: Path | None = None
     console_auth_password_hash: SecretStr | None = Field(default=None, exclude=True)
+    console_auth_users_file: Path | None = Field(default=None, exclude=True, repr=False)
+    console_auth_users: dict[str, ConsoleAccount] = Field(default_factory=dict, exclude=True, repr=False)
 
     feature_upgrade: bool = False
     feature_lab: bool = False
@@ -182,6 +185,9 @@ class Settings(BaseSettings):
     performance_prometheus_url: str | None = None
     performance_prometheus_bearer_token: SecretStr | None = None
     performance_collector_interval_seconds: float = Field(default=15.0, ge=10, le=300)
+    # Must cover the configured exporter cache refresh interval. Two HTTP reads
+    # inside one cached sample must not be presented as a new short I/O window.
+    performance_live_min_window_seconds: float = Field(default=15.0, ge=10, le=30)
     performance_current_window_seconds: int = Field(default=15, ge=10, le=3600)
     performance_stale_after_seconds: float = Field(default=45.0, ge=10, le=3600)
     performance_raw_retention_hours: int = Field(default=24, ge=1, le=24 * 31)
@@ -292,6 +298,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_capacity_policy(self):
+        if self.console_auth_users:
+            raise ValueError("console accounts must use CONSOLE_AUTH_USERS_FILE")
+        if self.console_auth_users_file is not None:
+            if self.console_auth_username or self.console_auth_password_hash_file or self.console_auth_password_hash:
+                raise ValueError("CONSOLE_AUTH_USERS_FILE cannot be combined with single-user console authentication")
+            self.console_auth_users = load_console_accounts(self.console_auth_users_file)
+            if not self.console_read_only:
+                raise ValueError("CONSOLE_AUTH_USERS_FILE requires CONSOLE_READ_ONLY=true")
         if self.console_auth_password_hash_file is not None:
             try:
                 encoded_hash = self.console_auth_password_hash_file.read_text(encoding="utf-8").strip()
@@ -312,8 +326,8 @@ class Settings(BaseSettings):
         if self.app_env == "production":
             if not self.console_read_only:
                 raise ValueError("APP_ENV=production requires CONSOLE_READ_ONLY=true")
-            if not self.console_auth_username or not self.console_auth_password_hash_file:
-                raise ValueError("production requires console authentication username and password hash file")
+            if not self.console_auth_users and (not self.console_auth_username or not self.console_auth_password_hash_file):
+                raise ValueError("production requires console authentication username and password hash file or CONSOLE_AUTH_USERS_FILE")
             if not self.origins:
                 raise ValueError("production requires explicit HTTPS CORS_ORIGINS")
             for origin in self.origins:

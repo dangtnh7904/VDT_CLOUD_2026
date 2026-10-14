@@ -9,6 +9,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from urllib.parse import unquote
 
 from starlette.datastructures import Headers
@@ -17,6 +18,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ...config import Settings
 from .passwords import verify_password
+from .accounts import ConsoleRole
 
 
 UUID_PATH = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
@@ -40,6 +42,18 @@ LOCAL_POST_PATHS = tuple(re.compile(expression + r"\Z") for expression in (
     r"/api/v1/osdmap-previews(?:/" + UUID_PATH + r"/export)?",
 ))
 LOCAL_DELETE_PATHS = (re.compile(r"/api/v1/as-is/collections/" + UUID_PATH + r"\Z"),)
+VIEWER_POST_PATHS = tuple(re.compile(expression + r"\Z") for expression in (
+    r"/api/v1/as-is/(?:observe|export|compare(?:/export)?)",
+    r"/api/v1/exports",
+    r"/api/v1/osdmap-previews/" + UUID_PATH + r"/export",
+))
+ADMIN_POST_PATHS = (re.compile(r"/api/v1/as-is/collections/" + UUID_PATH + r"/restore\Z"),)
+
+
+@dataclass(frozen=True)
+class ConsoleIdentity:
+    username: str
+    role: ConsoleRole
 
 
 def canonical_path(scope: Scope) -> str | None:
@@ -72,6 +86,20 @@ def permitted_read_only_request(method: str, path: str) -> bool:
     return any(pattern.fullmatch(path) for pattern in patterns)
 
 
+def permitted_role_request(role: ConsoleRole, method: str, path: str) -> bool:
+    """All role capabilities stay inside the explicit Ceph read-only policy."""
+
+    if role not in {"viewer", "operator", "admin"} or not permitted_read_only_request(method, path):
+        return False
+    if role == "admin" or method in {"GET", "HEAD"}:
+        return True
+    if method != "POST":
+        return False
+    if role == "viewer":
+        return any(pattern.fullmatch(path) for pattern in VIEWER_POST_PATHS)
+    return not any(pattern.fullmatch(path) for pattern in ADMIN_POST_PATHS)
+
+
 class ConsoleSecurityMiddleware:
     def __init__(self, app: ASGIApp, settings_provider: Callable[[], Settings]) -> None:
         self.app = app
@@ -81,28 +109,38 @@ class ConsoleSecurityMiddleware:
         self._verified: OrderedDict[bytes, float] = OrderedDict()
         self._password_checks = asyncio.Semaphore(4)
 
-    async def _authenticated(self, headers: Headers, settings: Settings) -> bool:
-        if not settings.console_auth_username:
-            return True
+    async def _authenticated(self, headers: Headers, settings: Settings) -> ConsoleIdentity | None:
+        if not settings.console_auth_username and not settings.console_auth_users:
+            return ConsoleIdentity("", "admin")
         authorization = headers.get("authorization", "")
         if len(authorization) > 4096:
-            return False
+            return None
         scheme, separator, credential_text = authorization.partition(" ")
         if not separator or scheme.lower() != "basic":
-            return False
+            return None
         try:
             decoded = base64.b64decode(credential_text, validate=True).decode("utf-8")
             username, separator, password = decoded.partition(":")
         except (ValueError, UnicodeError, binascii.Error):
-            return False
-        if not separator or not hmac.compare_digest(username.encode(), settings.console_auth_username.encode()):
-            return False
-        encoded_hash = settings.console_auth_password_hash.get_secret_value()
-        cache_key = hashlib.sha256((authorization + "\0" + encoded_hash + "\0" + username).encode()).digest()
+            return None
+        if not separator:
+            return None
+        if settings.console_auth_users:
+            account = settings.console_auth_users.get(username)
+            if account is None:
+                return None
+            encoded_hash = account.password_hash.get_secret_value()
+            identity = ConsoleIdentity(account.username, account.role)
+        else:
+            if not hmac.compare_digest(username.encode(), settings.console_auth_username.encode()):
+                return None
+            encoded_hash = settings.console_auth_password_hash.get_secret_value()
+            identity = ConsoleIdentity(username, "admin")
+        cache_key = hashlib.sha256((authorization + "\0" + encoded_hash + "\0" + username + "\0" + identity.role).encode()).digest()
         now = time.monotonic()
         if self._verified.get(cache_key, 0) > now:
             self._verified.move_to_end(cache_key)
-            return True
+            return identity
         async with self._password_checks:
             accepted = await asyncio.to_thread(verify_password, password, encoded_hash)
         if accepted:
@@ -110,14 +148,14 @@ class ConsoleSecurityMiddleware:
             self._verified.move_to_end(cache_key)
             while len(self._verified) > 128:
                 self._verified.popitem(last=False)
-        return accepted
+        return identity if accepted else None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
         settings = self.settings_provider()
-        secured = settings.console_read_only or bool(settings.console_auth_username)
+        secured = settings.console_read_only or bool(settings.console_auth_username or settings.console_auth_users)
         if not secured:
             await self.app(scope, receive, send)
             return
@@ -143,12 +181,18 @@ class ConsoleSecurityMiddleware:
             await self.app(scope, receive, send)
             return
         headers = Headers(scope=scope)
-        if not await self._authenticated(headers, settings):
+        identity = await self._authenticated(headers, settings)
+        if identity is None:
             await reject(401, "CONSOLE_AUTH_REQUIRED", "Console authentication required", challenge=True)
             return
-        scope.setdefault("state", {})["console_actor"] = settings.console_auth_username
+        state = scope.setdefault("state", {})
+        state["console_actor"] = identity.username
+        state["console_role"] = identity.role
         if settings.console_read_only and not permitted_read_only_request(method, path):
             await reject(403, "CONSOLE_READ_ONLY", "Console chỉ cho phép đọc Ceph và quản lý dữ liệu thu thập cục bộ.")
+            return
+        if settings.console_auth_users and not permitted_role_request(identity.role, method, path):
+            await reject(403, "CONSOLE_ROLE_FORBIDDEN", "Tài khoản không có quyền thực hiện thao tác này.")
             return
         if method not in {"GET", "HEAD", "OPTIONS"}:
             origin = headers.get("origin")

@@ -1,0 +1,71 @@
+schema_version: 1
+kind: core_readonly_production_preparation
+date_local: 2026-10-14
+timezone: Asia/Saigon
+status: PREPARED_RUNTIME_BLOCKED
+production_approved: false
+scope:
+  included: [fresh_metrics, as_is_collections, exports, same_daemon_type_comparison]
+  excluded: [benchmarks, live_ceph_upgrade, rbd_terminal_writes, osdmap_worker_acceptance]
+source_changes:
+  telemetry: [safe_http_diagnostics, empty_response_reason, reject_redirects, verified_mgr_service_binding, monotonic_live_window, clock_shift_rejection]
+  security: [file_based_accounts, viewer_operator_admin, authenticated_audit_actor, append_only_audit_grants, immutable_collection_payload_grants, forced_command_ssh_guard]
+  deployment: [isolated_staging_prep, local_ca_hostname_verification, resource_limits, rotated_logs, separate_runtime_db_secret]
+  operations: [https_acceptance_harness, read_only_ops_probe, opt_in_maintenance_scheduler, audit_checkpoint_restore_verification, candidate_build_and_signature_scripts]
+checks:
+  backend: {executed: 389, passed: 364, skipped: 25, failed: 0, environment: windows_host_python_3_10}
+  frontend: {passed: 33, failed: 0}
+  executor: {passed: 31, failed: 0}
+  typescript: PASS
+  frontend_build: PASS_WITH_BUNDLE_SIZE_WARNING
+  ssr_component_contracts: {assertions: 10, status: PASS_NOT_BROWSER_ACCEPTANCE}
+  powershell_parser: PASS
+  compose_staging_merge: PASS_STATIC_ONLY
+  staging_certificate_hostname_chain: PASS_LOCAL_CA_ONLY
+  server_client_account_hash_roundtrip: PASS
+  fresh_source_probe:
+    endpoint_from_live_verified_mgr_services: true
+    http_status: 200
+    response_bytes_at_probe: 174600
+    osd_counter_population: 6
+    counter_fields: [read_ops, write_ops, read_bytes, write_bytes]
+    global_mgr_prometheus_scrape_interval_seconds: 15
+    daemon_overrides_and_target_site_trust: NOT_VERIFIED
+  staging_http:
+    status: FAIL
+    failed_check: staging_target_and_readiness
+    http_status: null
+    error_code: NETWORK_UNAVAILABLE
+    created_collection_count: 0
+    cause: Docker_Desktop_inference_socket_startup_failure_engine_pipe_unavailable
+preservation:
+  original_env_sha256: bf0dc234a25e155b54b91b3aaf79e4b2b8a505ef3755e3a0644a040cadb354fb
+  original_env_modified: false
+  database_or_volume_deleted: false
+  ceph_daemon_mutation: false
+  docker_factory_reset: false
+  secrets_in_git_or_image: false
+release:
+  last_published_application: 5.1.2-rc.1
+  new_image_build: NOT_RUN
+  new_image_push: NOT_RUN
+  new_image_scan: NOT_RUN
+  new_sbom_provenance_inspection: NOT_RUN
+  new_signature_verification: NOT_RUN
+  source_commit_for_new_candidate: NOT_CREATED
+pending:
+  - restore_Docker_Linux_Engine_without_reset_or_data_loss
+  - run_skipped_postgresql_and_linux_guard_checks
+  - run_HTTPS_auth_RBAC_and_DB_role_checks_in_new_staging_containers
+  - run_load_abort_API_DB_executor_restart_and_slow_SSH_drills
+  - run_new_backup_restore_audit_evidence_rehearsal
+  - install_and_verify_dedicated_SSH_account_key_and_readonly_CephX_caps
+  - approve_and_test_scheduler_alert_delivery_offsite_encryption_retention
+  - define_required_metric_scope_and_approved_SLO_RPO_RTO
+  - build_scan_attest_sign_pin_and_retest_release_digest
+  - trusted_target_certificate_domain_and_receiver_signer_policy
+evidence:
+  public_status: ../../docs/PRODUCTION_ACCEPTANCE_STATUS.md
+  operations: ../../docs/PRODUCTION_OPERATIONS.md
+  ssh_guard: ../../docs/PRODUCTION_SSH.md
+  private_runtime_reports: retained_locally_not_committed

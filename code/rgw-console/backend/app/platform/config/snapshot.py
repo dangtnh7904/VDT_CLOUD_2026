@@ -116,6 +116,10 @@ def resolve_settings(settings: Settings) -> Settings:
         return settings
     profile = _load_profile(settings.cluster_config_path.resolve())
     merged = settings.model_dump()
+    # Auth accounts are intentionally excluded from public snapshots. Preserve
+    # the secret-file reference when rebuilding settings after profile merge.
+    if settings.console_auth_users_file is not None:
+        merged["console_auth_users_file"] = settings.console_auth_users_file
     explicitly_configured = set(settings.model_fields_set)
     for key, value in profile.items():
         if key not in explicitly_configured:

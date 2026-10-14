@@ -1,5 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { reasonLabel } from "./labels.ts";
+
+test("metric diagnostics use Vietnamese labels including combined reasons", () => {
+  assert.equal(reasonLabel("METRICS_RESPONSE_EMPTY"), "Nguồn metric trả về dữ liệu rỗng");
+  assert.match(reasonLabel("COUNTER_RESET,TELEMETRY_IDENTITY_UNVERIFIED"), /Counter đã reset; Chưa xác minh/);
+});
+
+test("runtime role is explicit and unknown capabilities fail closed", () => {
+  const config = { console_read_only: true, application_version: "5.2.0-staging", features: { upgrade: true, lab: false, legacy_rgw: false, legacy_rbd: false } };
+  for (const role of ["viewer", "operator", "admin", null]) assert.equal(parseRuntimeConfig({...config, console_role: role}).console_role, role);
+  assert.throws(() => parseRuntimeConfig({...config, console_role: "root"}), /cấu hình/i);
+});
 
 import {
   CAPACITY_GUIDANCE,

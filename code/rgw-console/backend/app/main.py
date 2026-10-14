@@ -138,11 +138,15 @@ idempotency_service = IdempotencyService()
 
 
 @app.get("/api/runtime-config")
-def runtime_config():
+def runtime_config(request: Request):
     settings = get_settings()
     return {
         "console_read_only": settings.console_read_only,
         "application_version": os.environ.get("APP_VERSION", "3.0.0"),
+        "environment": settings.app_env,
+        "deployment_scope": os.environ.get("APP_DEPLOYMENT_SCOPE", ""),
+        "deployment_id": settings.app_instance_id,
+        "console_role": getattr(request.state, "console_role", None) if getattr(request.state, "console_actor", "") else None,
         "features": {
             "upgrade": settings.feature_upgrade,
             "lab": settings.feature_lab,

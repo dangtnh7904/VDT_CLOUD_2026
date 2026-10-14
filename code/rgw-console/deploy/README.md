@@ -71,7 +71,7 @@ docker compose --env-file .env -f compose.production.yml --profile bundled-db ps
 
 Nếu dùng PostgreSQL ngoài, bỏ `--profile bundled-db`, thay URL/role/TLS và provision **database riêng dành cho console** trước. Không trỏ vào database/schema đang dùng chung với ứng dụng khác: bước `configure-database` điều chỉnh quyền PUBLIC trên database và các đối tượng trong schema public. Không sửa volume/database của deployment khác.
 
-Kiểm `/api/ready` qua HTTPS có xác thực: `ready=true`, schema 21 và frontend sẵn sàng. Certificate tin cậy không cần bỏ kiểm TLS. `/api/live` chỉ dùng kiểm tiến trình; response 401 khi không xác thực là bình thường. `migrate` và `database-permissions` phải kết thúc exit 0.
+Kiểm `/api/ready` qua HTTPS có xác thực: `ready=true`, schema 21 và frontend sẵn sàng. Giữ kiểm TLS bằng trust store/CA đã xác minh. `/api/live` chỉ kiểm tiến trình và không thay cho readiness có xác thực. `migrate` và `database-permissions` phải kết thúc exit 0.
 
 ## Kết nối Ceph chỉ đọc
 
@@ -90,7 +90,7 @@ Chuẩn bị management host có Python 3.6+, Ceph CLI/config/keyring được p
 Lấy helper từ chính image đã pin, từ thư mục deployment:
 
 ```powershell
-$AppImage = 'dang7904/storage-lab-console@sha256:49f5284d27fd4defe2e2804e3b4eb06eaa3ac19352026622de3eae6c417fbe1f'
+$AppImage = 'dang7904/storage-lab-console@sha256:35dd7b3d32b05ae6d726b1fe6b5875d47edbcf94f0481aebc25f83d81c9f79ee'
 $CollectorContainer = docker create $AppImage version
 if ($LASTEXITCODE -ne 0) { throw 'Không tạo được container tạm' }
 try {

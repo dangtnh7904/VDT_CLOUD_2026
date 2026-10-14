@@ -17,7 +17,7 @@ from .repository import CollectionRepository
 ACTIONS = {
     "cluster": ("ceph.status", "ceph.health_detail", "ceph.df", "ceph.versions"),
     "mon": ("ceph.mon_dump", "ceph.quorum_status"),
-    "mgr": ("ceph.mgr_dump", "ceph.mgr_modules"),
+    "mgr": ("ceph.mgr_dump", "ceph.mgr_modules", "ceph.mgr_services"),
     "rgw": ("ceph.daemon_ls",),
     "mds": ("ceph.fs_dump", "ceph.daemon_ls"),
     "host": ("ceph.host_ls",),
