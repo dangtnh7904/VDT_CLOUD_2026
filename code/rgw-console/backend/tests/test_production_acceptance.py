@@ -172,6 +172,22 @@ class EvidenceTests(unittest.TestCase):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_collector_feature_is_not_mutation_authority_and_missing_gate_fails_closed(self):
+        args = arguments()
+        for mutation_gate in (False, True, None):
+            class FakeClient:
+                def request(self, method, path, account, payload=None, **kwargs):
+                    if path == '/api/ready': return response({'ready': True})
+                    return response({'environment': 'production', 'deployment_scope': 'staging',
+                        'deployment_id': args.staging_project, 'console_read_only': True,
+                        'ceph_mutations_enabled': mutation_gate, 'console_role': 'admin',
+                        'features': {'upgrade': True, 'lab': False, 'legacy_rgw': False, 'legacy_rbd': False}})
+            harness = acceptance.Harness(args, FakeClient(), {'admin': self.account()})
+            with self.subTest(mutations=mutation_gate):
+                if mutation_gate is False: self.assertTrue(harness.runtime()['console_read_only'])
+                else:
+                    with self.assertRaisesRegex(acceptance.AcceptanceError, 'MUTATION_FEATURES_NOT_DISABLED'): harness.runtime()
+
     def account(self):
         return acceptance.Account("admin", "test-admin", "secret-not-in-report")
 
