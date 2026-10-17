@@ -14,7 +14,7 @@ reasons = {
     "src/test/erasure-code/TestErasureCodeJerasure.cc": "Adds std using declaration and renames local ruleset variable to rule; create_rule result, do_rule call and assertions are unchanged.",
     "src/test/erasure-code/TestErasureCodeLrc.cc": "Adds only using namespace std; no test behavior or selection change.",
     "src/test/erasure-code/TestErasureCodePlugin.cc": "Adds only using namespace std; no plugin test behavior or selection change.",
-    "src/test/erasure-code/TestErasureCodePluginClay.cc": "Changes Clay scalar_mds=isa test guard from HAVE_NASM_X64_AVX2 to WITH_EC_ISA_PLUGIN; target CMake sets the latter as a cache variable but no endpoint source defines it as a C++ macro, so standard test coverage may change.",
+    "src/test/erasure-code/TestErasureCodePluginClay.cc": "Changes Clay scalar_mds=isa test guard from HAVE_NASM_X64_AVX2 to WITH_EC_ISA_PLUGIN, generated via config-h.in.cmake/acconfig.h; coverage follows enabled ISA plugin capability including ARMv8 rather than only x64 NASM AVX2.",
     "src/test/erasure-code/TestErasureCodePluginIsa.cc": "Adds only using namespace std; no ISA plugin test behavior or selection change.",
     "src/test/erasure-code/TestErasureCodePluginJerasure.cc": "Adds only using namespace std; no plugin test behavior or selection change.",
     "src/test/erasure-code/TestErasureCodePluginLrc.cc": "Adds only using namespace std; no plugin test behavior or selection change.",

@@ -1,0 +1,25 @@
+# Optional overlay: docker compose -f compose.production.yml -f compose.osdmap.yml ...
+services:
+  api:
+    environment:
+      OSDMAP_PREVIEW_SPOOL: /var/lib/storage-lab-console/osdmap-spool
+    volumes:
+      - osdmap_spool:/var/lib/storage-lab-console/osdmap-spool
+  osdmap-preview:
+    image: ${OSDMAP_PREVIEW_IMAGE:?Set the tested offline worker image digest}
+    pull_policy: ${RELEASE_PULL_POLICY:-never}
+    network_mode: none
+    user: "10001:10001"
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 1
+    mem_limit: 1536m
+    pids_limit: 32
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m,mode=1777"]
+    volumes:
+      - osdmap_spool:/spool
+    restart: unless-stopped
+volumes:
+  osdmap_spool:

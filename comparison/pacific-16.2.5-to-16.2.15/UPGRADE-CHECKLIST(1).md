@@ -1,3 +1,5 @@
+> **Hướng dẫn hiện hành — 09/10/2026:** xem [comparison tổng](../README.md) và [plan PA2](../../plan-tổng.md). Findings/source traceability dưới đây được giữ nguyên. Nhánh PA1/PA2 drain-weight, G14–G16/T30–T38/R3A/R3B/R3H và H0/100 TB là thiết kế lịch sử đã được thay trong plan hiện hành; không dùng làm gate PA2 mặc định. PA2 mới luân chuyển X→S, nâng X; Y→X, nâng Y, bắt buộc deep-scrub toàn set trước chuyển và deep-scrub mới sau hội tụ từng group. Chưa có runtime PASS mới từ lần hợp nhất này.
+
 # Checklist nâng cấp Ceph Pacific 16.2.5 → 16.2.15
 
 > **Trạng thái:** Pha 3 — bộ so sánh `00`–`15` đã qua acceptance và mapping finding→control đã hoàn tất ở mức tài liệu. Mỗi finding có điểm vào applicability, gate, test, rollout, STOP hoặc rollback; đây là traceability thiết kế, không phải bằng chứng scenario đã chạy hay PASS.
@@ -5,6 +7,8 @@
 > **Quyết định mặc định hiện tại:** **HOLD / chưa đủ điều kiện GO Production** cho tới khi có As-Is của cluster đích, mọi gate áp dụng được đánh dấu PASS, test lab/canary có bằng chứng và owner ký nhận. Hoàn thành phân tích source không thay thế runtime validation.
 >
 > **Giới hạn:** đây là checklist chuẩn bị, kiểm chứng và ra quyết định; không phải lệnh cho phép thay đổi cluster. Không có lệnh nâng cấp, repair, migrate, trim hay thay cấu hình nào đã được chạy khi tạo tài liệu.
+>
+> **Evidence máy-đọc được — 12/10/2026:** [12 exact-hop pin](./EXACT-HOP-PINS.md) hiện đều `PENDING_INPUT`; [runtime manifest template](./RUNTIME-EVIDENCE-MANIFEST.template.json) khớp đúng 17 gate `G00`–`G16` và 68 test `T00`–`T38`, toàn bộ `NOT_RUN`. Template qua validator chỉ xác nhận cấu trúc, không đổi quyết định `HOLD` hoặc tạo runtime PASS.
 >
 > **Ngày lập:** 2026-09-17. **Cập nhật:** 2026-09-18 — PA1/PA2 + H0 chọn nguồn đúng và kiểm chứng trước khi X trở lại.
 >

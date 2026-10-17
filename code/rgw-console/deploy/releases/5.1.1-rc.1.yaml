@@ -1,0 +1,126 @@
+schema_version: 1
+status: published_readonly_lab_demo_release_candidate
+release:
+  version: 5.1.1-rc.1
+  published_on: "2026-10-13"
+  timezone: Asia/Saigon
+  built_at: "2026-10-13T11:53:25Z"
+  source_revision: 8b5119a-dirty
+  source_state: working_tree_including_uncommitted_application_changes
+image:
+  repository: dang7904/storage-lab-console
+  tag: 5.1.1-rc.1
+  reference: dang7904/storage-lab-console@sha256:49f5284d27fd4defe2e2804e3b4eb06eaa3ac19352026622de3eae6c417fbe1f
+  index_digest: sha256:49f5284d27fd4defe2e2804e3b4eb06eaa3ac19352026622de3eae6c417fbe1f
+  linux_amd64_manifest: sha256:4b4d046c551a258fe3a82d4bb0d8ef3819a62abc02091d37525dd8b0d8e3beb9
+  configuration_digest: sha256:e4f53607e8bf42ff7214c7da747207c92b42984c395b6b214b1df201c36217c2
+  user: "10001:10001"
+  schema: 21
+  docker_hub_tag_and_registry_digest_verified: true
+  registry_digest_pull: PASS
+  collector_sha256: 66e8d8199c1060e11ef34a6f75e475b567e5c752e782945be8c709b1f0884d79
+source_checksums:
+  as_is_service: 5e9a1f8d3402668635eb027e5e41f405f38e3a890723cef496251cb67948467f
+  daemon_workbench: 7e6085b495e8be118fc0f7d2762d07f10513fdcdf3ff6a00d5a5d1226d0a8c96
+  fresh_read: 7c9378691e4319ff3793182aafa7e79d70fc63cef07081977a81721c38c1f1c0
+  styles: 168926c53b5d39848a111a7199b4f9ae82175afed48f5fb363fff01e0f841b23
+fixes:
+  - Max two active source reads plus two waiting up to 30 seconds; every admitted request reads fresh sources independently.
+  - Synchronous UI single-flight guard, deferred initial read, abort on unmount, bounded COLLECTION_BUSY retry only.
+  - Null or malformed orchestrator last_refresh produces PARTIAL instead of a server error.
+  - Vietnamese loading and error state, visible fresh View and Export actions, readable capacity explanation.
+tests:
+  backend: {passed: 304, failed: 0, skipped: 0}
+  backend_environment: isolated_PostgreSQL_16_schema_21_DATABASE_URL_and_TEST_DATABASE_URL
+  backend_note: initial_fresh_test_database_required_migration_before_legacy_persistence_tests
+  final_published_image_backend_test_log: ../dist/dockerhub-5.1.1-rc.1/backend-unittest.log
+  final_published_image_backend_test_log_sha256: d90996d6719a9b82e5b93278eb982ef3cf6e8ef9d9be2c2768693b72e6e49032
+  frontend: {passed: 24, failed: 0, skipped: 0}
+  typescript: PASS
+  frontend_build: PASS
+  executor: {passed: 31, failed: 0, skipped: 0}
+  collector: {passed: 26, failed: 0, skipped: 0}
+  worker_real_tools: {passed: 17, failed: 0, skipped: 0}
+  diagnostic_and_synthetic_guard: {passed: 26, failed: 0, skipped: 0}
+  synthetic_api_real_worker_postgresql:
+    passed: 38
+    failed: 0
+    no_live_ceph: true
+    report: ../dist/dockerhub-5.1.1-rc.1/api-worker-integration.json
+    report_sha256: 3b08c8b5fb6cdad84d47db6ff6607a4f1d808920ea90fe687a3e9a1b1b47ecd2
+    tamper_response: {status_code: 503, code: OSDMAP_RESULT_IDENTITY_MISMATCH}
+security:
+  scanner: Docker_Scout_1.20.4
+  application_packages: 167
+  application_findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
+  application_sbom: ../dist/dockerhub-5.1.1-rc.1/application.spdx.json
+  application_sbom_sha256: 4c6058d941631f0b5136c3221e36336ba06eaea39488f3deee941413d3f36e50
+  application_report: ../dist/dockerhub-5.1.1-rc.1/application-vulnerabilities.md
+  application_report_sha256: 0d485f3023bc56f8ddb7b0dd5cb8145a1360fa2657893b08e089c6295b48542e
+  runtime_credential_or_backup_file_hygiene: PASS
+  image_signing: NOT_RUN
+optional_worker:
+  tag: dang7904/storage-lab-osdmap:16.2.15-minimal-preview.2
+  reference: dang7904/storage-lab-osdmap@sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  linux_amd64_manifest: sha256:a46ac884e971645d878400e1233226758a2fbdb72e7d756dce0d544a97d51620
+  identical_to_previously_tested_local_preview: true
+  docker_hub_tag_and_registry_digest_verified: true
+  registry_digest_pull: PASS
+  scope: lab_offline_only_not_production_approved
+  network: none
+  max_cpu: 1
+  max_memory_mb: 1536
+  pids_limit: 32
+  raw_scan_packages: 133
+  raw_scan_findings: {critical: 1, high: 21, medium: 35, low: 2, unspecified: 0}
+  report: ../dist/dockerhub-5.1.1-rc.1/worker-vulnerabilities.md
+  report_sha256: 53cccddcc08a63b1b4f3974df5aaa0ee00de976f4b45256eebfffd756c46d94f
+  sbom: ../dist/dockerhub-5.1.1-rc.1/worker.spdx.json
+  sbom_sha256: 8e302d9776f74f999392beb2b26586ef7ffe31665daddd6a481b72d960d87862
+  existing_triage: ../../docs/OSDMAP_SECURITY_TRIAGE.md
+  production_gate: NOT_PASSED
+deployment:
+  url: http://127.0.0.1:8080
+  scope: localhost_lab_only
+  readonly: true
+  schema: 21
+  readiness: PASS
+  all_previous_mounts_preserved: true
+  old_collections_payload_hash_and_deleted_state_preserved: 4
+  events_before_demo: 8
+  evidence_archive_identical_after_deployment: true
+  database_container_and_volume_preserved: true
+  private_checkpoint: ../../runtime/release-5.1.1-rc1-20261013
+  database_backup_sha256: 222559ec5be8bb73b0aff94c77a667cb3da88ab333b6ab4e526d5765b3629e1f
+  previous_containers_retained: true
+  production_test_8443: unchanged
+  ceph_mutations: none
+browser:
+  fresh_observation_fsid_and_14_daemons: PASS
+  pagination_first_page_10_second_page_4: PASS
+  selection_persists_across_pages: PASS
+  fresh_two_daemon_export_real_download: PASS
+  fresh_export_sha256: b80c477ee249aa422fc4b3622c1ab2196631a8dd3daf3c8259f562979f38c17a
+  old_osd_pair_comparison: PASS
+  phase_filter_preserves_pair_and_result: PASS
+  comparison_real_download: PASS
+  comparison_download_sha256: 9e109c1267725a5f3c9d9053f1ab52225e5d3837b113f2f87a14f58ff4cbee85
+  inventory_fresh_deep_14_daemon_observation: PASS
+  new_two_osd_collection_saved_through_ui: PASS
+  demo_collection_id: d5b038a3-7dc2-5444-a968-61ccae127ec2
+  demo_collection_scope: [osd.2, osd.5]
+  demo_collection_phase: BEFORE
+  demo_note_explicitly_says_no_upgrade_or_ceph_write: true
+  demo_collection_saved_export_real_download: PASS
+  demo_collection_download_sha256: 4335a2a96d7acbea8a37ee3a609b3c00d54a574744336efa62eedb54a738df16
+  screenshot: ../../runtime/demo-5.1.1-rc1-20261013.jpg
+  verified_fsid_and_daemon_count_screenshot: ../../runtime/demo-5.1.1-rc1-verified-20261013.jpg
+  collections_after_demo: 5
+  events_after_demo: 9
+acceptance:
+  lab_demo_core_workflows: tested
+  complete_production_acceptance: NOT_PASSED
+  historical_first_integration_failure_root_cause: UNCONFIRMED
+  historical_stability_review: OPEN
+  second_live_cluster_and_arm64: NOT_RUN
+  full_host_process_network_or_RGW_MDS_request_latency_telemetry: NOT_IMPLEMENTED

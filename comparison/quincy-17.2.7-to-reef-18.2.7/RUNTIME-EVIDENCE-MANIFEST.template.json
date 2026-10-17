@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "comparison": "quincy-17.2.7-to-reef-18.2.7",
+  "validation_label": "NOT_RUNTIME_EVIDENCE_COMPLETE",
+  "base": {
+    "ref": "v17.2.7",
+    "source_sha": "b12291d110049b2f35e32e0de30d70e9a4c060d2"
+  },
+  "target": {
+    "ref": "v18.2.7",
+    "source_sha": "6b0e988052ec84cf2d4a54ff9bbbc5e720b621ad"
+  },
+  "exact_hop_manifest": {
+    "uri": "",
+    "sha256": "",
+    "validation_label": "NOT_EXACT_HOP_VALID"
+  },
+  "run_set": {
+    "run_set_id": "",
+    "operator": "",
+    "environment": "",
+    "topology_evidence": "",
+    "started_utc": "",
+    "ended_utc": "",
+    "pack_ids": []
+  },
+  "archive": {
+    "uri": "",
+    "manifest_sha256": "",
+    "owner": ""
+  },
+  "summary": {
+    "overall_outcome": "NOT_RUN",
+    "status_counts": {
+      "NOT_RUN": 52
+    }
+  },
+  "gate_results": [
+    { "gate_id": "LAB-001", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-002", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-003", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-004", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-005", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-006", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-007", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-010", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-011", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-012", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-013", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-014", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-015", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-016", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-017", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-018", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-019", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-020", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-021", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-022", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-023", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-024", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-025", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-026", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-027", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-028", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-029", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-030", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-031", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-032", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-033", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-034", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-035", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-036", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-037", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-038", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-039", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-040", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-041", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-042", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-043", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-044", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-045", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-046", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-047", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-048", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-049", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-050", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-051", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-052", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-053", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] },
+    { "gate_id": "LAB-054", "status": "NOT_RUN", "owner": "", "result_summary": "", "run_ids": [], "blocker_id": "", "evidence": [] }
+  ]
+}

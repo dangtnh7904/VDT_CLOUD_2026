@@ -50,6 +50,8 @@ Không có một “protocol OSD mới” duy nhất trong owner này. Phần l�
 
 **Điều kiện/hiệu lực.** Tự động khi primary target chọn async recovery cho EC PG có candidate vượt `osd_async_recovery_min_cost`. Không cần migration hay repair. Trong mixed phase, version của primary quyết định lựa chọn acting; sau full upgrade mọi primary có guard mới.
 
+**Ranh giới rollback.** Không có format mới, nhưng acting set/peering epoch đã chọn là state cluster; hạ binary không tự đưa shard bị loại trở lại hoặc phục hồi I/O của PG dưới `min_size`. Chỉ failback primary sau khi PG đã peered và recovery ổn định, với OSDMap/acting-set snapshot. Nếu canary vi phạm `min_size`, dừng thay version, khôi phục đủ shard/primary bằng peering procedure đã diễn tập thay vì tiếp tục downgrade hàng loạt.
+
 **Tác động/đánh giá.** Category: availability/correctness. Rủi ro **cao theo điều kiện** vì PG có thể mất khả năng I/O trong degraded recovery ở base; confidence `high` từ guard endpoint và commit intent. Chưa biết cluster có EC pool, `min_size`, async-recovery override hoặc topology failure nào.
 
 **Test đã đọc.** Suite ngữ cảnh `qa/suites/rados/thrash-erasure-code/…/minsize_recovery.yaml` và recovery-overrides; responsible commit không thêm regression test chuyên biệt. Cần fault-injection mixed-version.
@@ -68,6 +70,8 @@ Không có một “protocol OSD mới” duy nhất trong owner này. Phần l�
 
 **Mixed/full.** OSD chạy target không còn crash ở các nhánh đã sửa; OSD base vẫn có thể assert nếu nó nhận đúng shard lỗi. Primary target điều phối failed-pull tốt hơn nhưng không thay thế dữ liệu không còn đủ shard. Full upgrade đồng nhất error handling.
 
+**Ranh giới rollback.** Fix không migrate object format, nhưng deep-scrub/recovery có thể persist `inconsistent`/`unfound` và PGLog state. Hạ binary không tái tạo `hinfo` đúng hoặc authoritative shard đã mất; trước repair phải giữ shard evidence và map. Chỉ failback sau khi primary/participants ổn định; nếu target phát hiện inconsistency, hoàn tất quy trình chọn nguồn và repair đã duyệt thay vì dùng base để che failure bằng assert/restart.
+
 **Tác động/đánh giá.** Category: availability/correctness/detectability. Rủi ro exposure **cao**, rủi ro của code mới trung bình-thấp; confidence `high`. Target ưu tiên giữ daemon sống và biểu diễn object là inconsistent/unfound, không hứa tự phục hồi khi không đủ bản đúng.
 
 **Test đã đọc.** `qa/tasks/ec_inconsistent_hinfo.py` cố ý xóa `hinfo_key`, chạy deep-scrub/repair, backfill từ primary/non-primary và case hai shard lỗi; test kỳ vọng clean khi còn nguồn tốt và `backfill_unfound` khi không đủ. Chưa chạy.
@@ -83,6 +87,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Điều kiện/hiệu lực.** Automatic trim chỉ tiến triển khi PGLog tiếp tục đi qua đường trim/write. OSD đã quá phình đến mức không boot không thể nhận lợi ích runtime; offline tool là recovery chuyên biệt trên OSD dừng, không phải bước bảo trì hàng loạt. Upgrade không tự chạy tool.
 
 **Mixed/full.** Primary/base và target có policy trim khác nhau; khi primary chuyển version, tốc độ hội tụ `dups` có thể đổi. Format dup hiện hữu không phải migration mới trong finding này. Sau full upgrade, warning/trim mới áp dụng nhất quán.
+
+**Ranh giới rollback.** Runtime trim và offline `trim-pg-log-dups` xóa duplicate entries bền vững; hạ package không khôi phục chúng và không cần làm vậy nếu invariants đã được kiểm chứng. Với runtime, chỉ failback khi PG active/clean và DB khỏe. Với offline tool, mốc reversible là block/DB snapshot trước tool trên OSD dừng; nếu post-tool fsck/boot validation lỗi, phục hồi snapshot chứ không chạy tool ngược.
 
 **Tác động/đánh giá.** Category: availability/space/performance. Rủi ro nâng cấp trung bình; exposure cao nếu RocksDB/PGLog đã quá lớn. Confidence `high` cho code, `medium` cho applicability vì chưa có số `dups`/PG, DB free space và boot status.
 
@@ -103,6 +109,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Mixed/full.** Primary điều phối scrub; primary target mang phần lớn fix, nhưng replica base vẫn xử lý protocol cũ của nó. Các hunk giữ message generation/versioning hiện hữu, song repository không có matrix mixed `16.2.5/16.2.15` cho mọi stale event; phải test. Sau full upgrade FSM đồng nhất.
 
+**Ranh giới rollback.** Scrub không repair chủ yếu là runtime FSM, nên có thể failback coordinator sau khi abort/đợi scrub về idle và reservations được giải phóng. Repair scrub là mutation riêng: package downgrade không undo object/metadata đã chọn sửa. Chụp inconsistent set/map trước repair; nếu result xấu, dùng replica/object recovery procedure đã phê duyệt, không bật/tắt flags rồi đổi binary để ép FSM.
+
 **Tác động/đánh giá.** Category: availability/correctness/operability. Rủi ro `trung bình`, tăng nếu scrub backlog, remap liên tục hoặc PG đã stuck; confidence `high` từ state transition và commit reproduction. Không suy ra rằng upgrade tự làm sạch mọi scrub backlog.
 
 **Test đã đọc.** `src/test/osd/TestOSDScrub.cc`, `qa/tasks/scrub_test.py` và các standalone scrub scripts làm context; responsible commits không thêm một test duy nhất bao phủ toàn bộ chuỗi flag/remap/reservation. Chưa chạy.
@@ -116,6 +124,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Điều kiện/hiệu lực.** Kích hoạt khi partial recovery đã ghi state rồi OSD restart trước khi hoàn tất. Tự động trên target; không đổi object data format hay cần repair.
 
 **Mixed/full.** Đây là state local trong PG metadata. Decoder ở cả hai endpoint Pacific hiểu form có sentinel Octopus; không thấy feature negotiation mới trong hunk. Tuy vậy, nếu primary/base tiếp tục ghi form cũ, progress mới vẫn có thể bị mất ở lần persist đó; full upgrade mới đồng nhất writer.
+
+**Ranh giới rollback.** Target metadata vẫn được base decoder đọc, nhưng failback trước khi partial recovery xong cho phép base ghi lại form cũ và mất `clean_regions` progress. Vì vậy mốc an toàn là PG recovery hoàn tất hoặc checkpoint đã qua restart test; hạ binary không phục hồi progress đã mất, chỉ làm whole-object recovery lại. Không cần restore data snapshot nếu checksum đúng, nhưng phải tính lại recovery window/capacity.
 
 **Tác động/đánh giá.** Category: recovery efficiency/availability window. Rủi ro `trung bình` vì whole-object fallback vẫn đúng về dữ liệu nhưng kéo dài recovery và I/O; confidence `high`. Chưa có số object lớn/partial recovery hoặc restart frequency của cluster.
 
@@ -135,6 +145,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Điều kiện/hiệu lực.** Stretch fix chỉ áp dụng pool/topology stretch tương ứng; `peer_bytes` áp dụng backfill bị interrupt/reactivate. Tự động theo primary target; không có config migration.
 
 **Mixed/full.** Primary version quyết định candidate/reservation. Khi primary đổi trong mixed phase, kết quả có thể khác nhưng vẫn dùng OSDMap/PG protocol hiện hữu. Cần thử primary failover giữa backfill, không chỉ nâng OSD không-primary.
+
+**Ranh giới rollback và kiểm chứng.** Không có format migration; chỉ failback primary sau khi peering/backfill reservation đã hội tụ, vì đổi version giữa interruption có thể tính lại candidate/bytes. Hạ binary không hoàn tác OSDMap hay bytes đã backfill. Trong lab, fault-inject primary loss giữa backfill (và stretch topology nếu áp dụng), xác nhận acting candidate, reservation bytes, `backfill_toofull`/resume và data scrub; dừng nếu candidate đảo bất ngờ hoặc accounting không hội tụ.
 
 **Tác động/đánh giá.** Category: availability/correctness/capacity safety. Rủi ro **cao theo topology/gián đoạn**, thấp hơn nếu không dùng stretch và backfill ổn định; confidence `high`. `qa/tasks/backfill_toofull.py` kiểm tra `backfill_toofull` và resume, nhưng không trực tiếp kiểm stretch ordering.
 
@@ -170,6 +182,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Mixed/full.** Primary version xử lý op và tạo PGLog/clean-regions. Mixed primary failover có thể đổi semantics; full upgrade đồng nhất. Không thấy wire-format mới riêng ngoài `OSD-005`.
 
+**Ranh giới rollback.** Các client op đã commit (range delete/copy) là dữ liệu bền vững; hạ binary không khôi phục OMAP keys và không sửa PG đã inconsistent trước upgrade. Không có format gate riêng nên binary failback chỉ sau khi quiesce op, PG peered và scrub/read validation sạch. Nếu inconsistency xuất hiện, giữ evidence/replicas rồi dùng repair có phê duyệt thay vì replay delete hoặc downgrade primary.
+
 **Tác động/đánh giá.** Category: correctness/availability. Rủi ro exposure **cao** ở workload tương ứng; confidence `high`. Cần scrub/read-only validation trước mọi repair.
 
 ### OSD-010 — Ngoại lệ legacy: SnapMapper conversion không còn làm mất suffix object
@@ -179,6 +193,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Trước → sau.** Base dựng key mới chỉ bằng prefix pool/snap và có thể bỏ phần `shardid + hobject`, làm nhiều legacy mapping va chạm. Target decode pool từ value nhưng giữ toàn bộ suffix của old key sau `LEGACY_MAPPING_PREFIX`, nên key mới đúng format `<pool>_<snap>_<shard>_<object>`.
 
 **Điều kiện/hiệu lực.** `OSD::init` chỉ gọi conversion khi thêm incompat feature `SNAPMAPPER2`, tức store rất cũ lần đầu được mở qua đường Octopus/Pacific. Một OSD đã chạy `16.2.5` bình thường thường đã có feature và không rerun conversion khi lên `16.2.15`. Commit nói rõ fix “going forward”; nó **không sửa mapping đã bị conversion cũ phá hỏng**.
+
+**Activation mode.** Conversion tự động chỉ ở lần mount thêm feature; repair mapping lịch sử là thao tác explicit/offline riêng. Vì vậy inventory compat feature phải diễn ra trước restart: store đã có `SNAPMAPPER2` được phân loại không kích hoạt, còn store legacy phải giữ snapshot trước lần target mở đầu tiên.
 
 **Mixed/full/rollback.** Local theo OSD/store, không phải protocol. Chỉ target được dùng làm binary đầu tiên chuyển store cũ mới nhận fix. Không được suy ra rằng rolling upgrade `16.2.5 → .15` tự chữa lịch sử.
 
@@ -202,6 +218,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Mixed/full.** Queue/scheduler local theo OSD; recovery/client latency của PG có thể khác theo primary/device version. Full upgrade không tự chuyển WPQ sang mClock. Không được lẫn finding Pacific này với việc mClock thành default ở Quincy.
 
+**Ranh giới rollback.** Benchmark/capacity value được persist trong MON config store; hạ OSD package không xóa hoặc trả nó về giá trị trước đó. Lưu config dump và benchmark evidence trước canary. Có thể failback binary sau khi drain/restart OSD, nhưng muốn hoàn nguyên scheduler config phải apply explicit giá trị cũ đã kiểm; không ép benchmark lại trên toàn cohort để “rollback” vì nó tạo tải mới.
+
 **Tác động/đánh giá.** Category: performance/availability/operability. Rủi ro `trung bình` nếu mClock đang bật, thấp với WPQ; confidence `high` cho activation, `low` cho hiệu năng thực tế. Cần config dump và baseline p95/p99 + recovery throughput.
 
 **Test đã đọc.** `src/test/osd/TestMClockScheduler.cc` và các `qa/suites/rados/perf/scheduler/dmclock_*` làm context; không chạy benchmark.
@@ -221,6 +239,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 
 **Điều kiện/hiệu lực.** Object-store corruption/missing meta, map sharing, recovery-delete race hoặc explicit stop/fast shutdown có thể xuất hiện khi thay binary và restart. Upgrade OSD hiện hữu không tự chạy mkfs; hunk flush trong `mkfs` chỉ là support, trừ khi runbook đồng thời provision/thay OSD. Một lỗi nền có thể làm target fail sớm nơi base đi tiếp rồi crash/hành xử không xác định.
 
+**Ranh giới rollback và kiểm chứng.** Với OSD hiện hữu, không có format mới nên chỉ failback sau clean stop, store mount/read-only check và PG peering; target báo missing meta thì không dùng base để đi tiếp qua corruption. `mkfs` là mutation one-way đối với device mới: package downgrade không unmkfs, recovery boundary là inventory/backup device trước provision. Trong lab, kiểm clean/admin/fast shutdown ở inactive state, map delivery dưới reconnect và missing-meta failure; xác nhận không crash/double-free, MON thấy trạng thái đúng và OSD rejoin/PG clean trước rollout.
+
 **Mixed/full/đánh giá.** Chủ yếu local; fast-shutdown có message/monitor side nên phải kiểm với report `04/05`. Category: availability/correctness/maintainability. Rủi ro `trung bình` theo lỗi nền, confidence `medium` vì nhóm đường hiếm chưa được chạy end-to-end.
 
 ### OSD-013 — RBD read-only có đúng quyền list metadata
@@ -232,6 +252,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Điều kiện/hiệu lực.** Áp dụng khi auth entity dùng profile `rbd-read-only` hoặc `rbd` và client gọi `metadata_list`. Có hiệu lực ngay trên OSD target sau restart, không cần thay caps text. Trong mixed phase, request tới primary base có thể vẫn bị từ chối; cần thử primary trên cả version.
 
 Đây là ngoại lệ client-facing được giữ trong Markdown vì version của OSD primary có thể thay đổi service continuity ngay trong rolling upgrade; không phải vì mọi thay đổi RBD/client đều mặc nhiên quan trọng.
+
+**Ranh giới rollback.** Không có caps migration hoặc persistent format; primary failback lập tức đưa behavior base trở lại—read-only client có thể bị deny và profile `rbd` lại có scope method rộng hơn. Vì vậy rollback chỉ sau khi drain client/canary và chấp nhận security/compatibility regression; hạ binary không hoàn tác object access đã thực hiện. Giữ negative/positive auth tests trên cả primary versions làm gate.
 
 **Tác động/đánh giá.** Category: compatibility/security least-privilege. Rủi ro `trung bình` nếu deployment dùng read-only RBD; confidence `high`. Không gọi đây là CVE vì commit/advisory không ánh xạ CVE.
 
@@ -251,6 +273,8 @@ Lịch sử có lần thêm size-based trim/tool (`d49ff13c80b`/`1f3fede173c`) r
 **Điều kiện/hiệu lực.** Chỉ áp dụng object manifest/chunk reference, cache tier/dedup path có snapshot clone và degraded/unreadable adjacent object. Tự có khi primary target xử lý op; không chuyển đổi object đã có và không tự repair refcount lịch sử.
 
 **Mixed/full.** Primary version quyết định precondition/requeue. Replica chỉ nhận kết quả transaction/PGLog; không có feature bit mới trong nhóm hunk này. Khi primary failover về base trong mixed phase, đường cũ có thể lại xuất hiện; full upgrade mới đồng nhất.
+
+**Ranh giới rollback.** Manifest/chunk/refcount transaction đã commit là persistent object state; hạ primary không undo nó và không tự repair refcount lịch sử. Freeze tier/manifest mutations quanh failback, đợi adjacent-clone recovery/PG peering hoàn tất và lưu manifest/refcount evidence. Nếu validation lệch, phục hồi từ replica/snapshot hoặc repair tool đã phê duyệt; không replay `set_chunk` hay đổi binary để thử may rủi.
 
 **Tác động/đánh giá.** Category: correctness/availability. Rủi ro **cao theo feature/workload**, thấp nếu không dùng object manifest/tiering; confidence `high` về code, `medium` về applicability vì chưa có inventory cache-tier/dedup/snapshot. Không coi cache tier phổ biến mặc định.
 

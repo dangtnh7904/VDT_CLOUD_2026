@@ -97,6 +97,8 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 
 **Mixed phase.** Mỗi MON chạy local election code của binary nó; leader/base node vẫn có thể đi qua path cũ cho tới khi được nâng. Vì vậy upgrade MON từng node, đợi quorum ổn định giữa các bước, và tránh đồng thời thay topology/rank nếu không bắt buộc.
 
+**Ranh giới rollback.** Restart cùng identity không ghi format mới, nên khi chỉ mới thay binary và quorum đã bắt kịp có thể failback node đó về `v16.2.5`. Điểm còn reversible kết thúc trước khi operator commit thay MonMap như remove/replace MON hoặc đổi rank: hạ binary sau thay đổi topology không tự khôi phục membership/rank cũ; khi đó phải dùng MonMap snapshot và procedure hoàn nguyên topology đã diễn tập.
+
 **Hành động.** Xác nhận odd quorum khỏe, clock/network ổn; canary follower trước leader; kiểm `quorum_age`, election epoch, connection score và session cleanup. Nếu cần remove/replace MON, tách thành change riêng hoặc test exact rank transition.
 
 **Đánh giá.** Rủi ro **cao** vì quorum là control-plane critical; confidence **high**. Những commit này giảm lỗi chứ không cho phép phá quorum safety.
@@ -112,6 +114,8 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 **Tác động.** Base có cửa sổ live state khác committed state, có thể phân phối stale/divergent rotating keys giữa MON. Target buộc tính nhất quán Paxos trước khi key được dùng. MonClient target tránh trạng thái tick tiếp nhưng không còn session để thử auth lại—một failure mode có thể xuất hiện đúng lúc monitor restart/leader churn.
 
 **Mixed phase.** Tính chất proposal phụ thuộc leader/AuthMonitor đang chạy target; client reconnect behavior phụ thuộc binary của từng daemon/client. Không có migration key format được thấy ở owner set, nhưng continuity chưa đồng nhất cho tới full rollout. Các client/daemon lâu đời không được loại khỏi phân tích vì chúng cần auth thành công trong upgrade.
+
+**Kiểm chứng và rollback.** Trong lab, gây một leader change có kiểm soát trong lúc rotate key rồi ép OSD/MDS/MGR reconnect: rotating key chỉ được dùng sau Paxos commit, còn MonClient gặp `-EAGAIN` phải mở lại session và auth thành công. Dừng rollout nếu xuất hiện auth failure kéo dài hoặc client mất session. Key đã commit là state Paxos bền vững; hạ binary không hoàn nguyên key đó, vì vậy không chạy rotate/import key đồng thời và chỉ phục hồi MON-store snapshot theo recovery procedure nếu chính state auth phải quay lại.
 
 **Hành động.** Theo dõi auth `EAGAIN`, session reopen, ticket/rotating-key logs và reconnect của OSD/MDS/MGR qua từng MON restart. Không rotate/import key thủ công đồng thời nếu không cần. Nếu rebuild store, dùng procedure riêng và bản sao store.
 
@@ -148,6 +152,8 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 **Tác động.** Với pool từng giảm `pg_num`/PG merge, base leader có thể làm monitor giữ nhiều OSDMap hơn cần thiết, tăng store/disk cho tới restart. Khi target leader nhận beacon, accounting theo `pg_num` mới cho phép lower bound tiến. Dọn stale `pg_temp` và invalid upmap giảm mapping bất hợp lệ/không còn mục tiêu; chúng có thể gây remap/recovery khi state thực sự tồn tại, nên cần quan sát chứ không coi là log-only.
 
 **Mixed phase.** Benefit accounting phụ thuộc MON leader target. OSDMap mới sau proposal được toàn cluster tiêu thụ; không có format mới trong nhóm fix này. Chênh lệch mapping code local có thể làm warning/timeout khác nhau giữa daemon/tool base và target nhưng authoritative map vẫn qua MON.
+
+**Kiểm chứng và rollback.** Dùng pool đã diễn tập PG merge trong lab, ghi `last_epoch_clean`, retained OSDMap range, `pg_temp`, upmap và recovery trước/sau khi leader chuyển sang target; kỳ vọng lower bound tiến và trim tiếp tục mà không sinh recovery bất thường. Cleanup proposal và OSDMap epoch đã commit là state bền vững: điểm rollback còn reversible là trước proposal; hạ binary không tái tạo `pg_temp`/upmap stale hoặc các map đã trim, nên recovery state phải dựa trên OSDMap/monstore snapshot đã xác minh.
 
 **Hành động.** Trước upgrade, kiểm monitor DB size, retained OSDMap range, pending PG merge, `pg_temp` và upmap exceptions. Sau canary/leader switch, xác minh trim tiến và recovery không tăng bất thường. Không chủ động merge PG hoặc chạy balancer lớn trong cùng cửa sổ nếu không cần.
 
@@ -186,6 +192,8 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 
 `pg_num_max` và bulk flag có thể thay lộ trình autoscale/placement sau upgrade. Chặn snapshot trên CephFS pool là safety correctness, nhưng runbook cũ dựa vào pool snapshot sẽ fail và không nên bypass.
 
+**Ranh giới rollback.** Các thay đổi pool-create, `pg_num`, bulk flag hoặc ratio chỉ xảy ra khi command/automation gọi explicit, nhưng state đã được MON commit là bền vững. Điểm reversible là trước proposal command: hạ binary không xóa pool hoặc trả PG topology/property về giá trị cũ. Trong cửa sổ nâng cấp phải freeze topology; nếu một thay đổi được phép, rollback dùng OSDMap/change-specific command đã diễn tập. Pool snapshot trên CephFS data pool vẫn bị cấm và không phải cơ chế rollback hợp lệ.
+
 **Hành động.** Freeze pool topology/balancer changes trong rolling window nếu không cần; inventory min/max/autoscale/bulk/ratio; test idempotency và error handling của automation. QA rows là bằng chứng support, không phải runtime finding độc lập.
 
 **Đánh giá.** Rủi ro **trung bình theo điều kiện**, confidence **high**.
@@ -198,6 +206,8 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 - `efcddbbd36dd83286df78e3d5064ba638b77d5a5`: `HealthMonitor::check_mutes()` bắt đầu với `changed=false`; base luôn proposal health, làm `maybe_trim` bị chặn và health store tăng không giới hạn.
 
 **Tác động.** MGR active/failover thường thay đổi quanh upgrade; proposal sai hoặc lặp có thể kéo dài convergence và làm module/autoscaler unavailable. Health-store growth là rủi ro dung lượng MON DB: target ngừng tạo proposal giả khi mute không đổi, cho phép trim chạy, nhưng chỉ sau khi target leader/service active.
+
+**Ranh giới rollback và phần chưa biết.** Các commit sửa logic proposal/trim, không tạo encoding mới; có thể failback binary sau khi MON quorum và MGR active đã ổn định. Tuy nhiên hạ binary không tái tạo health/Paxos history đã trim và cũng không tự khôi phục module state nếu MGR active đã đổi. Chưa có As-Is về MON-store size/free disk, health mutes, proposal rate và trạng thái từng MGR module; các giá trị này phải được chụp trước khi quyết định canary và ngưỡng dừng.
 
 **Hành động.** Preflight dung lượng MON store và free disk trước mọi restart; nếu store đã lớn, không giả định upgrade tự compact ngay. Trong rollout, theo dõi Paxos proposal rate, health epochs/trim, MGR active/standby và module readiness. Tránh `mgr fail` thủ công trùng đúng lúc MON leader election nếu không phải test có kiểm soát.
 
@@ -212,6 +222,10 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 - `acd845f8ba0f409c5ba56d54a04ae7988367a49e`: `osdmaptool` tránh segfault khi có OSD down.
 
 **Tác động.** Không tool nào tự chạy trong upgrade bình thường. Nếu MON store phải rebuild, thiếu rotating keys hoặc epoch không phù hợp có thể làm auth/Paxos state không usable; fix target làm recovery đáng tin hơn nhưng thao tác vẫn có blast radius rất cao. `osdmaptool` fix giúp offline inspection/map manipulation khi down OSD tồn tại.
+
+**Activation/mixed phase.** Đây là đường recovery explicit, offline; daemon restart hay rolling/full rollout không tự kích hoạt tool. Phiên bản binary của tool quyết định behavior, không phải tỷ lệ daemon base/target trong mixed cluster. Store/map dựng lại phải được validate độc lập trước khi cho MON/OSD tương ứng rejoin.
+
+**Kiểm chứng và rollback.** Trên bản sao store/map, chạy rebuild bằng target rồi kiểm epoch range, quorum metadata, auth/rotating keys và OSDMap; nếu policy cho phép, boot một MON cô lập để xác nhận decode trước rejoin. Snapshot và checksum trước lần ghi đầu tiên là ranh giới rollback: sau rebuild, hạ package không undo nội dung đã viết; phải loại bỏ bản sao lỗi hoặc khôi phục nguyên snapshot nguồn.
 
 **Hành động.** Chỉ dùng binary/tool đúng target trên bản sao verified; backup store/map, ghi checksum và có peer review. Không biến monstore rebuild hoặc map rewrite thành bước preventive của runbook.
 
@@ -232,6 +246,8 @@ Rủi ro là severity khi điều kiện đúng, không phải xác suất trong
 **Hành động.** Inventory mọi config entry có location/device-class mask và mọi parser dùng JSON `config dump`; canary một OSD ở mỗi CRUSH host/class, so effective values trước/sau reconnect. Chuẩn hóa automation để chấp nhận localized name và không dựa vào khoảng trắng mơ hồ.
 
 **Đánh giá.** Rủi ro **trung bình theo điều kiện**, confidence **high**; applicability phụ thuộc cluster có masked config hoặc parser automation hay không.
+
+**Validation và phần chưa biết.** Với staging có hai OSD ở hai CRUSH host và một host-masked override khác giá trị mặc định, chụp stored entry, CRUSH location và effective value trên từng OSD; reconnect lần lượt qua MON base/target rồi kiểm giá trị chỉ áp dụng cho host được chọn. Kiểm thêm JSON dump của localized key qua đúng parser dùng trong preflight. Stop nếu OSD ngoài mask nhận override, OSD trong mask không nhận, hoặc parser làm mất phần mask và chuẩn bị ghi đè key rộng hơn. Source chứng minh bước lookup thêm trong `refresh_config()`, nhưng chưa xác minh config priority, vị trí CRUSH thực tế và reconnect path của deployment; scenario này chưa chạy.
 
 ## 5. Các thay đổi không cần phân tích sâu riêng
 

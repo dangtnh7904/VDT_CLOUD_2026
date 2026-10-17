@@ -1,0 +1,43 @@
+# Keep PostgreSQL 16, its official init/upgrade semantics, UID, data directory,
+# password-file support, and default command. There are no embedded credentials.
+ARG POSTGRES_BASE=postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+FROM ${POSTGRES_BASE} AS patched
+
+# Official scripts call `gosu postgres ...`. Alpine su-exec has the same
+# user/group + exec behavior for those calls. Change only that command in the
+# official scripts and remove the obsolete Go binary, keeping package metadata.
+RUN set -eux; \
+    apk upgrade --no-cache; \
+    apk add --no-cache su-exec; \
+    rm /usr/local/bin/gosu /usr/local/bin/su-exec; \
+    sed -i 's/exec gosu postgres /exec su-exec postgres /g' \
+        /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-ensure-initdb.sh; \
+    ! grep -q 'exec gosu postgres ' /usr/local/bin/docker-entrypoint.sh; \
+    ! grep -q 'exec gosu postgres ' /usr/local/bin/docker-ensure-initdb.sh; \
+    su-exec postgres sh -c 'test "$(id -u)" = "$(id -u postgres)"'; \
+    postgres --version
+
+# Export the patched filesystem into a fresh runtime layer. This also removes
+# the deleted Go binary's bytes from the distributed image, rather than leaving
+# them recoverable in a lower layer. /lib/apk/db and all package metadata remain.
+# Reproduce the official runtime configuration explicitly.
+FROM scratch
+COPY --from=patched / /
+LABEL org.opencontainers.image.title="Storage Lab Console PostgreSQL" \
+      org.opencontainers.image.version="16.15-rc.1" \
+      org.opencontainers.image.base.name="postgres:16-alpine" \
+      org.opencontainers.image.base.digest="sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea" \
+      org.opencontainers.image.description="Official PostgreSQL 16 with available Alpine updates and native su-exec replacing the old Go-based privilege-drop binary"
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LANG=en_US.utf8 \
+    PG_MAJOR=16 \
+    PG_VERSION=16.15 \
+    PG_SHA256=c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed \
+    PGDATA=/var/lib/postgresql/data
+WORKDIR /
+EXPOSE 5432
+VOLUME ["/var/lib/postgresql/data"]
+STOPSIGNAL SIGINT
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["postgres"]
+

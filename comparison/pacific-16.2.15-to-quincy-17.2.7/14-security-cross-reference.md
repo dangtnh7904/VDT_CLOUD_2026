@@ -1,6 +1,6 @@
 # 14 — security advisory trực tiếp và cross-reference đã xác minh: v16.2.15 → v17.2.7
 
-**Trạng thái: binary gate của owner 14 đã hoàn tất; cross-reference runtime toàn suite còn đang phân tích.** [CSV đầy đủ của owner](./14-security-cross-reference.csv) có 3 hàng, là subset theo thứ tự của [master inventory](./00-file-inventory.csv). Đã đối soát `affect = 0`, `trivial = 3`, **chưa phân loại = 0** cho ba hàng owner này. Đây không phải kết luận rằng hai endpoint không có khác biệt bảo mật ở runtime; các owner code vẫn đang phân tích.
+**Trạng thái: binary gate của owner 14 và toàn suite đã hoàn tất; lab/runtime còn mở.** [CSV đầy đủ của owner](./14-security-cross-reference.csv) có 3 hàng, là subset theo thứ tự của [master inventory](./00-file-inventory.csv). Đã đối soát `affect = 0`, `trivial = 3`, **chưa phân loại = 0** cho ba hàng owner này. Đây không phải kết luận rằng hai endpoint không có khác biệt bảo mật ở runtime; các finding code liên quan vẫn phải qua [ma trận lab/runtime](./LAB-RUNTIME-GATES.md) và inventory As-Is.
 
 ## Phạm vi và phương pháp
 

@@ -67,6 +67,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng, không phải xác su�
 
 **Cancel boundary.** `upgrade_pause()` giữ state nên có thể resume. Ngược lại, `upgrade_stop()` hoàn tất progress rồi xóa `upgrade_state`; nó không gọi `_complete_mds_upgrade()` và không xóa `mon_mds_skip_sanity`. Nếu stop sau preparation, `max_mds=1`, standby-replay off hoặc sanity skip có thể còn lại, còn giá trị gốc đã mất khỏi state.
 
+**Mixed/full và rollback.** Target active MGR điều khiển sequence trong khi MDS được nâng từng daemon; cho tới khi phase hoàn tất, rank topology/config có thể ở trạng thái chuẩn bị chứ chưa phải full restored. Ranh giới rollback là trước `_prepare_for_mds_upgrade()`. Sau đó package failback hoặc `upgrade_stop()` không hoàn nguyên state; phải pause, dùng bản chụp để restore `max_mds`, standby-replay và sanity config có kiểm chứng, rồi xác nhận ranks/client I/O trước khi đổi orchestrator.
+
 **Hành động/kiểm chứng.** Trước MDS phase lưu `max_mds`, `allow_standby_replay`, MDS ranks/states và effective `mon_mds_skip_sanity`. Chạy workload CephFS qua rank reduction, trường hợp zero-up và restore; xác nhận mọi FS trở về giá trị gốc và config sanity bị gỡ. Nếu cần dừng để điều tra, ưu tiên pause; stop chỉ sau khi có runbook restore thủ công đã thử.
 
 **Đánh giá.** Rủi ro **cao khi có CephFS**, confidence **high**. QA suite `mds_upgrade_sequence` có biến thể rank/standby-replay, nhưng chưa được chạy trong môi trường này.
@@ -78,6 +80,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng, không phải xác su�
 **Trước → sau.** Với A/B/C, old active A có thể nâng B/C lên image mới nhưng metadata vẫn cho biết chúng do old cephadm deploy. Sau failover, B và C có thể lần lượt coi chính mình cần xử lý rồi failover mà không redeploy peer, tạo vòng lặp. Target active MGR đã ở đúng digest có thể sửa `deployed_by` của peer trước khi failover tiếp.
 
 **Mixed phase.** Fix chỉ có hiệu lực khi target code đang active. Hai-MGR topology thông thường ít lộ lỗi hơn, nhưng commit cũng ghi nhận manual partial upgrade có thể tạo trạng thái tương tự.
+
+**Activation, impact và rollback.** Vòng được kích hoạt tự động trong orchestrated upgrade/redeploy khi active role failover giữa ba MGR trở lên. Impact là control-plane availability và khả năng upgrade hội tụ. Image digest/`deployed_by` đã ghi là persistent orchestrator metadata; hạ binary không bảo đảm đưa cohort về base và có thể tái tạo loop. Nếu không hội tụ, pause upgrade, pin một target active khỏe và sửa peer metadata bằng redeploy đã diễn tập; chỉ failback sau khi active/standby và digest đồng nhất.
 
 **Hành động/kiểm chứng.** Với topology 3+, ghi active/standby trước canary; sau mỗi failover kiểm tra từng MGR có target image digest **và** target `deployed_by`. Stop condition là active role quay vòng mà hai metadata không hội tụ. Không có regression unit test chuyên biệt cho topology 3+ trong file test endpoint; staged failover là bằng chứng môi trường cần bổ sung.
 
@@ -95,6 +99,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng, không phải xác su�
 - Monitoring daemons có thể được redeploy sau MGR phase dù image version không đổi.
 
 Base 16.2.5 không parse các tham số này. Tài liệu target vì thế yêu cầu upgrade MGR bootstrap trước cho nguồn không hỗ trợ staggered, rồi mới gọi filtered upgrade.
+
+**Activation, impact và rollback.** State machine chỉ kích hoạt explicit khi operator gọi target CLI/API với filter sau khi target MGR bootstrap active. Impact là availability/consistency của partial cohort: completion một filter không có nghĩa cluster full target. `upgrade_state`, image và daemon đã redeploy là persistent; `pause` giữ checkpoint còn `stop` không downgrade chúng. Rollback phải theo phase manifest và redeploy từng cohort về digest đã pin nếu được support, không gọi lệnh base với state target. Chưa biết host/service topology và orchestrator client nào thực dùng filters nên applicability còn unresolved.
 
 **Hành động/kiểm chứng.** Chọn một strategy duy nhất trước rollout. Nếu staggered, ghi phase manifest (filter, host/service set, limit, expected count), verify phase status và `upgrade_state` sau mỗi lần active MGR đổi. Test rejection khi chọn type out-of-order và test một `limit` nhỏ; không dùng completion của một phase làm bằng chứng toàn cluster đã target.
 
@@ -114,6 +120,8 @@ Commits chính là `a181dd28b20792c23eb1606cc2953fb643609ee1`, `161692011c81733d
 
 **NFS nuance.** Target constructor gọi `migrate(startup=True)` và cố ý chưa chạy 2→3 ở startup; serve loop chạy migration rồi bỏ qua reconciliation cho tới khi xong. Trong `migrate_nfs_spec()`, lỗi `nfs export apply` được log warning nhưng không làm migration fail/retry, nên phải đối chiếu số export thay vì chỉ nhìn state=5.
 
+**Impact và mixed/full.** Migration chạy dưới target active MGR trong khi daemon còn mixed version; impact gồm orchestrator availability, NFS service/data continuity và registry credential delivery. Khi state đạt 5, control plane là full target về schema dù daemon images có thể chưa nâng xong; một base MGR promote lúc đó bị chặn apply service như rollback proof nêu trên.
+
 **Hành động/kiểm chứng.** Trước promote target active MGR, export service specs, NFS export objects/grace và cephadm store/options; xác định rõ có service `nfs.ganesha-*` hay pool/namespace legacy. Sau migration, so khớp export count/content, grace, service name, daemon/client I/O và `client.admin` distribution. Không coi failback binary về 16.2.5 là rollback hoàn chỉnh; cần một procedure phục hồi metadata/config đã thử nghiệm hoặc kế hoạch forward-fix.
 
 **Đánh giá.** Rollback risk **cao và áp dụng cho existing cephadm control state**; phần NFS/registry là **conditional**. Confidence **high**.
@@ -125,6 +133,8 @@ Commits chính là `a181dd28b20792c23eb1606cc2953fb643609ee1`, `161692011c81733d
 **Trước → sau.** Target tránh cố remove/redeploy trên host không truy cập được, nhưng đối với NFS và HAProxy lại có đường availability chủ động: phát hiện host mất kết nối, đánh thức serve loop và đặt replacement ở host khác. Maintenance host được xử lý khác một host bất ngờ offline.
 
 **Explicit destructive path.** `orch host rm --offline --force` mới có thể purge OSD metadata và service state mà không liên lạc host. Đây là lệnh operator, không phải tác động tự động của upgrade; sự tồn tại của nó yêu cầu runbook không dùng nhầm để “xử lý nhanh” một host chỉ mất SSH tạm thời.
+
+**Ranh giới rollback và phần chưa biết.** Watcher/reschedule tự động có thể ghi placement/service daemon mới; hạ MGR không di chuyển chúng trở lại và host cũ khi online có thể tạo duplicate endpoint nếu reconciliation chưa xong. Trước fault test phải snapshot specs, inventory, VIP và daemon placement; rollback bằng apply spec đã duyệt sau khi xác định daemon nào phục vụ thật. Chưa có As-Is về maintenance flags, SSH reachability, NFS/HAProxy HA topology và offline-host policy.
 
 **Hành động/kiểm chứng.** Làm sạch host health/SSH trước rollout. Nếu có NFS HA hoặc ingress, thử mất management connectivity trong staging và quan sát thời điểm replacement, VIP/client continuity, daemon cũ khi host trở lại và absence of unintended remove actions. Không trộn host drain/maintenance/offline removal với canary trừ khi đó là scenario đã phê duyệt.
 
@@ -142,6 +152,8 @@ Commits chính là `a181dd28b20792c23eb1606cc2953fb643609ee1`, `161692011c81733d
 
 **Tác động upgrade.** Đây phần lớn là hardening, nhưng automation cũ có thể thấy return message/status/progress khác. Một redeploy thành công ở process level chưa đồng nghĩa daemon đã `running`; stop toàn service critical không còn được schedule.
 
+**Activation và rollback.** Chỉ kích hoạt explicit khi operator/automation gọi service action, redeploy, remove hoặc replacement; rolling restart không tự chạy mọi path. Daemon/spec/firewall/OSD mapping đã thay đổi là persistent operational state, nên hạ binary không undo action. Mốc rollback là spec/inventory/port map trước lệnh; sau failure phải reconcile theo daemon thực và apply lại state cũ đã thử, không dựa vào progress string hoặc retry mù.
+
 **Hành động/kiểm chứng.** Đổi rollout gate sang trạng thái daemon thực, health/event và progress terminal; không parse chuỗi cũ làm success duy nhất. Thử một redeploy failure và xác nhận progress fail/event đủ rõ để stop rollout. Kiểm tra firewall port sau remove/recreate và OSD replacement mapping nếu các path đó nằm trong maintenance window.
 
 **Đánh giá.** Rủi ro **trung bình**, confidence **high**.
@@ -154,6 +166,8 @@ Commits chính là `a181dd28b20792c23eb1606cc2953fb643609ee1`, `161692011c81733d
 
 **Edge 2 — insecure per-host pull.** First image lookup thêm `--insecure` khi option bật. Nhưng `_upgrade_daemons()` pull image trên từng host với args rỗng, nên endpoint code không chứng minh TLS bypass được truyền cho các pull còn lại.
 
+**Impact, mixed và rollback.** Trong mixed host rollout, mỗi node có login/cache/image state riêng; một first pull thành công không chứng minh full cohort kéo được digest. Impact là upgrade availability và supply-chain consistency nếu host dùng sai/không lấy được image. Credential migration/config-key và image cache là persistent; hạ MGR không tự phục hồi option đã xóa hoặc đăng nhập mọi host. Trước migration lưu option metadata an toàn và digest; nếu pull lỗi, pause, sửa credential/TLS policy rồi tiếp tục forward thay vì rollback secret bằng log/plaintext.
+
 **Hành động/kiểm chứng.** Trước upgrade, xác nhận config-key mới tồn tại mà không in secret, mọi host báo registry login complete, và pull/inspect cùng digest thành công từ từng node. Với insecure registry, chạy đúng per-host path của upgrade trong staging; nếu bất kỳ host nào cần `--tls-verify=false`, không dựa vào first pull thành công. Theo dõi `UPGRADE_FAILED_PULL`, host detail và registry auth log; resume chỉ sau khi nguyên nhân được sửa.
 
 **Đánh giá.** Rủi ro **cao theo điều kiện private/insecure registry**, confidence **high về code path**, runtime applicability chưa được kiểm chứng.
@@ -165,6 +179,8 @@ Commits chính là `a181dd28b20792c23eb1606cc2953fb643609ee1`, `161692011c81733d
 **Endpoint gap.** Trong target, `CephContainer.exec_cmd()` gọi `get_running_container_name()` và lưu kết quả vào local `cname`, nhưng command trả về vẫn dùng `self.cname` (new dash-name). Nếu chỉ old dot-name đang chạy, detection thành công nhưng exec vẫn nhắm sai tên. Inspect/remove/stop không có cùng lỗi này.
 
 **Mixed phase.** Daemon base chưa redeploy vẫn có old name; daemon được target redeploy dùng new name/unit files. Read-only admin exec/shell hoặc helper dựa vào `exec_cmd` có thể khác nhau theo từng host cho tới khi redeploy hoàn tất.
+
+**Impact và rollback.** Impact là daemon operability/availability: admin exec có thể fail dù container chạy, còn stop fallback sai có thể để orphan hoặc chặn restart. Container/unit names và generated systemd files đổi bền vững theo redeploy; package downgrade không rename chúng về dot-name. Chụp unit/container/data-dir mapping trước canary. Nếu target unit lỗi, dừng host cohort và apply lại unit/spec đã xác minh; không force-remove container còn giữ daemon data.
 
 **Hành động/kiểm chứng.** Trên canary, inventory old/new container names trước redeploy; thử một read-only exec vào old-name daemon, rồi restart/redeploy và kiểm tra unit stop, post-stop fallback, startup dưới ngưỡng 200 giây và không còn orphan container. Không dùng forced rename/remove làm workaround trong production khi chưa kiểm chứng unit/data-dir ownership.
 
@@ -184,6 +200,10 @@ Commits chính là `a181dd28b20792c23eb1606cc2953fb643609ee1`, `161692011c81733d
 **Hành động/kiểm chứng.** Inventory service đang deploy; render/diff config trước và sau canary, rồi kiểm tra endpoint/VIP/TLS, iSCSI sessions, NFS mounts và monitoring scrape/rules. Với monitoring, áp dụng thêm parser/alert migration gate của report 07.
 
 **Đánh giá.** Rủi ro **trung bình theo service**, confidence **medium-high** vì code/template rõ nhưng As-Is chưa có.
+
+**Tác động và mixed/full.** Availability/compatibility phụ thuộc service được render: active-MGR IP bổ sung vào iSCSI `trusted_ip_list` có thể đổi quyền truy cập dashboard/API, ingress HTTP client/server timeout đổi từ `1s` sang `30s`, và per-host Grafana certificate đổi identity đang trình cho client. Trong mixed phase, active MGR quyết định lần render tiếp theo nhưng daemon chưa redeploy vẫn dùng config cũ; cùng image service có thể mang config khác giữa hai host. Sau full MGR target vẫn phải xác nhận rendered config đã được áp dụng trên toàn bộ cohort service và kết quả endpoint/session/scrape khớp expected.
+
+**Rollback boundary.** Chụp service specs, rendered files, image digests và cert/key references trước reconcile; source `monitoring.py` chuyển `grafana_crt`/`grafana_key` global sang `<host>/grafana_crt`/`<host>/grafana_key`, nên hạ MGR không tự đưa credential về layout base. Failback service phải đối chiếu config cùng phiên bản controller, phục hồi certificate/spec thích hợp và reconfig có kiểm chứng; không xóa host-qualified keys chỉ để ép base chạy. Các NFS state migration thuộc ADM-004 phải được giải quyết trước, vì khôi phục template không đảo migration. Stop trước mở rộng redeploy nếu VIP/TLS/session thay ngoài kế hoạch, scrape mất hoặc config-key snapshot không đủ để phục hồi; các thao tác này chưa được thử trong deployment.
 
 ## 5. Trivial/support changes
 

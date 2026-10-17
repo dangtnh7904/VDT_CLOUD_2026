@@ -55,6 +55,8 @@ Không dùng CVSS trong report vì source Ceph được kiểm không cung cấp
 
 **Trước → sau / mixed-version.** Cả hai endpoint đã nằm sau fixed tag, nên report không tìm thấy runtime transition để gán cho upgrade `16.2.5 → 16.2.15`. Health alerts hoặc cấu hình `auth_allow_insecure_global_id_reclaim` vẫn là hygiene cần xem xét nếu còn client cũ, nhưng không được trình bày như target-only fix.
 
+**Activation/rollback/kiểm chứng.** Không có activation tự động hay migration mới trong hop này; thay đổi config reclaim là thao tác explicit thuộc workstream As-Is. Package rollback trong phạm vi hai endpoint không đảo một runtime delta, nhưng không được hạ xuống release trước `16.2.1`. Kiểm chứng bằng `SEC-V01`: đối chiếu SHA/tag của artifact đang chạy và health alerts; nếu provenance không khớp base đã fix thì tách thành security blocker riêng.
+
 **Disposition.** `trivial` cho endpoint comparison; confidence `high` nhờ official release mapping, target advisory và tag ancestry. Nếu cluster vẫn báo client reclaim không an toàn, xử lý đó là As-Is security workstream riêng trước khi harden cấu hình.
 
 ### SEC-002 — ba advisory 16.2.4 cũng là fix trước base
@@ -62,6 +64,8 @@ Không dùng CVSS trong report vì source Ceph được kiểm không cung cấp
 Target docs [CVE-2021-3509.rst](../../ceph16.2.15/ceph/doc/security/CVE-2021-3509.rst), [CVE-2021-3524.rst](../../ceph16.2.15/ceph/doc/security/CVE-2021-3524.rst) và [CVE-2021-3531.rst](../../ceph16.2.15/ceph/doc/security/CVE-2021-3531.rst) đều ghi Pacific `16.2.4+` là fixed. [Release note chính thức 16.2.4](https://ceph.io/en/news/blog/2021/v16-2-4-pacific-released/) map lần lượt Dashboard cookie injection, RGW CORS header injection và Swift malformed-URL denial of service tới release này. Git ancestry xác nhận `v16.2.4` là ancestor của base.
 
 Do đó ba row advisory là documentation additions từ commit `93fbac498ccf37733ba115b8b6586d3ab9d70a53`, không phải code delta giữa endpoint. Chúng được giữ với `SEC-002` để không làm mất audit trail, nhưng disposition là `trivial`, risk cho **upgrade delta** là none và confidence `high`. Việc xác minh provenance của package `v16.2.5` đang chạy vẫn là prerequisite chung nếu binary thực tế không khớp Git tag.
+
+**Activation/mixed/rollback/kiểm chứng.** Không có target-only activation mode: Dashboard/RGW path và config liên quan giữ cùng fixed behavior ở base và target, nên mixed hay full rollout không tạo security transition này. Rollback giữa hai endpoint không cần data restore, nhưng tuyệt đối không chọn artifact trước `16.2.4`. Chưa biết provenance/downstream patch của package thực tế; chạy validation `SEC-V01` trên mọi serving cohort và dừng nếu SHA/tag không chứng minh chứa ba fix.
 
 ## 5. Cross-owner findings trong range
 
@@ -73,6 +77,8 @@ Do đó ba row advisory là documentation additions từ commit `93fbac498ccf377
 
 **Mixed/full effect.** Trong rolling phase, kết quả command phụ thuộc version của active mgr; failover về mgr cũ có thể đưa logic base trở lại. Sau khi tất cả mgr liên quan ở target, discovery path đã fix, nhưng audit entity-to-subvolume path vẫn là action riêng.
 
+**Activation, rollback và validation.** Discovery fix chạy automatic khi target active MGR xử lý legacy volumes/Manila operation; audit/rotate CephX key là explicit. Package failback có thể đưa logic discovery lỗi trở lại, còn key/cap đã sửa là persistent MON auth state và không được rollback về scope rộng. Thực thi `SEC-V02` trong lab/canary: inventory history/entity→path, negative mount/read/write ngoài subvolume và active-MGR failover; dừng nếu key không truy vết được hoặc access ngoài path thành công.
+
 **Risk/confidence.** Security consequence cao khi điều kiện khớp; applicability conditional; confidence `high`. Owner-14 rows `CVE-2022-0670.rst` và `cves.rst` là `support`, không nhân đôi runtime rows.
 
 ### SEC-004 — CVE-2022-3650 / VAL-001
@@ -81,7 +87,11 @@ Do đó ba row advisory là documentation additions từ commit `93fbac498ccf377
 
 **Activation và phase.** Chỉ tác động host chạy `ceph-crash`; có hiệu lực khi process target được khởi động lại. Đây là host-local behavior, nên mixed cluster có thể đồng thời có host cũ còn chạy root và host mới đã drop privilege.
 
+**Activation mode và rollback.** Privilege drop chạy tự động trên mỗi restart target; không có data migration hay opt-in. Hạ binary về base làm process chạy root trở lại, là security regression chứ không phải rollback trung tính, và không bù crash report bị bỏ lỡ. Nếu target thoát, giữ binary fix, rollback service/config permission về bản đã chụp hoặc forward-fix account/group rồi retest thay vì bỏ `drop_privs()`.
+
 **Operational effect.** Target giảm quyền của long-running scraper, nhưng account/group hoặc quyền đọc crash directory sai có thể khiến target process thoát hoặc không scrape được. Package/staging validation phải chứng minh cả effective UID/GID và end-to-end crash submission; chỉ thấy service “active” là chưa đủ.
+
+**Kiểm chứng.** Chạy `SEC-V03` trên host staging: quan sát UID/GID/supplementary groups sau restart và submit synthetic crash trong test-data boundary; stop nếu `drop_privs` lỗi, permission denied hoặc crash không được archive/upload.
 
 **Risk/confidence.** Security relevance có bằng chứng trực tiếp; deployment applicability conditional; confidence `high`. Không có row owner `14` cho finding này.
 
@@ -94,6 +104,8 @@ Do đó ba row advisory là documentation additions từ commit `93fbac498ccf377
 **Mixed/full effect.** Một RGW base còn nhận traffic vẫn giữ behavior cũ; security closure chỉ đạt khi mọi serving instance đã target hoặc bị drain. Không có config toggle để biến target fix thành remediation cho request đã xử lý trước đó.
 
 **Risk/confidence.** Security consequence cao khi Browser POST tồn tại; applicability conditional; confidence `high` từ endpoint diff, commit và official release mapping. Không có row owner `14` cho finding này.
+
+**Rollback và unresolved evidence.** Binary base lại đặt bucket vào policy environment trước parsing form, nên failback một serving RGW phải mở lại gate SEC-005/RGW-001 trừ khi Browser POST đã được cách ly bằng control được thử. Config restore không giữ fix trong base và không hoàn nguyên object/credential history. Validation phải pin positive và bucket-mismatch request vào từng backend sau drain/failback, kiểm backend identity/version cùng HTTP/S3 response; stop nếu negative request được chấp nhận hoặc đường retry còn tới base chưa cách ly. Chưa có As-Is Browser POST/IAM/LB policy và test execution để chứng minh điều kiện đó; không suy security closure từ việc một target endpoint reject request.
 
 ## 6. Validation scenarios đề xuất
 

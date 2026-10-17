@@ -16,6 +16,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab/canary chạy client IO đồng thời recovery/backfill/scrub, ghi scheduler và effective config từng OSD, đo client latency, hàng đợi recovery và thời gian PG trở lại clean. So với baseline Pacific trong cùng workload; dừng rollout nếu vượt ngưỡng do dự án đặt trước. `src/test/test_mclock_priority_queue.cc`, `qa/standalone/misc/mclock-config.sh` và QA scheduler là bằng chứng coverage cần đọc sâu; chưa chạy.
 
+**Rollback boundary:** queue-cost change không có bước chuyển ngược work đang chờ giữa hai implementation. Trước canary lưu scheduler/profile/capacity, recovery/backfill overrides và queue/PG state; built-in mClock có thể `config rm` override qua MON, nên hạ binary không khôi phục cấu hình đã xóa. Nếu client latency hoặc PG progress không đạt, dừng rollout, đối soát config và quiesce/restart theo kế hoạch đã kiểm; WPQ là lựa chọn cấu hình riêng cần thử, chưa chứng minh daemon Pacific mở store sau BLU-001/MON-001.
+
 ### OSD-002 — Tách địa chỉ bind và địa chỉ công bố của OSD
 
 **CSV:** `src/ceph_osd.cc`. Pacific gọi `ms_public->bindv(public_addrs)` và dùng `public_addrs` cho heartbeat front. Quincy chọn thêm `CEPH_PICK_ADDRESS_PUBLIC_BIND`; nếu trả `-ENOENT` thì dùng `public_addrs`, lỗi khác làm OSD thoát, rồi gọi `bindv(public_bind_addrs, public_addrs)` và dùng địa chỉ bind cho heartbeat front. Hunk `main` trong tệp này; commit `bb9eb6aa2f1` xác nhận mục đích `public_bind_addrs`.
@@ -23,6 +25,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** cụm đặt public bind address riêng hoặc cấu hình địa chỉ sai. Nếu không đặt, code fallback về public address. Trong mixed-version, OSD Quincy áp dụng cách bind mới riêng cho chính nó; sau full upgrade, mọi OSD target dùng cách này. **Evidence confidence:** high cho nhánh code, medium cho khả năng ảnh hưởng mạng thực tế.
 
 **Kiểm chứng:** trong lab kiểm tra socket lắng nghe, địa chỉ OSD công bố trong OSDMap, kết nối client/peer và heartbeat trên host có public bind riêng; thử cả trường hợp không đặt tùy chọn.
+
+**Activation/tác động và rollback:** chọn bind tự động trong startup target; availability phụ thuộc NIC/IP/port thật, fallback chỉ dành `-ENOENT`, không che các lỗi cấu hình khác. Chưa có network/addrvec inventory hay heartbeat trace của cluster. Lưu public/bind config và OSDMap trước restart; dừng canary nếu listener/heartbeat/client path không đúng. Khôi phục config có thể sửa startup tiếp theo nhưng không undo address đã công bố hoặc store đã mở; binary failback phải kiểm persistent state riêng.
 
 ### OSD-003 — FileStore luôn dùng WPQ
 
@@ -32,6 +36,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** thống kê object store của mọi OSD, đọc `osd_op_queue` hiệu dụng và kiểm tra scheduler thực tế của FileStore trong lab/canary; đo hàng đợi và client latency nếu còn FileStore.
 
+**Impact và rollback:** performance/availability của queue đổi tự động lúc tạo scheduler FileStore; explicit QA option chỉ chứng minh fixture chọn WPQ. Chưa biết cluster còn FileStore hoặc profile mClock đang dùng. Giữ backend/scheduler và timeout config trước restart, đo cùng workload; nếu WPQ không đạt yêu cầu thì dừng rollout và giữ evidence để điều chỉnh kế hoạch. Hạ binary có thể trở lại scheduler cũ nhưng không hoàn nguyên write/journal đã commit hay op timeout đã xảy ra; không chuyển backend store để né nhánh ép WPQ.
+
 ### OSD-004 — Mô hình chi phí và cấu hình mClock đổi
 
 **CSV:** `src/osd/scheduler/mClockScheduler.cc`, `.h`. Pacific tính capacity theo IOPS/shard và cost qua tham số thời gian mỗi IO/byte. Quincy lấy `osd_mclock_max_sequential_bandwidth_(hdd|ssd)` cùng IOPS để chuyển cost sang byte/IO và capacity sang byte/giây/shard; reservation/limit lấy tỉ lệ capacity, một client profile ID chung thay cho owner ID riêng. Bộ profile tích hợp được đặt ở mức config default; với profile không phải `custom`, thay QoS key sẽ được khôi phục, gồm lệnh `config rm` cho `osd`/`osd.<id>` từ shard 0 và xóa giá trị tạm. Hunk `set_osd_capacity_params_from_config`, `ClientRegistry::update_from_config`, `get_scheduler_id`, `set_config_defaults_from_profile`, `calc_scaled_cost`, `handle_conf_change`; commit tiêu biểu `b8a53d96608`, `846a342c0d4`, `41c903a4bf2`. [Release notes v17.2.7](https://docs.ceph.com/en/latest/releases/quincy/) và [tham chiếu mClock Quincy](https://docs.ceph.com/en/quincy/rados/configuration/mclock-config-ref/) xác nhận default/profile và việc profile tích hợp khóa QoS option.
@@ -39,6 +45,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** OSD dùng mClock. Override QoS chỉ giữ ý nghĩa thủ công với profile `custom`; cấu hình profile tích hợp cần đối soát giá trị hiệu dụng trên daemon. Trong mixed-version, cách tính QoS khác nhau theo OSD; sau full upgrade áp dụng mô hình Quincy. Không suy ra mức IOPS/latency cụ thể từ diff. **Evidence confidence:** high cho code, medium cho tác động tải.
 
 **Kiểm chứng:** chụp cấu hình mClock hiệu dụng, profile, capacity HDD/SSD, số shard và queue dump trước/sau; chạy cùng tải client/recovery trong lab và kiểm tra việc thay QoS key ở built-in/custom profile.
+
+**Activation và rollback boundary:** mô hình chi phí áp tự động khi mClock target init/nhận config; chọn `custom` là explicit. Profile tích hợp có thể xóa giá trị QoS ở MON store, nên rollback chỉ scheduler/binary không khôi phục những key đó. Lưu cả source-of-value và effective value trước canary, thử profile transition trên lab rồi đối soát MON config; dừng nếu QoS mới không giữ client/recovery budget. Work đã thực hiện không được đảo lại bằng profile cũ, còn phép so latency phải pin scheduler/capacity/shard.
 
 ### OSD-005 — Phân lớp ưu tiên recovery và thêm telemetry hàng đợi
 
@@ -48,6 +56,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** tạo tình huống degraded và backfill có kiểm soát trong lab, xem lớp hàng đợi, queue latency và client latency cùng tiến độ recovery ở mỗi version.
 
+**Activation và rollback:** phân lớp tự động theo message priority trong queue target; tác động availability/performance khác giữa forced/degraded và best-effort. Chưa có priority/queue trace hay tỷ lệ recovery thực của đích. Trước canary giữ pool priority và scheduler dump, dừng nếu recovery bị đói hoặc client vượt ngưỡng; phục hồi cấu hình priority cần kiểm chính lớp mà binary chọn. Hạ process không mang queue RAM sang bản cũ và không undo backfill đã commit, nên phải đối soát PG/byte sau restart.
+
 ### OSD-006 — Hàng đợi và điều kiện chọn PG để scrub
 
 **CSV:** `src/osd/scrubber/osd_scrub_sched.cc`, `.h`, `src/osd/scrubber_common.h`. Ở Pacific lịch scrub nằm trong `OSD.cc`/`PG`; Quincy tách thành `ScrubQueue`, lưu job và lịch đăng ký theo primary. `select_pg_and_scrub` lập điều kiện từ thời gian cho phép và tải, chỉ chọn job quá deadline khi vượt điều kiện thường; `select_from_group` gọi `initiate_a_scrub` sau lọc. Giao diện `ScrubPgIF` thêm `get_schedule`, `on_primary_change`, `update_scrub_job`; lịch scrub được xuất cho operator. Hunk trong ba tệp và commit `adc8dfb3e5b`, `4bf07e05cea`.
@@ -55,6 +65,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** PG cần scrub, nhất là khi tải cao, ngoài khung giờ hoặc khi đổi primary. Trong mixed-version, OSD primary quyết định scrub theo code của chính nó; sau full upgrade dùng scheduler Quincy. Chỉ đọc code chưa chứng minh độ trễ scrub cụ thể. **Evidence confidence:** high cho điều kiện chọn, medium cho tác động triển khai.
 
 **Kiểm chứng:** lab với giờ scrub/tải giả lập, kiểm tra lịch PG và độ trễ đến scrub cho job thường/quá deadline, quan sát khi đổi primary và khi recovery đồng thời; đối chiếu kết quả với health warning scrub.
+
+**Activation và rollback:** chọn job/đổi lịch tự động ở primary target; scrub/repair yêu cầu bằng lệnh vẫn là tác vụ explicit. Trước đổi primary/restart giữ schedule, deadline, scrub flags và PG health; job queued/in-flight không được chuyển nguyên FSM sang binary cũ. Phục hồi config/schedule không xóa warning lịch sử hoặc undo repair nếu job đã sửa dữ liệu. Dừng nếu job quá deadline vẫn không chạy, bị chạy trùng hoặc PG không tiến triển; kiểm primary/version ở mỗi observation để không quy skew cho tải.
 
 ### OSD-007 — Scrub abort và snap trimming bị chặn
 
@@ -64,13 +76,17 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab bật/tắt cờ scrub khi deep scrub được xếp lịch, quan sát FSM có thoát và scrub được xếp lại; tạo snapshot cần trim trong lúc scrub rồi gây abort/failure có kiểm soát, xác nhận trim tiếp tục và PG quay về clean.
 
+**Activation/tác động và rollback:** abort/trim wakeup tự động khi FSM target đi vào nhánh flag hoặc cleanup; correctness/availability nằm ở việc giải phóng scrub state và tiếp tục snaptrim. Giữ flag, trim queue và snapshot manifest trước thử; đổi flag lại không khôi phục clone đã được trim, còn hạ binary không mang queued scrub state sang implementation Pacific. Nếu trimmer kẹt hoặc snapshot/clone checksum sai, dừng thử, giữ log/PG state rồi khôi phục checkpoint được kiểm; không bật repair để che failure của abort path.
+
 ### OSD-008 — Chuyển đổi legacy SnapMapper key và kiểm tra tính nhất quán
 
-**CSV:** `src/osd/SnapMapper.cc`, `.h`, `src/osd/SnapMapReaderI.h`. Pacific `convert_legacy` dựng key mới từ pool và snap, làm mất hậu tố phân biệt object của key cũ. Quincy `convert_legacy_key` giữ phần từ snap ID trở đi của legacy key và thêm prefix/pool; commit `9b5fbb8cb80` ghi rõ lỗi chỉ được sửa cho các lần chuyển đổi tiếp theo. Ngoài ra, giao diện `SnapMapReaderI` và `get_snaps_check_consistency` so `OBJ_` với các `SNA_` entry, trả trạng thái inconsistent nếu thiếu/sai mapping; `get_snaps_common` chuyển lỗi decode sang `-EIO` thay vì để exception thoát. Hunk `convert_legacy`, `get_snaps_common`, `get_snaps_check_consistency`; commit `f46fec6e79c` cho giao diện scrub mới.
+**CSV:** `src/osd/SnapMapper.cc`, `.h`, `src/osd/SnapMapReaderI.h`. Cả Pacific 16.2.15 lẫn Quincy 17.2.7 đã có `convert_legacy_key()` giữ object-unique suffix từ key cũ; net diff tại hàm đó chỉ đổi spelling `bufferlist` thành `ceph::buffer::list`. Vì vậy sửa legacy conversion từ lịch sử `9b5fbb8cb80` không phải cải thiện mới của hop này; comment về lỗi cũ ở cả endpoint chỉ giải thích rủi ro dữ liệu từ các lần conversion trước. Khác biệt thực là giao diện `SnapMapReaderI` mới và `get_snaps_check_consistency()` so `OBJ_` với các `SNA_` entry, trả trạng thái inconsistent nếu thiếu/sai mapping; `get_snaps_common()` bắt lỗi decode của `OBJ_` thành backend `-EIO`. Không suy mọi decode `SNA_` cũng được bắt vì nhánh consistency gọi `from_raw()` riêng. Hunk `get_snaps_common`, `get_snaps_check_consistency`; commit `f46fec6e79c` cho giao diện scrub mới.
 
 **Điều kiện:** còn legacy key cần chuyển đổi, hoặc scrub clone/snapshot đi qua kiểm tra SnapMapper. Lỗi key đã bị phá bởi lần chuyển đổi trước không được commit trên tự khôi phục; cần kiểm tra dữ liệu cụm thực tế. Trong mixed-version, mỗi OSD target dùng code mới cho PG nó xử lý; sau full upgrade toàn bộ OSD target dùng đường mới. **Evidence confidence:** high cho nhánh code và giới hạn của fix, medium cho mức phơi nhiễm của cụm.
 
 **Kiểm chứng:** trên bản sao dữ liệu hoặc lab, tạo legacy mapping có nhiều clone cùng snap để kiểm tra key mới còn object suffix; chạy scrub có mapping thiếu/sai để xem lỗi được phát hiện. Với cụm thực, rà snapshot/clone và scrub inconsistency trước khi lập phương án xử lý; không sửa metadata trực tiếp từ kết luận này.
+
+**Activation và impact:** consistency check tự động khi scrub target dùng reader mới; legacy conversion có thể chạy khi caller mở metadata cần conversion nhưng thuật toán suffix đã giống nhau ở hai endpoint. Correctness/observability của snapshot mappings là tác động thực; kết quả phát hiện thêm lỗi không chứng minh target vừa làm hỏng map. Trước scrub/repair giữ OBJ_/SNA_ cùng clone/snap manifest và store clone; hạ binary không hồi keys đã hỏng từ lần conversion lịch sử hoặc undo repair đã commit. Giữ gate riêng nếu decode SNA_ hoặc mapping mismatch, chưa có runtime để chọn thủ tục sửa.
 
 ### OSD-009 — Gán cost khi xếp lại EC recovery read
 
@@ -80,6 +96,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab EC pool với recovery và thay đổi OSDMap có kiểm soát, theo dõi queue/recovery progress và xác nhận không kẹt PG; so với Pacific trong cùng kịch bản.
 
+**Activation/impact và rollback:** cost1 tự động khi source recovery read đổi trạng thái qua OSDMap và callback được xếp lại; availability/performance chịu ảnh hưởng ở đường EC hiếm này. Trước canary giữ EC profile, acting set/epoch và queue trace, dừng nếu callback không hoàn tất hoặc PG recovery kẹt. Quay binary không chuyển in-flight FinishReadOp về base và không undo push đã commit; cần quiesce/reconcile object versions/checksum sau restart, cùng persistent store/release gates.
+
 ### OSD-010 — Điểm bắt đầu rollback của PG log trong replicated pool
 
 **CSV:** `src/osd/PGLog.cc`, `.h`. Pacific khi đọc log của replicated PG không có omap key `rollback_info_trimmed_to` giữ marker rỗng. Quincy, ở cả hai đường load tương ứng, đặt `on_disk_rollback_info_trimmed_to = info.last_update` khi `info.pgid.is_no_shard()`. Commit `c5b38306d7a` giải thích marker rỗng khiến peering replay qua toàn bộ PG log dù replicated pool không cần rollback; hunk nằm tại `read_log_and_missing` và đường read async.
@@ -87,6 +105,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** replicated PG log thiếu key rollback như thiết kế và OSD load/peer PG. Trong mixed-version, OSD target xử lý log theo marker mới, OSD base giữ hành vi cũ; sau full upgrade target áp dụng ở mọi OSD. Đây là thay đổi chi phí peering, không phải bằng chứng thay đổi nội dung object. **Evidence confidence:** high cho logic, medium cho mức cải thiện peering.
 
 **Kiểm chứng:** lab replicated pool với PG log dài, restart OSD/trigger peering có kiểm soát, đo thời gian peering và số log entry xử lý, xác nhận PG vẫn active+clean và read checksum đúng.
+
+**Impact và ranh giới:** peering performance/availability thay tự động khi replicated PG log được load; `rollback_info_trimmed_to` ở đây là marker phục vụ PG log, không phải chứng cứ downgrade daemon. Hunk đặt marker memory khi thiếu key theo thiết kế, không cho phép xóa PG log để rút ngắn replay. Giữ log/missing/version manifest trước canary; nếu PG không active/clean hoặc hash sai thì dừng và giữ store clone, hạ artifact chưa hoàn nguyên log/data đã ghi.
 
 ### OSD-011 — Ý nghĩa duration trong dump của OpRequest
 
@@ -96,6 +116,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** so dump từ request tương đương trên hai version, cập nhật parser/biểu đồ dùng duration; kiểm tra tracing span trên build đang triển khai.
 
+**Activation/impact và rollback:** duration meaning tự động đổi trong dump target, tác động observability và stop/go nếu parser gán nhầm bước IO; span còn phụ thuộc build/collector. Chưa có consumer/parser inventory hay trace thực. Giữ raw event stamps và producer version, cập nhật fixture theo delta từ event trước; rollback parser có thể xử lý dữ liệu cũ/mới nếu dùng timestamp gốc nhưng không sửa số liệu lịch sử đã aggregate sai. Query không đổi op order, nên không suy storage regression từ cùng nhãn duration khác nghĩa.
+
 ### OSD-012 — Chi phí recovery theo kích thước object và điều kiện scrub của PG
 
 **CSV:** `src/osd/PG.cc`, `.h`. Pacific `PG::queue_recovery` xếp work mà không cung cấp cost/priority theo PG; Quincy lấy `max(num_bytes,0) / max(num_objects,1)` rồi chặn cost tối thiểu `1` và truyền cùng `recovery_state.get_recovery_op_priority()`. `PG::sched_scrub` trả reason cụ thể và từ chối PG đang `SNAPTRIM`/`SNAPTRIM_WAIT`; `publish_stats_to_osd` đưa lịch scrub vào PG stats. Hunk các hàm này và commit `5132e8b0a85`, `821f0b00b99`, `4bf07e05cea`.
@@ -103,6 +125,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** recovery của PG có kích thước object không đều, hoặc scrub trùng snaptrim/đổi primary. Trong mixed-version mỗi OSD áp dụng logic cho PG nó sở hữu; sau full upgrade target áp dụng toàn bộ. **Evidence confidence:** high cho nhánh code, medium cho mức thay đổi throughput.
 
 **Kiểm chứng:** lab tạo PG với object size khác nhau rồi chạy recovery dưới tải; ghi queue cost, class, client latency và tiến độ. Đồng thời thử scrub trong `SNAPTRIM_WAIT`, xác nhận được xếp lại và lịch hiển thị trong PG stats.
+
+**Activation/impact và rollback:** cost trung bình và scrub gate áp tự động theo PG stats/primary target; performance/availability phụ thuộc phân bố object size và trim state. Chưa có PG stats/queue trace để biết cost estimate đại diện workload đến đâu. Giữ stats, trim queue và scrub schedule trước canary; hạ binary không undo bytes đã recover hoặc clone đã trim. Nếu cost lệch budget hoặc SNAPTRIM_WAIT/scrub không thoát, dừng và điều tra state machine trên clone, không xóa PG stats/queue metadata để ép clean.
 
 ### OSD-013 — Peering bỏ giao thức trước Octopus
 
@@ -112,6 +136,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** thu `ceph features`, `require-osd-release`, OSDMap và phiên bản mọi OSD; lab rolling upgrade, kiểm tra peering/lease sau restart từng OSD, không trộn daemon ngoài cặp đã định.
 
+**Rollback boundary:** protocol branch tự động theo target và feature peer; quay transport implementation không gỡ release flag/incompat đã persist. Giữ OSDMap/feature inventory trước daemon phase, kể cả OSD down, rồi kiểm cả primary direction với Pacific/Quincy. Nếu còn peer thiếu Octopus/Nautilus, dừng trước khi target nhận PG đó và sửa tiền đề upgrade; không ép advertised features để vượt assert. Failback canary sau store/release checkpoint phải được chứng minh riêng, không suy từ common wire features.
+
 ### OSD-014 — Lease ack và phân ưu tiên recovery theo trạng thái PG
 
 **CSV:** `src/osd/PeeringState.cc`, `.h`. Pacific `proc_lease_ack` gọi `recheck_readable` khi `now < old_ru`; Quincy đổi thành `now >= old_ru`, giúp kiểm tra lại khi thời hạn cũ đã hết (commit `c71ee14cdbc`). Quincy đồng thời đặt recovery priority theo forced, undersized, degraded, best-effort cho mClock; WPQ dùng pool `RECOVERY_OP_PRIORITY` hoặc `osd_recovery_op_priority`. `get_recovery_op_priority` trong header và `OSD-005` là hai phía của cùng đường phân lớp.
@@ -119,6 +145,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** PG laggy nhận lease ack hoặc đang recovery/backfill dưới mClock/WPQ. Trong mixed-version hành vi tùy OSD primary; sau full upgrade logic target áp dụng cho mọi PG. **Evidence confidence:** high cho điều kiện code, medium cho thời gian PG thoát laggy/khác biệt QoS.
 
 **Kiểm chứng:** lab gây trễ lease ack rồi xác nhận PG thoát laggy sau ack, thử forced/degraded/backfill và đối chiếu class/priority queue theo scheduler hiệu dụng.
+
+**Activation/impact và rollback:** lease recheck/priority tự động khi ack hoặc PG state đổi; availability/QoS phụ thuộc primary và thời hạn đọc. Chưa có lease timeline/clock trace ở đích. Giữ ack timestamps, readable_until và priority/config trước fault; dừng nếu PG còn laggy hoặc read result sai sau ack. Hạ primary binary không khôi phục lease/session RAM trước restart hoặc undo write đã ack; đối soát PG epochs/object versions trước client retry, không kéo clock để giả lập rollback lease.
 
 ### OSD-015 — Xử lý pool EIO ở đường client op
 
@@ -128,6 +156,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab pool thử nghiệm đặt EIO flag, gửi read/write từ client có và không có feature, ghi reply/retry và kiểm tra không có write được commit; tuyệt đối không thử trên pool production.
 
+**Activation/impact và rollback:** EIO branch tự động khi primary target xử lý op, còn đặt pool EIO là explicit. Availability/client compatibility phụ thuộc flag và Objecter contract; chưa có client feature/retcode trace của estate. Trước lab giữ pool flag/map epoch và workload checkpoint, kiểm cả client hỗ trợ/không hỗ trợ. Hạ OSD không gỡ flag đã ghi và không undo op đã xảy ra trước khi flag áp; muốn unset là bước quản trị riêng sau khi nguyên nhân lỗi được giải quyết. Không coi retry/no reply là chắc chắn write chưa commit ngoài nhánh đã kiểm.
+
 ### OSD-016 — Manifest/refcount, copy và rollback của object chunked
 
 **CSV:** `src/osd/PrimaryLogPG.cc`, `.h`. Pacific `inc_refcount_by_set` chỉ giả định một chunk; Quincy duyệt `chunk_map`, theo dõi nhiều TID và callback rồi unblock object khi mọi refcount operation hoàn tất. Đường `get_manifest_ref_count` chờ clone chưa readable; `promote_object` phân biệt chunked manifest; rollback sang clone chunked tăng reference trước khi thay head, cập nhật manifest/flags và giảm reference cũ. Hunk `inc_refcount_by_set`, `finish_set_manifest_refcount`, `get_manifest_ref_count`, `promote_object`, `_rollback_to`/`_do_rollback_to`; commit `a8734cb7778`, `7b669e4af42` và các hunk endpoint.
@@ -136,13 +166,17 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab với chunked object nhiều chunk, snapshot, rollback, promote và recovery clone; đối chiếu bytes, digest, refcount, PG log và trạng thái sạch sau restart. Dùng bản sao dữ liệu khi thử ca hỏng/lỗi.
 
+**Impact:** correctness/durability của chunk manifest và refcount thay tự động trên op set/copy/promote/rollback tương ứng; đây là rollback object theo snapshot, khác với downgrade daemon. Giữ head/clone/chunk manifest và refcount fixture trước mutation; sau tăng/giảm reference và đổi head đã commit, đổi binary không khôi phục graph cũ. Dừng khi digest/refcount hoặc missing object lệch và kiểm graph trên bản sao, chưa có bằng chứng garbage collection/restore có thể hoàn nguyên mọi edge case.
+
 ### OSD-017 — Sparse read có truncate sequence và lỗi xattr số
 
-**CSV:** `src/osd/PrimaryLogPG.cc`. Pacific `do_sparse_read` từ chối mọi request có `truncate_seq` khác 0; Quincy tính kích thước hiệu dụng từ `truncate_size` và chỉ đọc phần còn hợp lệ. So sánh xattr dạng số chuyển từ `strtoull` không kiểm lỗi sang `std::from_chars`, trả `-EINVAL` khi parse lỗi hoặc vượt miền. Hunk `do_sparse_read`, `do_xattr_cmp_u64`.
+**CSV:** `src/osd/PrimaryLogPG.cc`. Pacific `do_sparse_read` từ chối mọi request có `truncate_seq` khác 0; Quincy tính kích thước hiệu dụng từ `truncate_size` khi request có sequence mới hơn object và vượt truncate boundary, rồi giới hạn phần đọc theo size. So sánh xattr số chuyển từ `strtoull` sang `std::from_chars`, trả `-EINVAL` khi `ec` báo lỗi hoặc vượt miền. Target vẫn coi xattr rỗng là 0 và không kiểm `p == end`, nên chuỗi có numeric prefix rồi trailing text chưa được chứng minh bị từ chối. Hunk `do_sparse_read`, `do_xattr_cmp_u64`.
 
 **Điều kiện:** client dùng sparse read cùng truncate sequence, hoặc so sánh xattr số có dữ liệu không hợp lệ. Trong mixed-version cùng request có thể nhận kết quả khác tùy primary OSD; sau full upgrade theo target. **Evidence confidence:** high cho nhánh code.
 
 **Kiểm chứng:** lab sparse read qua truncate/rewrite, đối chiếu extent và bytes; thử xattr số hợp lệ, rỗng, không phải số và tràn `uint64`, quan sát reply code trên cả hai bản.
+
+**Activation/impact và rollback:** sparse-read/xattr parsing tự động trên op target, ảnh hưởng compatibility/correctness của response và quyết định conditional write. Chưa có caller estate hoặc fixture numeric prefix/trailing text; thêm case `123x`, dấu/whitespace và empty vào negative corpus, không giả định tất cả đều EINVAL. Đọc/compare riêng không đổi object nhưng pipeline có thể ghi/xóa dựa kết quả; hạ parser không undo tác vụ tiếp theo. Giữ request/bytes/version và application checkpoint, dừng pipeline mutation khi response/hash khác expected.
 
 ### OSD-018 — Cost và clean-region path của replicated recovery
 
@@ -152,6 +186,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab mất rồi phục hồi replica với object lớn/nhỏ, kiểm tra queue cost, clean-region transfer, digest và PG clean; đồng thời thử rolling upgrade trên peer Pacific/Quincy.
 
+**Activation/impact và rollback:** cost/clean-region selection tự động khi replicated recovery target chạy; performance và dữ liệu copy còn phụ thuộc dirty subsets/peer features. Giữ recovery_info, clean-region/missing và object checksum trước fault; sau push đã commit, hạ binary không undo recovered extents hoặc chuyển callback RAM. Nếu transfer thiếu dữ liệu/OMAP hay PG không clean, dừng và giữ trace/image, không sửa clean_regions để ép hoàn tất; common Octopus feature của Pacific phải được kiểm từ inventory thực.
+
 ### OSD-019 — Object-class gather từ nhiều remote object
 
 **CSV:** `src/osd/objclass.cc`. Pacific chưa có `cls_cxx_gather` và `cls_cxx_get_gathered_data` trên classic OSD; Quincy tạo finisher, đọc các source object qua objecter, gom buffer kết quả và trả mã lỗi cho class method. `PrimaryLogPG::start_cls_gather`/`cancel_cls_gather` ở `OSD-016` là đường thực thi phía PG. Hunk hai hàm mới và commit chuỗi `caf364db5e7`, `a5b04552f88`, `87e4b9714fe`.
@@ -159,6 +195,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** object class dùng API gather mới, ví dụ test class `src/cls/test_remote_reads`. Cụm không chạy class đó không có đường dữ liệu tương ứng. Trong mixed-version, method cần được kiểm tra trên cả OSD base và target; sau full upgrade target có API. **Evidence confidence:** high cho API/code, medium cho mức sử dụng thực tế.
 
 **Kiểm chứng:** lab gọi class method với nhiều source object, source thiếu và source lỗi; đối chiếu buffer/mã lỗi, thử op bị hủy khi PG đổi primary.
+
+**Activation/impact và rollback:** gather opt-in khi installed object class gọi API mới; compatibility/correctness của plugin, remote reads và cancel theo primary phải được thử theo cohort OSD. Full daemon version chưa chứng minh mọi class `.so` đúng dependency, mixed fleet cần tránh load plugin dùng symbol chưa có trên base. Trước enable giữ plugin/artifact manifest và source/destination object checkpoint; hạ plugin không undo mutation mà class đã commit hoặc remote op đang chờ. Dừng trên buffer/error/cancel mismatch, quiesce trước đổi cohort và kiểm state ứng dụng.
 
 ### OSD-020 — Thêm chỉ số delay và queue latency của OSD
 
@@ -168,11 +206,15 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lấy perf dump từ OSD Pacific/Quincy trong lab có unreadable/degraded và recovery; đảm bảo collector chịu được series thiếu ở OSD cũ và kiểm tra giá trị tăng đúng tình huống.
 
+**Activation/impact và rollback:** counters tự xuất/tăng khi target nhận đường delay/recovery tương ứng, tác động observability của rollout. Giữ perf schema/raw dump/version trước đổi collector; missing series trên Pacific không phải zero latency. Rollback dashboard/parser chỉ sửa ingest, không khôi phục samples đã mất hoặc hợp thức hóa verdict dựa wrong denominator; phải rerun canary nếu evidence không đủ. Counters RAM reset khi restart, nên lưu trước restart và đối chiếu process lifetime.
+
 ### OSD-021 — Tracer chuyên biệt cho OSD
 
 **CSV:** `src/osd/osd_tracer.cc`, `.h`. Quincy định nghĩa `tracing::osd::tracer` dùng bởi `OpSchedulerItem`, `PrimaryLogPG`, `ReplicatedBackend` và EC backend thay cho các nhánh Jaeger cũ ở những call site đã rà. Tệp mới chỉ cấp đối tượng tracer, nhưng các call site làm thay đổi span quan sát được; không có bằng chứng từ hai tệp này rằng xử lý IO đổi. **Evidence confidence:** high cho đường tracing, medium cho việc collector ngoài cụm nhận span.
 
 **Điều kiện:** build/runtime bật tracing và có pipeline thu span. Trong mixed-version cấu trúc span có thể khác theo OSD; sau full upgrade các OSD target dùng tracer mới. **Kiểm chứng:** lab bật tracing, chạy client IO/recovery và so span hierarchy/name với pipeline quan sát hiện có.
+
+**Activation/impact và rollback:** tracer/callsite tự động trong build có tracing implementation, runtime enable/collector config là explicit. Tác động observability, chưa có SBOM/collector contract hay sampling settings để chốt liên thông. Giữ trace schema, exporter config và symbols trước rollout; đổi collector hoặc hạ artifact không tái tạo span đã thiếu và restart không undo I/O đã commit. Dừng sử dụng trace làm stop/go nếu hierarchy/name không map được tới request, còn byte correctness phải dùng checksum riêng.
 
 ### OSD-022 — Mở rộng wire format và dump của PG stats
 
@@ -182,6 +224,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab rolling upgrade, đối soát `pg dump`/MGR metrics trước-sau, scrub schedule và trim fields; nếu dùng Crimson, thử restart/recovery trên bản sao store và kiểm tra decode dữ liệu.
 
+**Impact và rollback:** wire/consumer compatibility và observability đổi tự động khi target encode PG stats; envelope giữ compat22 trong `ENCODE_START(29,22)`, nhưng cần test producer/consumer hai chiều trên fixture để xác nhận fields và default. Rollback collector/parser cần raw payload/version và schema; hạ OSD không sửa report/alert đã aggregate hoặc state SeaStore được helper mới ghi. Chưa có exact-client decode test hay PG dump runtime; không dùng stats parse PASS làm bằng chứng store downgrade.
+
 ### OSD-023 — Cost của PullOp và PushReplyOp theo scheduler
 
 **CSV:** `src/osd/osd_types.cc`, `.h`. Pacific cả `PullOp` và `PushReplyOp` dùng `osd_push_per_object_cost + osd_recovery_max_chunk`. Quincy với mClock cho PushReply cost `1` và Pull cost bằng số byte ước lượng còn phải recover, chặn trong `[1, osd_recovery_max_chunk]`; nhánh WPQ giữ công thức cũ. Hunk hai hàm cost và `ObjectRecoveryProgress::estimate_remaining_data_to_recover`; commit `2e98d162f9d`, `eb57e4b53a3`.
@@ -189,6 +233,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** recovery có pull/push và OSD dùng mClock; WPQ giữ cost cũ. Trong mixed-version chi phí queue khác nhau theo daemon, sau full upgrade áp dụng theo scheduler cấu hình. **Evidence confidence:** high cho công thức, medium cho tốc độ recovery thực tế.
 
 **Kiểm chứng:** lab recovery object nhỏ/lớn với mClock và WPQ, xem queue cost, client latency và thời gian PG clean.
+
+**Activation/impact và rollback:** công thức cost tự chọn theo scheduler trên recovery request target; performance/headroom chịu ảnh hưởng, estimate có chú thích overestimate với clone. Chưa có object/clone distribution hoặc queue budget thực. Giữ scheduler/chunk size, progress và queue samples trước canary, dừng nếu recovery/client contention vượt ngưỡng. Phục hồi option không chuyển cost đã gắn trong queue cũ, hạ process không undo recovery đã commit; restart cần đối soát PG/object trước retry và xét store gate.
 
 ### OSD-024 — Đường fast shutdown của OSD
 
@@ -198,6 +244,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab với IO và recovery đang chạy, bật fast shutdown trên OSD thử nghiệm, đo drain/umount, restart và kiểm tra store/PG sạch; thử cả điều kiện `has_null_manager()` và không có nếu môi trường hỗ trợ.
 
+**Impact và rollback boundary:** availability/durability của restart đổi tự động lúc stop nếu fast-shutdown/null-FM; `osd_op_tp.drain()` không có deadline hard ở đoạn này, timeout assert được kiểm sau drain/umount nên không bảo đảm process tự thoát đúng deadline. Trước restart giữ clean/dirty state và stop timeout/service-manager policy; nếu drain treo thì dừng rollout và giữ queue/log, không mặc định SIGKILL tương đương clean shutdown. Hạ binary không undo null-FM hoặc destage đã xảy ra; BLU-001 quyết định khả năng mở store, còn crash sau forced stop phải thử reconstruction riêng.
+
 ### OSD-025 — Scrub FSM theo dõi reservation, thời lượng và sự kiện bất thường
 
 **CSV:** `src/osd/scrubber/scrub_machine.cc`, `.h`, `scrub_machine_lstnr.h`. Đối chiếu rename-aware với các tệp Pacific ở `src/osd/`: target chuyển StartScrub/AfterRepairScrub sang custom reaction để ghi thời điểm bắt đầu, đánh dấu OSD đang giữ chỗ trong `ReservingReplicas` và giải phóng khi rời state, đặt cảnh báo nếu chờ object bị block quá lâu. `WaitReplicas` không còn defer `DigestUpdate` đến state kế tiếp mà ghi cảnh báo cluster và bỏ sự kiện bất ngờ; khi scrub kết thúc, FSM ghi duration. Hunk các state/reaction và commit `2809a58411f`, `28805a80444`, `a7356b53a1f`.
@@ -205,6 +253,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** PG đang scrub, đặc biệt khi tranh reservation, object bị block hoặc nhận DigestUpdate không đúng state. Trong mixed-version primary target dùng FSM mới, primary base dùng FSM cũ; sau full upgrade target áp dụng. **Evidence confidence:** high cho state transitions, medium cho tần suất sự kiện bất thường.
 
 **Kiểm chứng:** lab gây thiếu replica scrub slot và blocked object có kiểm soát, quan sát không có scrub chạy trùng và cảnh báo đúng hạn; gửi sự kiện stale/không đúng thứ tự qua test scrub, xác nhận FSM tiếp tục và duration được xuất.
+
+**Activation/impact và rollback:** reservation/alarm/reaction tự động trong scrub target FSM, tác động availability/observability của slot và warning. Trước canary giữ scrub slot/config/schedule cùng PG state; warning blocked object giúp phát hiện chờ, chưa chứng minh tự sửa nguyên nhân. Hạ binary làm mất timer/FSM RAM nhưng không undo repair, trim hoặc scrub metadata đã persist. Dừng nếu reservation không được trả, scrub chạy trùng hoặc warning đi cùng không tiến triển; đối soát PG/hash trước đổi primary/restart.
 
 ### OSD-026 — Man page của ceph-bluestore-tool bổ sung quy trình phục hồi
 
@@ -214,6 +264,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên clone OSD, đối chiếu `ceph-bluestore-tool --help` với man page và build flags, thử `-i`/`--path`, `qfsck` và `restore_cfb` theo phạm vi build; không coi `allocmap` luôn khả dụng.
 
+**Impact và rollback:** delivery/maintainability của runbook ảnh hưởng thao tác phục hồi explicit, không tự chạy do cài man page. Trước dùng action mới phải pin tool/build/config và giữ clone block+DB+WAL; rollback tài liệu/lệnh không undo `restore_cfb`, attach, repair hay allocation state đã ghi. Dừng nếu command không có trong artifact hoặc output/exit không khớp expected, sửa runbook theo artifact đã kiểm rồi rerun clone; không thay action unsupported bằng lệnh tác động khác để đạt verdict.
+
 ### OSD-027 — Nghiên cứu mClock/WPQ mới trong cây nhưng dùng default cũ
 
 **CSV:** `doc/dev/osd_internals/mclock_wpq_cmp_study.rst`. Tài liệu mới và 15 biểu đồ đi kèm mô tả benchmark trên bản phát triển `17.0.0-2125-g94f550a87f`, nhiều thiết lập test không mặc định, và gọi `high_client_ops` là profile mặc định. Endpoint `v17.2.7` ở `src/common/options/osd.yaml.in` lại đặt `osd_mclock_profile=balanced`; xem [CFG-001](./06-config-defaults.md). Vì vậy kết quả benchmark là ngữ cảnh thiết kế, không phải dự báo latency/recovery cho cặp endpoint này. Biểu đồ tĩnh được phân loại `trivial` riêng vì không đổi hành vi; tệp nghiên cứu được đánh `affect` do dễ dẫn đến lựa chọn profile sai khi đọc để lập kế hoạch.
@@ -221,6 +273,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** operator dùng nghiên cứu này để chọn profile hoặc ước lượng hiệu năng nâng cấp. Mixed-version và full upgrade phải lấy effective config và đo workload của cluster, không dùng nhãn default trong nghiên cứu. **Evidence confidence:** high cho lệch version/default, low cho áp dụng số benchmark lên cluster chưa biết.
 
 **Kiểm chứng:** lưu `ceph config show osd.N`/`ceph config get` của canary, xác nhận profile `balanced` hay override, chạy cùng tải client/recovery trong lab; ghi riêng version, media và các non-default option khi so biểu đồ.
+
+**Impact và rollback:** observability/performance decision thay khi operator explicit chọn profile theo nghiên cứu ngoài exact endpoint; source bài benchmark không chứng minh capacity production. Trước canary giữ effective profile/capacity/options và raw workload baseline; muốn rollback lựa chọn config cần restore values/source-of-value rồi đo lại cùng tải, không suy quay tên profile là phục hồi latency. Verdict đã dựa biểu đồ17.0 phải bỏ hoặc xác minh lại, còn I/O/recovery đã thực hiện không được undo bằng sửa runbook.
 
 ### OSD-028 — Bỏ các nhánh message OSD đời cũ
 
@@ -230,6 +284,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trong lab, xác nhận feature bit và header của message peering/replication giữa OSD Pacific và Quincy bằng log/trace; thử boot, mark-down, peering, recovery, scrub và rollback canary. Nếu có daemon trước Octopus, tách kiểm tra tương thích riêng trước khi chạy phiên bản target.
 
+**Activation/impact và rollback:** compatibility floor được áp dụng tự động khi message target encode/decode, không có runtime option phục hồi nhánh đã xóa. Cặp Pacific/Quincy phải kiểm features thật kể cả OSD down; header đời cũ trong history không tự là traffic hiện tại. Trước canary giữ map/feature/boot trace; dừng khi peer thiếu floor. Hạ transport binary không gỡ `require_osd_release`, MON incompat hoặc store layout target; phục hồi session cần kiểm peering/replication và dữ liệu đã commit, không sửa feature bits giả để qua assert.
+
 ### OSD-029 — Factory và quyền sở hữu ObjectStore
 
 **CSV:** `src/os/ObjectStore.cc`, `.h` (liên quan nhánh shutdown ở [OSD-024](#osd-024--đường-fast-shutdown-của-osd)). Pacific `ObjectStore::create()` trả raw pointer; Quincy trả `unique_ptr`, tách overload ba đối số cho đường Seastar, đưa MemStore vào factory chung và dùng BlueStore cho `random` ở overload đó. Đường classic năm đối số vẫn chọn FileStore/BlueStore cho `random`, FileStore trực tiếp và KStore khi bật experimental gate. Header thêm virtual `prepare_for_fast_shutdown()` và `has_null_manager()`; `OSD.cc` dùng hook này trong OSD-024. Hunk factory và commit `007133a6acd`, `7e8ec0c8cae`.
@@ -237,6 +293,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** chủ yếu là khởi tạo store, Crimson/Seastar hoặc build dùng loại store khác BlueStore; đường classic của OSD cần kiểm riêng ownership và shutdown. Trong mixed-version mỗi daemon sở hữu store theo binary đang chạy; sau full upgrade factory target áp dụng. **Evidence confidence:** high cho API và nhánh factory, medium cho ảnh hưởng triển khai thực vì chưa có build flags/loại store của cluster.
 
 **Kiểm chứng:** lab khởi động OSD target trên clone store theo backend thực, kiểm mount/umount và fast shutdown rồi restart; nếu dùng Crimson/Seastar, thử factory MemStore/BlueStore và nhánh `random` trong build tương ứng.
+
+**Impact và rollback boundary:** delivery/availability đổi tự động khi factory target tạo store; API consumer cần rebuild explicit vì ownership/signature khác. Giữ artifact/header/backend manifest trước rollout, kiểm `random` chỉ trên fixture thử. Hạ consumer/library đơn lẻ không bảo đảm ABI/lifetime contract; khôi phục cả cặp đã pin. Factory không chuyển store đã format sang backend khác và hook fast shutdown không hoàn nguyên null-FM; failback phải kiểm cùng backend/device set, không gọi mkfs/random để ép mount.
 
 ### OSD-030 — Tạo CRUSH rule cho erasure code sau khi bỏ rule mask
 
@@ -246,6 +304,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên bản sao CRUSH map, tạo EC/LRC rule ở hai endpoint với `chunk_count` và device class mẫu; decompile rồi so rule ID, bước rule, pool mapping và lỗi khi đưa device class sai. Kiểm cả map cũ có ruleset khác rule ID trước khi thử import vào Quincy.
 
+**Activation/impact và rollback:** lệnh tạo EC profile/rule explicit kích hoạt selection/parse target; compatibility/placement của map mới phải kiểm trước pool dùng rule. Giữ CRUSH binary, profile, pool→rule/size và epoch trước import/apply; hạ plugin/tool không khôi phục min/max/ruleset đã bỏ qua hoặc undo placement/recovery phát sinh. Map restore là tác vụ riêng có remap cần dự đoán; dừng nếu decode/type/device-class/mapping khác expected. Rule đang dùng không tự bị viết lại chỉ do cài plugin target.
+
 ### OSD-031 — Thay đổi thao tác offline của ceph-objectstore-tool
 
 **CSV:** `src/tools/ceph_objectstore_tool.cc`. Pacific cho `get-superblock`/`set-superblock`; Quincy bỏ hai lệnh khỏi help, file I/O và dispatch, vẫn giữ `dump-super`. Target nhận `--pgid meta` khi lặp object trong collection metadata; `write_pg()` đổi `require_rollback` từ luôn true sang `!info.pgid.is_no_shard()` cho PG không shard; đường FUSE gọi `umount()` sau khi `fuse.main()` kết thúc. Các đổi raw pointer sang `unique_ptr` đi cùng factory OSD-029. Hunk endpoint, commit `b296d3cd1cf`, `4fc80fe0940`, `d5445b8f113`.
@@ -253,6 +313,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** runbook/script bảo trì OSD offline dùng hai lệnh superblock đã bỏ, thao tác object của meta collection, import/write PG log hoặc mount FUSE. Mixed-version chạy đúng binary theo bước đang thực hiện; sau full upgrade script phải bỏ phụ thuộc hai lệnh cũ. **Evidence confidence:** high cho CLI và nhánh tool, medium cho hiệu quả dữ liệu của rollback flag cần lab.
 
 **Kiểm chứng:** trên clone store đã dừng OSD, đối chiếu `--help` hai binary, chạy `dump-super`, liệt kê meta collection, thử export/import PG mẫu có và không có shard rồi so PG log/missing; thử FUSE mount và xác nhận umount sạch. Không chạy write/import trên OSD production đang mở.
+
+**Activation/impact và rollback:** CLI/transaction contract áp khi explicit chạy tool offline, ảnh hưởng maintainability/recovery và khả năng đọc lại PG log. Giữ store clone/export, PG log/missing và OSD identity trước import/write/FUSE; hạ tool không undo log hoặc metadata đã ghi. Hai command superblock bị bỏ không được thay bằng editor ghi raw store chưa kiểm. Nếu tool không hỗ trợ action hoặc PG state sau import không reconcile, dừng và rerun trên clone mới với artifact đúng; allocation/store/release gates vẫn giữ boundary.
 
 ### OSD-032 — CyanStore hỗ trợ thêm transaction và xattr
 
@@ -262,6 +324,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab CyanStore tạo object có nhiều xattr, chạy setattrs/rmattrs và lặp set cùng một omap key; so giá trị đọc lại, mã lỗi khi thiếu collection/object, mount/mkfs với FSID hợp lệ và sai. Chạy cùng test trên hai endpoint hoặc clone store tương thích.
 
+**Activation/impact và rollback:** operations mới/OMAP overwrite tự động khi CyanStore target thực thi transaction; correctness/compatibility khác với insert-only base. Giữ object/xattr/OMAP fixtures cùng backend persistence image trước write/rmattrs, dừng trên mismatch sau restart. Hạ process không trả lại value/xattr đã overwritten/xóa và chưa chứng minh format persistence hai endpoint tương thích. Full target dùng operations mới nhưng phải kiểm lỗi transaction/FSID; không coi success no-op allocation hint là chứng cứ hint có tác dụng.
+
 ### OSD-033 — Crimson peering chờ OSD ACTIVE qua state promise
 
 **CSV:** `src/crimson/osd/state.h`. Pacific `OSDState` chỉ lưu enum; Quincy thêm `when_active()` trả future đã sẵn khi ACTIVE, còn lại chờ shared promise. `set_active()` đánh thức waiter, `set_stopping()` trả `system_shutdown_exception` cho waiter. Target `peering_event.cc` gọi gate mới ở các đường xử lý event; commit `0b9dbb7d6ed`. Đây là khác biệt về thời điểm peering event được tiếp tục hoặc hủy khi OSD dừng.
@@ -269,6 +333,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson OSD nhận peering event lúc khởi động/chưa ACTIVE hoặc đang stop. Mixed-version mỗi OSD tự điều phối event theo state machine của mình; full-version dùng promise target. **Evidence confidence:** high cho state/promise và call site, medium cho tần suất race trong tải thật.
 
 **Kiểm chứng:** lab inject peering event trước ACTIVE và trong shutdown có kiểm soát; xác nhận event chờ rồi chạy đúng một lần khi ACTIVE, hoặc nhận shutdown exception và không treo khi stop.
+
+**Activation/impact và rollback:** ACTIVE/STOPPING transitions tự điều phối waiter của process target, tác động availability và lúc peering tiếp tục. Giữ state/epoch/waiter timeline trước canary; restart để failback không chuyển promise RAM sang base. Phải xác định event bị hủy hoặc đã dispatch để peer/new primary reconcile, không replay tùy ý mọi event cũ. Dừng nếu waiter treo sau ACTIVE/STOPPING hoặc PG không tiến triển; data/log đã commit không được undo bởi reset state enum.
 
 ### OSD-034 — Crimson ObjectContext thêm lock ngắt được và dọn cache
 
@@ -278,6 +344,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab Crimson đồng thời đọc/ghi cùng object, gây PG remap/primary change và restart; theo dõi request bị interrupt/retry, kết quả object, memory/LSan khi teardown và tình trạng PG sau khi clean.
 
+**Impact và rollback:** correctness/availability của lock interruption và teardown áp tự động khi target caller có `IOInterruptCondition`; LRU target0 chỉ giải phóng context RAM. Trước remap/restart giữ object versions, request completion và PG epoch; đổi binary không undo write đã commit hoặc khôi phục context sửa dở. Dừng khi sanitizer/lifetime/lock failure hoặc hash khác, quiesce và kiểm commit/replay trước retry. Chưa có runtime để chứng minh callback ngắt luôn hoàn nguyên mọi thay đổi dữ liệu.
+
 ### OSD-035 — Crimson sắp thứ tự client request và tách giai đoạn commit
 
 **CSV:** `src/crimson/osd/osd_operation.cc/.h`, `osd_connection_priv.h`, `osd_operation_sequencer.h`, `osd_operations/client_request.cc/.h`, `client_request_common.cc/.h`, `osdop_params.h`, `common/pg_pipeline.h`. Pacific dùng `OrderedPipelinePhase` cho client request, xử lý response sau `do_osd_ops` trong một luồng future và retry khi `actingset_changed`. Quincy dùng các phase chung và `OpSequencer` theo connection/PG: khi interval đổi, request cùng session/PG chờ request trước được mở khóa theo thứ tự; khi primary mất thì hủy các request đang chờ. `ClientRequest` tách future `submitted` và `all_completed`, thêm `wait_repop`/`send_reply` và phân biệt hoàn tất theo thứ tự hoặc ngoài thứ tự; metadata params giữ `req_id`/`mtime` thay vì giữ `MOSDOp`. Commit `f7181ab2f65`, `9dcb612b93b`, `be0ba676237`, `2b14df40efe` hỗ trợ các hunk này.
@@ -285,6 +353,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson OSD có nhiều request cùng client/PG, nhất là lúc PG interval hoặc primary đổi, recovery đang chờ, hoặc reply/commit hoàn thành khác thứ tự. Mixed-version mỗi OSD điều phối request theo binary của nó; không suy ra thứ tự xuyên các OSD. Full-version target dùng sequencer mới. **Evidence confidence:** high cho phase, reset/abort và call site, medium cho latency hay lỗi nhìn thấy ở workload thực.
 
 **Kiểm chứng:** lab Crimson gửi chuỗi write/read cùng session vào một PG, gây primary change trong khi request còn in flight; kiểm thứ tự apply/ack, số retry, kết quả object và không có request kẹt. Lặp với object degraded đang urgent recovery; so log `last_unblocked`/`last_completed` ở hai endpoint.
+
+**Activation/impact và rollback:** sequencer/submit-complete split tự chạy cho request target, ảnh hưởng ordering/correctness và availability khi retry/remap. Giữ session/reqid, versions và ACK/ONDISK timeline trước canary; failback restart làm mất queue RAM nhưng vẫn còn PG log/data đã commit. Chỉ retry theo idempotency/reqid contract sau đối soát, không xem future bị interrupt là bằng chứng op chưa ghi. Dừng nếu thứ tự apply/ACK sai, duplicate làm đổi bytes lần hai hoặc request kẹt; store/release gate quyết định binary failback.
 
 ### OSD-036 — Crimson thêm internal client request cho thao tác watch timeout
 
@@ -294,6 +364,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab tạo watch với timeout ngắn, ngừng ping và đổi primary gần thời điểm timeout; xác nhận UNWATCH được lưu, notifier nhận kết quả đúng và không còn watcher stale sau restart.
 
+**Impact và rollback:** availability/correctness của watch metadata đổi tự động khi timer target sinh internal UNWATCH. Giữ watcher gid/cookie, timeout, object metadata và PG epoch trước fault; hạ binary không tạo lại watcher đã được transaction UNWATCH xóa. Muốn khôi phục phải để client register lại theo workflow đã kiểm, không sửa watcher map trực tiếp. Dừng nếu stale watch còn persist hoặc cancel/remap tạo duplicate notify; request completion cần được đối soát sau restart.
+
 ### OSD-037 — Crimson ngắt peering work khi PG đổi interval hoặc dừng
 
 **CSV:** `src/crimson/osd/pg_interval_interrupt_condition.cc/.h`, `osd_operations/peering_event.cc/.h`. Pacific peering event đi qua pipeline future thường. Quincy bổ sung `IOInterruptCondition` so epoch khi bắt đầu với `get_interval_start_epoch()`, phát `actingset_changed` nếu có interval mới hoặc `system_shutdown_exception` khi PG stopping. `PeeringEvent::start()` chuyển sang stage có thể ngắt; remote event còn đợi OSD ACTIVE trước PG lookup và gửi message qua gate ở [OSD-033](#osd-033--crimson-peering-chờ-osd-active-qua-state-promise). Commit `e6d10da26ed`, `2bf9d7b0d06`, `30afadd1629`, `a8279ed7c80`.
@@ -301,6 +373,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson OSD nhận remote peering lúc chưa ACTIVE, PG đổi interval trong khi xử lý event hoặc đang shutdown. Mixed-version mỗi OSD xử lý event theo state/pipeline của binary đó; full-version target có ngắt theo interval. **Evidence confidence:** high cho điều kiện code và gate, medium cho số event bị hủy trong cluster thực.
 
 **Kiểm chứng:** lab làm chậm peering rồi tạo OSDMap mới/primary change, đồng thời thử dừng OSD; kiểm event cũ không dispatch message sau interval mới, event mới tiếp tục và PG về clean. Gửi remote event ngay trước ACTIVE để xác nhận chỉ dispatch sau khi OSD sẵn sàng.
+
+**Activation/impact và rollback:** interval/shutdown interrupt tự động trên peering target; availability/correctness nằm ở chặn công việc context cũ và tiếp tục interval mới. Giữ epoch/request/send và peer message trace trước remap. Hạ process không mang future chờ sang base, không undo transaction đã ghi trước interrupt; recovery phải theo OSDMap hiện hành. Dừng nếu stale message còn dispatch, waiter treo hoặc valid event mất; không phục hồi map epoch cũ để tái chạy công việc.
 
 ### OSD-038 — Crimson watch/notify có timeout và sửa encoding reply
 
@@ -310,6 +384,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab dùng client Pacific và Quincy đăng ký watch, gửi notify có/không có ack, dừng ping để kích hoạt timeout; so completion payload, missed watcher list, return code, disconnect và persisted watch sau restart. Thử cả zero watcher và reconnect.
 
+**Impact và rollback:** timer/callback/encoding tự động với watch/notify target; compatibility của completion phải kiểm cùng client, còn notify workload là explicit. Giữ raw payload, gid/cookie và persisted watchers trước timeout/reconnect. Hạ OSD không phục hồi UNWATCH đã commit, timer RAM cũ hay notification đã thiếu; client cần re-register/reconcile theo hợp đồng. Dừng nếu decode sai, missed watcher list không khớp hoặc disconnect/completion order lỗi; không replay payload cũ như một notification mới.
+
 ### OSD-039 — Crimson recovery ngắt công việc theo PG interval và có độ trễ khởi chạy
 
 **CSV:** `src/crimson/osd/osd_operations/background_recovery.cc/.h`, `recovery_subrequest.cc`, `replicated_request.cc/.h`, `src/crimson/osd/pg_recovery.cc/.h`, `recovery_backend.cc/.h`. Pacific chạy background/urgent/backfill recovery và replica request qua future thường, với kiểm tra reset ở đầu một số nhánh. Quincy bọc các thao tác đó trong `IOInterruptCondition` của OSD-037, chuyển waiter/join sang future có thể ngắt và đưa `PglogBasedRecovery` qua `sleep` 1 ms trước khi lấy throttle. Khi interval mới xuất hiện hoặc PG dừng, công việc đang đợi có đường hủy thay vì tiếp tục xử lý trên context cũ. Hunk `BackgroundRecovery::start`, `RecoverySubRequest::start`, `RepRequest::start`, `PGRecovery::start_recovery_ops` và các future của `RecoveryBackend`; commit `fdf6d06fc3f`, `e3ad392fd04`, `bf27f409f5e`.
@@ -317,6 +393,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson OSD đang recovery/backfill hoặc xử lý replica request khi PG đổi interval, OSD dừng hay recovery PG log được khởi chạy. Mixed-version mỗi OSD áp dụng cách ngắt của binary đang chạy; sau full upgrade tất cả Crimson OSD dùng đường target. Độ trễ 1 ms là giá trị trong code, không phải ước lượng thời gian recovery của cluster. **Evidence confidence:** high cho hunk và điều kiện ngắt, medium cho ảnh hưởng thời lượng thực.
 
 **Kiểm chứng:** trên lab Crimson, gây degraded PG rồi remap primary/stop OSD khi push/pull/backfill đang chờ; quan sát request cũ bị ngắt, PG mới tiếp tục về clean, không treo waiter. So timestamp khởi chạy PG-log recovery và số op đang chạy giữa hai endpoint; đo client latency/recovery time dưới tải thật trước khi kết luận tác động hiệu năng.
+
+**Activation/rollback và phần chưa biết:** interruption và sleep1ms tự động khi Crimson recovery target chạy; chưa có queue/epoch trace hoặc phân bố tải để định lượng. Giữ acting/missing, object versions và in-flight push/pull timeline trước remap; hạ process không undo extents đã recover hoặc chuyển future sang base. Dừng nếu công việc cũ tiếp tục ghi sau interval mới, waiter treo hoặc hash/PG state sai. Reconcile trên map mới rồi xét backend compatibility; delay1ms không phải giới hạn tổng thời gian recovery.
 
 ### OSD-040 — Crimson bỏ backfill và scan message thuộc interval cũ
 
@@ -326,6 +404,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab gây backfill rồi đổi primary/OSDMap trước khi message scan, finish hoặc remove đến nơi; so log discard, kết quả object/PG và khả năng recovery tiếp tục với interval mới. Kiểm cả message hợp lệ cùng interval vẫn được xử lý.
 
+**Activation/impact và rollback:** guard discard tự động theo message epochs/OSDMap, ảnh hưởng correctness/availability của recovery. Giữ query/map epoch, source và removal target trước fault; bỏ message stale không có nghĩa mọi op chưa commit, còn backfill-remove hợp lệ là transaction có xóa dữ liệu. Hạ binary không hoàn nguyên removal hay queue/epoch history. Dừng nếu valid message bị bỏ hoặc stale message vẫn đổi object, giữ trace/image và để recovery interval mới reconcile trước retry.
+
 ### OSD-041 — Crimson dừng khi gặp LOST_REVERT chưa hỗ trợ lúc recover
 
 **CSV:** `src/crimson/osd/pg_recovery.cc` (cùng tệp với OSD-039). Pacific `on_local_recover()` gọi thẳng `recover_got()`. Quincy trước lời gọi đó kiểm object không phải delete, còn missing, `need > recovery_info.version`, PG là primary và log entry mới nhất là `LOST_REVERT`; khi đúng toàn bộ điều kiện, `ceph_abort()` với thông báo `mark_unfound_lost (LOST_REVERT) is not implemented yet`. Commit `1da5a57d081`. Đây là guard xác định đường chưa hỗ trợ, không phải bằng chứng target đã thực hiện revert dữ liệu.
@@ -333,6 +413,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** chỉ Crimson PG có chuỗi `mark_unfound_lost revert`/recovery version thỏa guard; cluster không có trạng thái này không đi vào nhánh abort. Mixed-version rủi ro nằm ở OSD Crimson target đang là primary; sau full upgrade vẫn còn guard. **Evidence confidence:** high cho điều kiện code, thấp cho khả năng xuất hiện vì chưa có PG log/As-Is cluster.
 
 **Kiểm chứng:** kiểm PG log và lịch sử `mark_unfound_lost` trên bản sao dữ liệu trước canary; dựng ca lab LOST_REVERT với clone, xác nhận guard và log, kiểm rollback/recovery plan riêng. Không kích hoạt thao tác mất dữ liệu này trên cluster production để thử nghiệm.
+
+**Activation/impact và rollback:** abort tự động khi recovery chạm LOST_REVERT guard, tác động availability; `mark_unfound_lost revert` là action explicit riêng không được dùng để mở gate canary. Giữ PG log, missing versions và bản dữ liệu trước quyết định lost. Hạ binary không phục hồi version bị mất hoặc undo lost/revert entry đã persist; cần recovery plan với nguồn tốt/backup đã kiểm. Dừng trước workload có trạng thái không được hỗ trợ, giữ image cho lab và không đổi op code trong log để né guard.
 
 ### OSD-042 — Giữ vòng đời operation Crimson tới khi future hoàn tất
 
@@ -342,6 +424,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab Crimson tạo nhiều request chờ PG/map rồi remap hoặc restart canary; quan sát crash/use-after-free, request hoàn tất hoặc bị hủy sạch và không còn operation kẹt. Chạy sanitizer trên build lab nếu có; đối chiếu số operation tồn sau shutdown.
 
+**Impact và rollback:** giữ lifetime tự động trong start-operation target, tác động correctness/availability của async callback. Trước restart giữ sanitizer/core/operation registry và request commit trace; process rollback mất refs/futures RAM, không undo data đã được callback gửi/commit. Nếu use-after-free hoặc waiter không thoát, dừng canary, quiesce và reconcile reqids/object versions. Không coi ownership fix là bảo đảm mọi exception/shutdown path không leak khi chưa chạy fault test.
+
 ### OSD-043 — Crimson đổi nội dung `OI_ATTR` và cách đọc metadata khi recovery
 
 **CSV:** `src/crimson/osd/pg_backend.cc`, `replicated_recovery_backend.cc`; helper context ở `src/osd/osd_types.h` thuộc owner khác. Pacific ghi `object_info_t` vào `OI_ATTR` bằng `encode()` với `soid` thật, rồi đọc bằng constructor/decode thông thường. Quincy gọi `encode_no_oid()`: trước khi encode, helper đổi `soid` sang `hobject_t::get_max()` và phục hồi object trong bộ nhớ sau encode; khi đọc, `load_metadata()` gọi `object_info_t(bl, oid)` để kiểm sentinel và gắn OID từ khóa object. Đường push/pull/recovery cũng chuyển sang `decode_no_oid()`. Commit `3aeea9b7e6f`. Đây là thay đổi **giá trị trường OID trong `OI_ATTR` được lưu**, dù helper hiện vẫn encode một trường OID sentinel; không khẳng định byte length giảm.
@@ -349,6 +433,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson OSD ghi hoặc recover object sau khi chạy Quincy rồi cùng object/store được đọc bởi binary Pacific hoặc đường decode cũ. Target `decode_no_oid()` assert nếu gặp OI cũ có OID thật; chiều ngược lại Pacific decode thường sẽ nhận OID sentinel, nhưng hậu quả thực lên mount/recovery cần thử. Mixed-version khác OSD trong cùng PG có thể trao đổi recovery attr; full-version target vẫn có vấn đề với object chưa được viết lại theo format cũ nếu tồn tại. **Evidence confidence:** high cho encode/decode và điều kiện assert, medium cho tính khả dụng của store thực và đường chuyển đổi vì chưa có thử nghiệm cross-version.
 
 **Kiểm chứng:** trên clone Crimson store có object được Pacific tạo, thử mount và đọc bằng Quincy; tạo/ghi thêm object bằng Quincy, rồi thử đọc bằng Pacific trên bản sao thứ hai. Chạy pull/push giữa OSD hai phiên bản và kiểm `OI_ATTR`, OID, PG clean, lỗi decode/assert. Không dùng phép thử này làm thay đổi store production.
+
+**Activation/impact và rollback:** sentinel OID được ghi tự động trong object metadata/recovery target; persistent compatibility/correctness có boundary ở lần ghi OI_ATTR đầu tiên. Giữ clone store và OI_ATTR/OID manifest trước mount/write/recovery, vì cả target đọc attr Pacific lẫn base đọc sentinel target cần thử. Hạ binary không thay sentinel bằng OID thật hoặc chuyển metadata cũ cho decoder mới. Dừng trên assert/decode/OID mismatch, phục hồi checkpoint đã kiểm thay vì sửa attr trên bản duy nhất; full target chưa chứng minh migration mọi object cũ.
 
 ### OSD-044 — Crimson PGBackend ghi thống kê PG và bổ sung operation/error path
 
@@ -358,6 +444,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab Crimson chạy các thao tác RADOS mẫu, so object size và `num_objects/num_bytes/num_rd/num_wr` với dữ liệu thực ở hai endpoint. Thử `OMAPRMKEYS`, compare xattr string/U64 và lỗi EIO giả lập trên clone; đối chiếu mã lỗi và client retry. Kiểm số liệu trước/sau canary theo cùng workload, không dùng riêng delta stats làm kết luận mất dữ liệu.
 
+**Activation/impact và rollback:** stats/op/error path tự áp trên workload target, tác động correctness/compatibility/observability. Giữ object/OMAP/xattr và raw PG stats trước canary; hạ primary không undo OMAPRMKEYS, create/delete/truncate hoặc write đã commit. Parser restore chỉ đổi cách đọc metrics, không sửa accounting/dữ liệu đã ghi. Dừng trên size/hash/retcode mismatch hoặc retry loop EIO, phân biệt stats sai với mất object bằng listing/checksum và xét auto repair OSD-047.
+
 ### OSD-045 — Crimson tách submit/commit và ACK request lặp sau commit
 
 **CSV:** `src/crimson/osd/pg_backend.h`, `replicated_backend.cc/.h`; caller ở `src/crimson/osd/pg.cc` và `client_request.cc` đã nằm trong luồng OSD-035. Pacific `_submit_transaction()` trả một future sau khi local transaction và peer ACK hoàn tất. Quincy trả cặp future `submitted`/`all_completed`; `ReplicatedBackend` giữ `at_version` theo transaction và `shared_promise` để `request_committed()` đợi commit của request đã có trong PG log. `PG::already_complete()` tra reqid trong PG log, sau đó ACK `ACK|ONDISK` cho request lặp khi commit đã xong, thay vì chạy lại OSDOp. Commit `14b322ec022`, `f7181ab2f65`.
@@ -365,6 +453,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** client gửi lại request sau timeout/reconnect, hoặc primary Crimson có nhiều write đang chờ replica ACK lúc PG remap. Mixed-version thứ tự ACK/replay tùy OSD đang là primary; full-version dùng đường target. **Evidence confidence:** high cho lookup, promise và ACK path, medium cho xác suất retry thực tế. Không suy từ diff rằng ACK luôn nhanh hơn hoặc bền hơn mọi trường hợp.
 
 **Kiểm chứng:** lab gửi write có reqid cố định, trì hoãn replica ACK rồi gửi lại cùng reqid; kiểm object chỉ áp dụng một lần và duplicate chỉ nhận `ONDISK` sau commit. Lặp khi primary đổi, một replica down và khi PG log không còn reqid; so version/log/ACK với Pacific.
+
+**Impact và rollback:** duplicate lookup/commit wait tự động khi target nhận cùng reqid, tác động correctness/durability của retry. Giữ reqid→version/PG log và ONDISK timeline trước connection reset. Failback không chuyển promise đang đợi sang base và không undo transaction đã commit; reqid bị trim khỏi log cũng không còn cùng điều kiện dedup. Dừng nếu duplicate áp hai lần hoặc ACK trước commit, giữ application checkpoint để retry theo contract đã kiểm thay vì phát reqid mới sau response không rõ.
 
 ### OSD-046 — Crimson recovery dùng dirty subset và lọc pull/push message cũ
 
@@ -374,6 +464,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab tạo object có data, xattr, omap và allocation hint; gây missing replica, sửa một vùng nhỏ rồi recover Pacific→Quincy và Quincy→Pacific. So checksum, attrs, omap, size, PG log và acting set; chèn message cũ sau interval change để kiểm discard, sau đó xác nhận recovery mới hoàn tất.
 
+**Impact và rollback boundary:** compatibility/correctness của dirty subsets, attrs/OMAP và stale guards tự động theo target recovery. Giữ source byte/attrs/OMAP cùng missing/copy subsets trước push, kiểm toàn object và partial push riêng. Hạ binary không hoàn nguyên target object đã remove/touch/rmattrs trong prep/push hoặc phục hồi OI_ATTR format cũ. Dừng trên cross-direction decode/hash mismatch, giữ store clone và cho recovery interval hiện hành reconcile; common feature Octopus chưa giải quyết sentinel OID.
+
 ### OSD-047 — Crimson thử sửa object sau lỗi đọc EIO
 
 **CSV:** `src/crimson/osd/pg.cc/.h`, `ops_executer.h`; nguồn lỗi ở `pg_backend.cc` thuộc OSD-044. Pacific trả lỗi từ đường `do_osd_ops` sau khi nạp lại ObjectContext nếu operation đã sửa nó trong bộ nhớ. Quincy chuyển EIO đọc thành `object_corrupted`; `PG::do_osd_ops_execute()` gọi rollback helper, `repair_object()` đánh dấu object thiếu ở local shard và khởi chạy `UrgentRecovery`, sau đó trả `eagain` cho lớp request thực hiện lại. Commit `f76bda83fd6`, `dd6dec306ce` và hunk endpoint chứng minh đường gọi; việc phục hồi thành công còn phụ thuộc replica còn bản tốt.
@@ -381,6 +473,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson primary đọc object gặp EIO, PG có nguồn recovery dùng được. Trong mixed-version, phản ứng tùy primary chạy Pacific hay Quincy; sau full upgrade nhánh target áp dụng. Đây là thao tác tự động trong tiến trình, không phải lệnh repair toàn cluster. **Evidence confidence:** high cho đường EIO→missing→urgent recovery→retry; medium cho kết quả trên store và lỗi thật. Chưa có test runtime được chạy cho tình huống này.
 
 **Kiểm chứng:** trên clone/lab Crimson inject EIO khi đọc object có replica tốt, so PG missing/recovery log, checksum object và phản hồi request sau retry. Thử thêm trường hợp không còn replica tốt, remap trong lúc repair và restart canary; xác nhận lỗi không tạo vòng retry vô hạn. Không inject EIO trên dữ liệu production.
+
+**Impact và rollback:** availability/correctness đổi tự động theo EIO→urgent recovery path, có thể ghi object sửa từ replica. Giữ image lỗi, object versions/digest và replica inventory trước fault injection; nếu recovery không có nguồn tốt, dừng và giữ evidence thay vì retry vô hạn. Hạ binary không trả object vừa recovered về nội dung lỗi trước đó hoặc undo missing/log update; failure recovery phải dùng checkpoint/replica đã kiểm, không xem auto repair như toàn cluster đã được nghiệm thu.
 
 ### OSD-048 — Crimson lọc peering event cũ và dọn công việc khi PG dừng
 
@@ -390,6 +484,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab trì hoãn peering event qua primary remap, ghi `epoch_requested`, `epoch_sent`, `last_peering_reset` và xác nhận event cũ bị bỏ, event mới vẫn đưa PG về clean. Dừng Crimson PG đang giữ recovery reservation/timer và có request chờ ObjectContext; xác nhận waiter kết thúc, reservation trả lại và restart không kẹt.
 
+**Impact và rollback:** epoch filter/resource cancellation tự động khi target xử lý event/stop, tác động availability/correctness của lock, reservation và lease. Giữ requested/sent epochs cùng reservation/timer/request dump trước restart; hạ process không phục hồi waiter/timer RAM hoặc undo transaction đã chạy. Dừng nếu resource không trả, valid event không tiến triển hoặc exclusive-lock behavior sai; reconcile trên interval hiện hành và kiểm hash, không mở lại epoch cũ để chạy event discarded.
+
 ### OSD-049 — Crimson triển khai `LIST_WATCHERS` cho object
 
 **CSV:** `src/crimson/osd/ops_executer.cc`; API/dispatch ở `.h` có cùng row với OSD-036/038/044/045/047. Pacific không có case `CEPH_OSD_OP_LIST_WATCHERS` trong `OpsExecuter::execute_op`; Quincy tạo `obj_list_watch_response_t` từ `os.oi.watchers` và dispatch op mới. Commit `12fd597cc68`. Source target gọi `response.encode(osd_op.outdata, features)` **bên trong** vòng lặp và không gọi khi danh sách rỗng; vì thế payload với 0 hoặc nhiều watcher cần xác minh bằng client, chưa khẳng định đầu ra hợp lệ. Các test `src/test/librados/watch_notify_cxx.cc` kiểm API watcher của librados nói chung, không tự chứng minh đường Crimson này.
@@ -398,21 +494,27 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab gọi `list_watchers` bằng client Pacific/Quincy vào Crimson object có 0, 1, 2 watcher trước/sau canary; so return code, payload raw/decoded, số entry và cookie, rồi thử lại sau watcher timeout và PG remap. Nếu dùng lệnh này làm gate rollout, kiểm thêm cùng thao tác trên classic OSD để tách đường implementation.
 
+**Activation và rollback:** LIST_WATCHERS là query explicit trên dispatch target, tác động observability/compatibility conditional với client decode. Giữ payload/version và expected gid/cookie fixture 0/1/2 watchers; dừng dùng query làm gate nếu empty/multi-entry encoding không decode đúng. Hạ query binary không restore watcher đã timeout/unwatch hoặc notification mất; output Pacific thiếu operation cũng không chứng minh watcher rỗng. Chưa có client end-to-end result nên giữ validation mở.
+
 ### OSD-050 — Crimson bind lại heartbeat và điền IP công bố khi trống
 
-**CSV:** `src/crimson/osd/heartbeat.cc/.h`; caller context `src/crimson/osd/osd.cc` còn trong hàng chưa phân loại và `src/crimson/net/SocketMessenger.cc` thuộc owner khác. Pacific `Heartbeat::start_messenger()` gọi `try_bind()` một lần trên dải port cấu hình rồi abort nếu thất bại. Quincy gọi `bind()`, hiện thực target lặp `try_bind()` theo `ms_bind_retry_count`/`ms_bind_retry_delay` trước khi báo lỗi. Target cũng lộ front/back messenger; `_send_boot()` gọi `set_addr_unknowns()` để thay blank IP của cluster/heartbeat bằng địa chỉ public/cluster đã biết trước khi gửi `MOSDBoot` cho MON. Hunk endpoint và commit `d5f96ce9474`, `ce1ca97f840` là bằng chứng. Phần message send đổi ownership, không có bằng chứng byte wire thay đổi trong hunk này.
+**CSV:** `src/crimson/osd/heartbeat.cc/.h`; caller context `src/crimson/osd/osd.cc` được gắn OSD-092 và `src/crimson/net/SocketMessenger.cc` thuộc owner khác. Pacific `Heartbeat::start_messenger()` gọi `try_bind()` một lần trên dải port cấu hình rồi abort nếu thất bại. Quincy gọi `bind()`, hiện thực target lặp `try_bind()` theo `ms_bind_retry_count`/`ms_bind_retry_delay` trước khi báo lỗi. Target cũng lộ front/back messenger; `_send_boot()` gọi `set_addr_unknowns()` để thay blank IP của cluster/heartbeat bằng địa chỉ public/cluster đã biết trước khi gửi `MOSDBoot` cho MON. Hunk endpoint và commit `d5f96ce9474`, `ce1ca97f840` là bằng chứng. Phần message send đổi ownership, không có bằng chứng byte wire thay đổi trong hunk này.
 
 **Điều kiện:** Crimson OSD khởi động với port tạm bận hoặc cấu hình không chỉ rõ public/cluster IP khiến địa chỉ công bố ban đầu trống. Mixed-version chỉ OSD target có retry/điền IP này; sau full upgrade các Crimson OSD đều dùng đường target. Nếu địa chỉ được đặt rõ và port rảnh, khác biệt có thể không lộ ra. **Evidence confidence:** high cho bind/retry và đường `_send_boot`, medium cho kết nối heartbeat thực tế tùy mạng/config cluster. Chưa chạy lab.
 
 **Kiểm chứng:** trong lab, chiếm tạm port đầu dải và khởi động Crimson ở hai endpoint, ghi thời gian bind, số lần thử, port thực dùng và log lỗi. Lặp khi bỏ public/cluster IP trong cấu hình rồi kiểm `MOSDBoot`/OSDMap chứa front/back/cluster IP có thể kết nối; xác nhận heartbeat hai chiều và trạng thái OSD sau restart canary.
 
+**Impact và rollback:** startup retry/address fill tự động trên target Crimson, tác động availability và maintenance duration; retry count/delay không sửa IP/NIC sai. Giữ port range/options, addrvec/OSDMap và heartbeat baseline trước restart. Hạ binary không gỡ boot address đã MON persist, process cũ không nhận config của process mới. Dừng nếu address không reachable/OSD không up, sửa config và kiểm boot/heartbeat trên canary; backend state vẫn cần kiểm trước failback.
+
 ### OSD-051 — Điều kiện biên dịch làm thay đổi độ phủ test Clay/ISA
 
-**CSV:** `src/test/erasure-code/TestErasureCodePluginClay.cc`; context build ở `src/test/erasure-code/CMakeLists.txt` thuộc owner 13. Pacific chỉ chạy nhánh `scalar_mds=isa` trong test Clay khi macro C++ `HAVE_NASM_X64_AVX2` được định nghĩa. Quincy đổi guard sang `WITH_EC_ISA_PLUGIN`; commit `bed1b32974f` đặt biến này ở CMake cache khi NASM AVX2 hoặc ARMv8 SIMD khả dụng, và dùng biến để tạo target test ISA. Trong cây `v17.2.7`, tìm kiếm `WITH_EC_ISA_PLUGIN` chỉ thấy các điều kiện CMake và `#ifdef` ở test Clay, không thấy chỗ truyền thành macro C++ mặc định. Vì vậy nhánh Clay/ISA có thể bị bỏ qua trong build test target dù plugin/test ISA vẫn được build. Đây là thay đổi **độ phủ kiểm chứng**, không chứng minh plugin ISA chạy sai trên OSD.
+**CSV:** `src/test/erasure-code/TestErasureCodePluginClay.cc`; context build ở `src/test/erasure-code/CMakeLists.txt` thuộc owner 13. Pacific chỉ chạy nhánh `scalar_mds=isa` trong test Clay khi macro C++ `HAVE_NASM_X64_AVX2` được định nghĩa. Quincy đổi guard sang `WITH_EC_ISA_PLUGIN`; commit `bed1b32974f` đặt biến này ở CMake cache khi NASM AVX2 hoặc ARMv8 SIMD khả dụng, và dùng biến để tạo target test ISA. Target `src/include/config-h.in.cmake:254` có `#cmakedefine WITH_EC_ISA_PLUGIN`; `src/CMakeLists.txt` sinh `include/acconfig.h`, được include qua `src/include/types.h`/`ceph_assert.h`. Vì vậy nhận định macro C++ thiếu ở source trước đó là sai. Guard mới theo capability plugin, bao gồm architecture ARMv8 khi ISA plugin bật, thay vì chỉ NASM x64 AVX2. Đây là thay đổi **độ phủ kiểm chứng**, chưa chứng minh test hoặc plugin runtime đã PASS.
 
-**Điều kiện:** pipeline rehearsal/acceptance dùng unit test này và build có ISA plugin; trên môi trường không có ISA plugin, nhánh vốn đã không chạy. Mixed-version không có tương tác wire do chính tệp test này; sau full upgrade, kết quả test target có thể thiếu kiểm tra Clay `scalar_mds=isa`. **Evidence confidence:** high cho guard/CMake endpoint, medium cho command line biên dịch cụ thể của pipeline chưa biết.
+**Điều kiện:** pipeline rehearsal/acceptance dùng unit test này và build có ISA plugin; trên môi trường không có ISA plugin, nhánh không chạy. Mixed-version không có tương tác wire do chính tệp test này; full target build chọn coverage theo macro plugin đã sinh, cần kiểm CMake cache và generated header của artifact nghiệm thu. **Evidence confidence:** high cho guard/template/include chain, medium cho build cụ thể chưa kiểm.
 
-**Kiểm chứng:** với build config dùng để nghiệm thu, đọc compile command hoặc preprocessor output của `unittest_erasure_code_plugin_clay` để xác nhận macro; chạy `--gtest_list_tests` và test trên hai endpoint với ISA khả dụng, kiểm nhánh `scalar_mds=isa` thực sự được thực thi. Nếu pipeline không dùng test này làm gate thì finding chỉ là cảnh báo về coverage repository.
+**Kiểm chứng:** với build nghiệm thu, đọc CMake cache, generated `acconfig.h`, compile command/preprocessor output để xác nhận macro. Chạy factory test Clay trên architecture có ISA và kiểm plugin load/các technique `reed_sol_van`, `cauchy`; `--gtest_list_tests` chỉ liệt kê outer test, không chứng minh nhánh ISA bên trong đã chạy. Nếu pipeline không dùng test này làm gate thì applicability chỉ ở coverage repository. Chưa chạy build/test.
+
+**Impact và rollback:** coverage được chọn tự động trong build explicit, ảnh hưởng độ đầy đủ evidence của Clay/ISA trên architecture khác. Giữ CMake cache/generated header/compile command và plugin manifest; nếu nhánh ISA chưa được chứng minh chạy, bỏ verdict và rerun đúng artifact. Rollback coverage bằng input/toolchain pin rồi chạy lại, không giữ PASS từ job khác macro hoặc architecture; test graph không hoàn nguyên dữ liệu nếu job đã ghi fixture. Plugin artifact rollback cần đúng library closure.
 
 ### OSD-052 — QA recovery đổi scheduler, giới hạn và thời gian chờ
 
@@ -422,6 +524,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** ghi lệnh và environment khi chạy test, scheduler/profile và `osd_max_backfills` hiệu dụng của từng OSD. Chạy lại priority test với WPQ đúng như script và một ca mClock riêng; ghi thời điểm xuất hiện `backfill_unfound`, thời gian recovery, PG state và pass/fail theo timeout hai endpoint. Không lấy kết quả WPQ thay cho kiểm chứng mClock của cụm nếu mClock là scheduler dự kiến.
 
+**Rollback boundary:** scripts là activation explicit có thay scheduler/overrides và phá/tạo fixture; undo binary không khôi phục config, pools hoặc fault state do job áp. Giữ manifest job và snapshot disposable lab trước run; recreate fixture từ inputs đã pin rồi rerun WPQ và mClock cases riêng. Dừng nếu effective config không đúng recipe, timeout che lỗi progress hoặc cleanup không sạch; PASS ở timeout dài không đủ làm thời lượng production acceptable.
+
 ### OSD-053 — QA scrub đổi scheduler và mẫu kiểm tra kết quả
 
 **CSV:** `qa/standalone/scrub/osd-scrub-dump.sh`, `osd-scrub-repair.sh`, `osd-scrub-snaps.sh`. Pacific chạy dump/auto-repair scrub với scheduler hiệu dụng của test và kiểm chuỗi `scrubbing` hoặc số cảnh báo scrub cụ thể. Quincy ép WPQ trong dump và ca auto-repair, đổi grep thành `+scrubbing`, cho phép hai cách đếm cảnh báo thường/deep trong `TEST_scrub_warning`, và đổi hai regex snap mapper sang dạng tập `{1, 2, ...}`. `osd-scrub-repair.sh` còn đổi setup/teardown của ca auto-repair; hunk này cần kiểm trong harness khi chạy lại. Commit `33d2a2c93b5`, `9dda986bd52`, `20dd0227151`, `1ec46515765`. Các thay đổi này tác động kết quả QA nếu script được dùng làm gate, không tự chứng minh sửa lỗi scrub runtime.
@@ -429,6 +533,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline lab/acceptance chạy ba script; ca WPQ không bao phủ scheduler mClock mặc định của Quincy. Mixed-version không có wire change từ script; sau full upgrade, tiêu chí pass/fail target khác Pacific. **Evidence confidence:** high cho diff test, medium cho thực thi pipeline và hành vi scrub dưới config cụ thể chưa biết.
 
 **Kiểm chứng:** chạy script trên lab với scheduler và config đã ghi lại; xác nhận `+scrubbing` xuất hiện đúng lúc, các cảnh báo scrub trong `ceph health detail` khớp trường hợp thường/deep, log snap mapper khớp regex target, và auto-repair setup/teardown không để lại daemon/tệp. Chạy một ca mClock riêng nếu cluster sẽ dùng mClock.
+
+**Rollback boundary:** chạy script explicit có scrub/repair và setup/teardown mutation; hạ script/daemon không undo object auto-repair hoặc trim/health timestamp. Giữ original object/log/config và fixture snapshot trước run; nếu regex accept khác thì phải lưu raw output và đánh giá lại verdict, không chỉ giữ số PASS. Dừng khi teardown để lại service/data, warning không đúng case hoặc hash sai; rerun fixture sạch với scheduler đã pin.
 
 ### OSD-054 — `ceph_test_rados` mở rộng bài thử dedup và refcount
 
@@ -438,13 +544,17 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trong lab tạo tier/chunk pool theo recipe, chạy mixed-version và full-version với seed/weight được ghi lại; so dữ liệu đọc, snapshot, `TierFlush`/`TierEvict`, xattr refcount chunk và return code của `ceph_test_rados`. Ghi rõ nếu test fail do CLI/config test thay vì do dữ liệu. Nếu đây là gate rollout, lặp cả pool không bật dedup để tách tác động của feature.
 
+**Rollback boundary:** chọn recipe/op weights/dedup enable là explicit; workload có set-chunk, flush/evict và snapshot rollback nên ghi object/manifest/refcount thật trên fixture. Giữ seed/weights, tier/chunk pools, snapshot/digest và refcount baseline trước run. Hạ test driver không undo chunk graph hoặc snapshot đã xóa, test fail cuối không bảo đảm job chưa mutation. Dừng trên refcount/hash mismatch, giữ clone để điều tra và recreate disposable pools từ checkpoint đã kiểm trước lần chạy kế.
+
 ### OSD-055 — Bộ lọc log thay đổi tiêu chí đỗ QA của bài thử RADOS
 
-**CSV:** `qa/suites/rados/thrash/workloads/set-chunks-read.yaml`, hai recipe dedup ở OSD-054, 20 recipe khác trong cùng thư mục, 28 recipe dưới `qa/suites/rados/singleton/all/`, 10 recipe dưới `qa/suites/rados/singleton-nomsgr/all/`, ba recipe `qa/suites/rados/multimon/tasks/`, 16 recipe thuộc các nhóm `basic/tasks`, `mgr/tasks`, `objectstore/backends`, 14 recipe `thrash-erasure-code*/thrashers/`, năm recipe `monthrash/thrashers/`, và các recipe `perf/ceph.yaml`, `rest/mgr-restful.yaml`, `valgrind-leaks/1-start.yaml`. Pacific các recipe này chưa lọc cảnh báo `POOL_APP_NOT_ENABLED`; Quincy thêm nó vào `ceph.log-ignorelist` trong task hoặc `overrides`. Ở endpoint target `qa/tasks/ceph.py`, `log-ignorelist` được truyền vào `cluster()`; cuối task, `first_in_ceph_log()` loại các dòng khớp pattern trước khi đánh dấu lỗi `[ERR]`, `[WRN]` hoặc `[SEC]` trong cluster log. Commit `13507e85615` liên quan cảnh báo ứng dụng pool. Bởi vậy cùng một cảnh báo có thể không còn làm bài thử thất bại, nhưng bộ lọc không có tác dụng đổi trạng thái runtime của pool. Tệp `pool-snaps-few-objects.yaml` trong cụm thrash còn đặt filter dưới khóa `override` số ít thay vì `overrides`; hàng này chưa được phân loại vì chưa xác nhận teuthology có đọc khóa đó. Các hunk khác trong một số recipe được ghi riêng ở OSD-003/062/063/065–070/084.
+**CSV:** `qa/suites/rados/thrash/workloads/set-chunks-read.yaml`, hai recipe dedup ở OSD-054, 20 recipe khác trong cùng thư mục, 28 recipe dưới `qa/suites/rados/singleton/all/`, 10 recipe dưới `qa/suites/rados/singleton-nomsgr/all/`, ba recipe `qa/suites/rados/multimon/tasks/`, 16 recipe thuộc các nhóm `basic/tasks`, `mgr/tasks`, `objectstore/backends`, 14 recipe `thrash-erasure-code*/thrashers/`, năm recipe `monthrash/thrashers/`, và các recipe `perf/ceph.yaml`, `rest/mgr-restful.yaml`, `valgrind-leaks/1-start.yaml`. Pacific các recipe này chưa lọc cảnh báo `POOL_APP_NOT_ENABLED`; Quincy thêm nó vào `ceph.log-ignorelist` trong task hoặc `overrides`. Ở endpoint target `qa/tasks/ceph.py`, `log-ignorelist` được truyền vào `cluster()`; cuối task, `first_in_ceph_log()` loại các dòng khớp pattern trước khi đánh dấu lỗi `[ERR]`, `[WRN]` hoặc `[SEC]` trong cluster log. Commit `13507e85615` liên quan cảnh báo ứng dụng pool. Bởi vậy cùng một cảnh báo có thể không còn làm bài thử thất bại, nhưng bộ lọc không có tác dụng đổi trạng thái runtime của pool. Tệp `pool-snaps-few-objects.yaml` trong cụm thrash còn đặt filter dưới khóa `override` số ít thay vì `overrides`; hàng này đã được gắn `trivial` theo source/contract `overrides`, cần kiểm expanded job trước khi dựa vào filter. Các hunk khác trong một số recipe được ghi riêng ở OSD-003/062/063/065–070/084.
 
 **Điều kiện:** teuthology chạy một trong các recipe đã phân loại và phát cảnh báo `POOL_APP_NOT_ENABLED` trong cluster log. Trong mixed-version hoặc full-version, kết quả test phụ thuộc recipe/filter được chạy, không chỉ binary OSD. **Evidence confidence:** high cho cấu hình recipe và mã quét log, medium cho việc pipeline dự án có chạy recipe này hay không. Chưa chạy test.
 
 **Kiểm chứng:** trên lab chạy recipe với/không có filter khi pool tạo chưa bật application; ghi cluster log, health detail và kết quả `ctx.summary`. Xác nhận các cảnh báo/lỗi khác vẫn làm test fail. Nếu recipe là gate nâng cấp, giữ thêm một kiểm tra riêng cho trạng thái application của pool thay vì suy từ kết quả test đã lọc.
+
+**Activation/impact và rollback:** log filter áp tự động khi job explicit chọn recipe/task đã merge; impact là observability/acceptance. Giữ expanded job/filter cùng log thô trước run, kiểm POOL_APP_NOT_ENABLED riêng nếu gate cần. Rollback filter cần đánh giá lại log hoặc rerun fixture; đổi recipe không sửa pool application state hay làm warning cũ biến mất. Dừng chấp nhận PASS nếu selector/override không có hiệu lực hoặc lỗi khác bị lọc quá rộng.
 
 ### OSD-056 — Bài thử divergent PG đợi primary hợp lệ trước khi chọn OSD
 
@@ -454,6 +564,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trong lab tạo pool autoscale và giữ PG đầu tiên ở trạng thái chưa có primary có kiểm soát; ghi `up_primary`, thời gian chờ và OSD được chọn. Xác nhận bài thử tiếp tục khi primary hợp lệ, fail rõ ràng khi quá 300 giây, rồi kiểm divergent PG trở lại clean theo mục tiêu test.
 
+**Activation/impact và rollback:** chờ primary được áp tự động trong bài test explicit, ảnh hưởng đúng target fault và thời lượng nghiệm thu. Giữ PG list/primary/epoch cùng seed trước thao tác divergent, dừng nếu primary vẫn âm hoặc đổi trước mutation. Rollback script không undo PG/object/log đã làm divergent; recreate fixture từ checkpoint và rerun với primary/version pin. 300giây là timeout của script, không bảo đảm production peering hội tụ trong khoảng đó.
+
 ### OSD-057 — Bài thử PG log kiểm thêm duplicate và thay ngưỡng trim
 
 **CSV:** `qa/standalone/osd/repro_long_log.sh`. Pacific `test_log_size()` chỉ so `log_size`; Quincy đọc thêm `info.stats.log_dups_size`, đặt `osd_pg_log_dups_tracked=20` trong setup, truyền giới hạn duplicate khác khi gọi `ceph-objectstore-tool --op trim-pg-log`, đổi kỳ vọng test offline từ `2` thành `21` entry chính và `18` duplicate, rồi thêm `TEST_trim_max_entries_with_dups`. Các commit `8f0fb8da372`, `8ecd12f8390` và hunk endpoint cho thấy tiêu chí mới. Trường `log_dups_size` là một phần PG stats target ở [OSD-022](#osd-022--mở-rộng-wire-format-và-dump-của-pg-stats); test không chứng minh mọi PG production sẽ có các số đó.
@@ -461,6 +573,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** runbook/lab dùng script để xác nhận PG log trimming hoặc khả năng đọc stats sau nâng cấp. Mixed-version nên chạy công cụ và query theo phiên bản phù hợp vì Pacific không có cùng output `log_dups_size`; sau full upgrade, bài thử target đòi cả hai chỉ số. **Evidence confidence:** high cho test input/expected output, medium cho kết quả trên store thật chưa thử.
 
 **Kiểm chứng:** trên cluster lab hoặc clone OSD store, chạy bài thử với pool/PG mẫu; ghi `log_size`, `log_dups_size`, cấu hình `osd_pg_log_dups_tracked`, return code của objectstore tool và trạng thái PG sau OSD restart. So bản Pacific/Quincy theo đúng cấu hình mỗi test; nếu dùng offline trim, chỉ thao tác trên store đã dừng trong lab.
+
+**Impact và rollback:** coverage/observability của PG-log test đổi theo tool/schema target trong job explicit. Giữ PG log/duplicates/missing cùng config trước offline trim; trim xóa history, hạ script hoặc đổi ngưỡng không tái tạo entry đã xóa. Dừng nếu tool/schema không khớp, duplicate count/hash hoặc PG state sai; dùng clone gốc cho lần rerun, không giảm expected count để làm test PASS.
 
 ### OSD-058 — QA BlueFS thêm đường mở rộng thiết bị và kiểm tra offline
 
@@ -470,6 +584,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên clone store hoặc lab, trước tiên xác nhận build hỗ trợ `allocmap`/`qfsck` và kiểm shell exit code ở các nhánh test; sau đó đo kích thước slow/DB, free space, trạng thái allocation file và `fsck`/`qfsck` trước/sau `bluefs-bdev-expand`. Restart OSD, đọc lại object và xác nhận PG clean. Không dùng script này trên store production đang hoạt động.
 
+**Impact và boundary:** validation coverage và recovery/durability của expansion cần được kiểm riêng với build tool và shell control flow. Giữ device geometry/image/config trước truncate/expand, không thu nhỏ file block để rollback khi extent đã nằm trong phần mở rộng. Hạ tool không undo allocation file/BlueFS metadata đã ghi; dừng nếu allocmap/qfsck unsupported, nhánh kiểm dung lượng không chạy hoặc hash/fsck sai. Recreate disposable fixture rồi rerun; không dùng PASS thiếu assertion làm bằng chứng expansion an toàn.
+
 ### OSD-059 — QA yêu cầu scrub xảy ra đồng thời với recovery
 
 **CSV:** `qa/standalone/scrub/osd-recovery-scrub.sh`. Pacific `TEST_recovery_scrub_2` dùng 4 object, phát hiện recovery từ log hoặc PG state và chờ các scrub background; chưa đòi chứng minh một scrub xảy ra trong lúc PG đang recover. Quincy tăng lên 40 object, đặt `osd_recovery_sleep=10` trong lab, chờ ít nhất hai PG có state `recovering` rồi `pg_scrub_mod()` trả mã 2 nếu đã quan sát recovery ngay sau lệnh scrub. `wait_background_check()` đếm mã 2 và bài thử fail nếu count bằng 0. Commit `eec821b6e51`, `dd63577ab37`, `b8045f7b183` cần được đọc theo endpoint vì có thay đổi trung gian được revert. Đây là thay đổi điều kiện nghiệm thu cho concurrency, không chứng minh scrub production luôn chạy khi recovery.
@@ -477,6 +593,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chạy standalone recovery/scrub test với config làm chậm recovery. Mixed-version hay full-version đều phải ghi script/config thực dùng vì timeout và concurrency được tạo bởi bài thử; sau full upgrade target áp dụng gate mới. **Evidence confidence:** high cho điều kiện script, medium cho tính tái lập và thời điểm PG state quan sát được. Chưa chạy test.
 
 **Kiểm chứng:** lab tạo 32 PG/40 object như script, giữ `osd_recovery_sleep=10`, ghi PG state, thời điểm scrub request và kết quả từng background PID. Xác nhận ít nhất một PG được scrub khi recovery đang diễn ra và mọi PG về clean; lặp với workload mClock/WPQ dự kiến để tách ảnh hưởng scheduler.
+
+**Impact và rollback:** concurrency acceptance đổi tự động trong test explicit với sleep/recovery workload riêng. Giữ PID exit codes, scrub/recovery timelines và effective scheduler/sleep trước run; state snapshot gần nhau chưa đo overlap toàn bộ scrub. Hạ recipe không undo recovery hoặc scrub/repair đã chạy và không sửa verdict cũ thiếu concurrency. Dừng nếu không có exit2, timeout hoặc hash/PG lỗi; rerun fixture sạch và test profile production riêng trước dùng làm gate.
 
 ### OSD-060 — QA mới làm hỏng SnapMapper rồi kiểm deep-scrub sửa lại
 
@@ -486,6 +604,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên clone, ghi key `SNA_`/snapshot trước test, chạy ca hỏng được kiểm soát, đối chiếu log `ERR` lần deep-scrub đầu với lần hai và số key đầy đủ trước/sau. Kiểm `rados listsnaps`, object data và PG clean sau restart; dừng ngay nếu bài thử thao tác sai đường dẫn lab.
 
+**Impact và rollback:** sửa KV corruption là activation explicit của lab test, ảnh hưởng correctness/recovery coverage. Giữ snapshot nguyên store+SNA_/OBJ_ trước corruption; deep-scrub repair có thể ghi mappings nên quay binary không hoàn nguyên key bị cắt hay sửa. Dừng nếu sai fixture path, object data/snap listing lệch hoặc lần scrub hai còn lỗi mới; phục hồi từ clone gốc và giữ bản lỗi để điều tra. Không coi repair một kiểu key nhân tạo là mọi mapping history đã an toàn.
+
 ### OSD-061 — QA lịch scrub mới dùng `pg query` và `pg dump`
 
 **CSV:** `qa/standalone/scrub/osd-scrub-test.sh`, `scrub-helpers.sh`. Pacific test scrub có setup/teardown tại từng ca. Quincy chuyển phần lớn setup/teardown vào `run()`, thêm helper đọc schedule/active/duration từ `pg query` và `pg dump`, tạo ca `noscrub`/deep-scrub cho bug #52901, ca kiểm lịch, duration và `objects_scrubbed`, đồng thời ép WPQ cho một số ca timing. Commit `7008b85fc56`, `10909c3cba6`, `91885f1a877`, `33d2a2c93b5`. `wait_any_cond()` trong helper trả thành công nếu **bất kỳ** predicate nào khớp, không bắt tất cả; `TEST_pg_dump_objects_scrubbed` ở endpoint vẫn gọi setup/teardown riêng bên trong dù runner đã gọi, nên độ mạnh và vòng đời bài thử cần xác minh. Các hunk thay đổi tín hiệu nghiệm thu scrub, không tự chứng minh mClock production có lịch tương tự.
@@ -493,6 +613,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline sử dụng các standalone scrub tests; một số ca chọn WPQ khác default mClock Quincy. Mixed-version phải ghi scheduler và format `pg query`/`pg dump` của OSD đang xử lý PG; sau full upgrade ca target kiểm các trường stats mới. **Evidence confidence:** high cho cấu trúc helper/script, medium cho kết quả test thực và tác động setup lặp. Chưa chạy test.
 
 **Kiểm chứng:** trên lab, chạy từng test riêng với log setup/teardown, xác nhận ca `noscrub` không chạy deep scrub trước khi unset rồi chạy sau unset; so `last_scrub_duration`, `objects_scrubbed`, schedule ở `pg query`/`pg dump` với event thực. Với ca cần hai điều kiện đồng thời, kiểm cả hai độc lập vì `wait_any_cond()` chỉ đòi một; thử riêng mClock nếu là scheduler triển khai.
+
+**Activation và rollback:** setup/helper/queries tự áp khi job explicit chọn test target; trạng thái daemon/pool do setup/teardown đổi thật trong fixture. Giữ schedule/sequence/duration và event timestamps; kiểm từng predicate bắt buộc độc lập thay vì suy `wait_any_cond` chứng minh tất cả. Hạ script không undo scrub metadata/repair hoặc clone đã trim; dừng nếu setup lặp/teardown còn process, query/dump lệch sự kiện hoặc hash sai, recreate fixture rồi rerun với scheduler đã pin.
 
 ### OSD-062 — Recipe RADOS API mở nạp object class cho test
 
@@ -502,13 +624,17 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab chạy `rados/test.sh` với recipe target, ghi `osd class load list`/`default list` hiệu dụng và các class đã load trên OSD. Lặp với allowlist dự kiến của cluster để xác nhận các op class cần thiết vẫn chạy; giữ riêng kết quả của test với wildcard và test với cấu hình production.
 
+**Impact và rollback:** class loading/QA coverage và security scope trong lab đổi tự động qua recipe explicit; wildcard không phải allowlist production. Giữ plugin manifest và effective class lists trước run, thử missing/denied class với allowlist đích. Hạ script/OSD không undo class method đã ghi object hay config wildcard đã MON lưu; restore config riêng rồi restart/load theo artifact đã kiểm. Dừng nếu plugin cohort/symbol hoặc remote-read result không đúng, không copy `.so` giữa branch để né lỗi.
+
 ### OSD-063 — Recipe singleton chặn tạo pool `.mgr` trước khi chạy bài thử
 
-**CSV:** 33 recipe dưới `qa/suites/rados/singleton/all/`, 17 recipe dưới `qa/suites/rados/singleton-nomsgr/all/`, `qa/suites/rados/multimon/no_pools.yaml` và `qa/suites/rados/thrash-erasure-code/thrashers/minsize_recovery.yaml` đặt `mgr_pool false` trong `pre-mgr-commands`; 51 recipe đổi từ `ceph config set mgr mgr/devicehealth/enable_monitoring false --force`, còn `crushdiff.yaml` mới dùng lệnh này ngay từ đầu. Hunk endpoint và commit `d6c66f3fa61` cho thấy mục tiêu giữ môi trường test không có pool MGR: cách cũ chỉ tắt devicehealth monitoring, còn `mgr_pool` của Quincy mặc định `true` và chặn `MgrModule.db` mở/tạo `.mgr` khi đặt `false`. `qa/tasks/ceph.py` chạy danh sách `pre-mgr-commands` lúc khởi động MON, trước daemon MGR. Tệp `.disabled` trong suite thứ nhất cũng đổi lệnh nhưng vẫn chưa được gắn nhãn vì chưa xác nhận đường thực thi. Đây là thay đổi setup QA, có liên hệ [MGR-001](./07-mgr-modules-monitoring.md) về pool `.mgr`, không phải chỉ dẫn tắt pool này trên cluster sản xuất.
+**CSV:** 33 recipe dưới `qa/suites/rados/singleton/all/`, 17 recipe dưới `qa/suites/rados/singleton-nomsgr/all/`, `qa/suites/rados/multimon/no_pools.yaml` và `qa/suites/rados/thrash-erasure-code/thrashers/minsize_recovery.yaml` đặt `mgr_pool false` trong `pre-mgr-commands`; 51 recipe đổi từ `ceph config set mgr mgr/devicehealth/enable_monitoring false --force`, còn `crushdiff.yaml` mới dùng lệnh này ngay từ đầu. Hunk endpoint và commit `d6c66f3fa61` cho thấy mục tiêu giữ môi trường test không có pool MGR: cách cũ chỉ tắt devicehealth monitoring, còn `mgr_pool` của Quincy mặc định `true` và chặn `MgrModule.db` mở/tạo `.mgr` khi đặt `false`. `qa/tasks/ceph.py` chạy danh sách `pre-mgr-commands` lúc khởi động MON, trước daemon MGR. Tệp `.disabled` trong suite thứ nhất cũng đổi lệnh, nhưng đã được gắn `trivial` vì marker disabled không có đường thực thi gate được xác lập. Đây là thay đổi setup QA, có liên hệ [MGR-001](./07-mgr-modules-monitoring.md) về pool `.mgr`, không phải chỉ dẫn tắt pool này trên cluster sản xuất.
 
 **Điều kiện:** pipeline chọn một recipe đã phân loại và chạy lệnh trước MGR. Trong mixed-version, cần kiểm lệnh và tùy chọn được daemon thực dùng chấp nhận; không thể suy từ recipe target rằng MGR Pacific cũng có `mgr_pool`. Sau full upgrade, recipe target có thể giữ baseline không có `.mgr` khi module dùng DB. **Evidence confidence:** high cho lệnh, thứ tự task và guard tạo DB ở endpoint Quincy; medium cho pool thực tế trong từng bài test vì chưa chạy pipeline.
 
 **Kiểm chứng:** trên lab chạy recipe với bản MGR và MON tương ứng, lưu effective config `mgr_pool`, `mgr/devicehealth/enable_monitoring`, danh sách pool trước/sau MGR khởi động và kết quả workunit. Lặp với recipe Pacific cùng điều kiện để xác nhận bài thử về số pool không bị pool nền làm sai. Với mixed-version, ghi riêng kết quả lệnh `ceph config set` và trạng thái MGR; không áp dụng cấu hình này cho production từ kết quả QA.
+
+**Impact và rollback:** setup/compatibility của QA đổi tự động ở pre-MGR command trong job explicit. Giữ MON return code, config/source-of-value và pool list trước startup; `mgr_pool=false` chặn DB path mới, không xóa `.mgr` đã tồn tại hay hoàn nguyên migration. Hạ recipe/MGR không undo SQLite/module state đã ghi; không xóa pool để làm count test đúng. Dừng nếu option không chấp nhận hoặc module cần DB không hoạt động, rerun fixture sạch với scope/config pin.
 
 ### OSD-064 — Admin socket QA cho phép lệnh dự phòng `dump_metrics memory`
 
@@ -518,6 +644,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab chạy cùng recipe với OSD có và không có các lệnh heap, ghi lệnh nào trả lỗi, lệnh nào tạo JSON hợp lệ và kết quả task; xác nhận phép thử riêng nếu cần bảo đảm chức năng chỉnh heap của tcmalloc, vì recipe target có thể đi qua fallback.
 
+**Activation/impact và rollback:** fallback tự áp trong task explicit, ảnh hưởng coverage/observability; JSON từ dump_metrics không chứng minh set_heap_property đã sửa heap. Giữ command tried/exit/raw response/version/allocator trước accept, kiểm heap operation riêng khi cần. Rollback task cần rerun exact commands, không giữ PASS của fallback để cấp chứng nhận tcmalloc. Job có thể đã set heap trước failure, hạ recipe không hoàn nguyên giá trị; restore fixture/config đã pin và dừng nếu command coverage không rõ.
+
 ### OSD-065 — Recipe MON auth bổ sung bài thử xoay khóa pending
 
 **CSV:** `qa/suites/rados/singleton/all/mon-auth-caps.yaml` thêm `mon/auth_key_rotation.sh` vào danh sách workunit; script mới ở target xuất auth, tạo/xóa pending key, commit pending key, thử xác thực với khóa cũ và mới cho tới khi khóa cũ hết hiệu lực. Commit `80ca209c553` thêm cả script và lệnh gọi. Recipe này đồng thời có hunk OSD-055 và OSD-063. Đây là độ phủ validation cho đường xác thực khi xoay khóa, chưa chứng minh riêng việc triển khai production đang dùng pending-key rotation.
@@ -525,6 +653,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chạy recipe `mon-auth-caps` với MON/CLI hỗ trợ các lệnh pending-key. Trong mixed-version, cần ghi MON leader và CLI nào xử lý từng lệnh; sau full upgrade, target recipe bắt thêm các lỗi xoay khóa có thể đã qua bài `auth_caps` trước đây. **Evidence confidence:** high cho script và lệnh gọi, medium cho tính tương thích của tổ hợp mixed-version và kết quả lab chưa chạy.
 
 **Kiểm chứng:** trên lab chạy workunit với MON target, ghi kết quả từng bước `get-or-create-pending`, `clear-pending`, `commit-pending` và thời điểm khóa cũ bị từ chối; lặp với MON leader base/target nếu rollout có pha mixed-version. Kiểm trạng thái auth và quyền truy cập sau bài thử, chỉ dùng identity lab được tạo cho ca này.
+
+**Activation/impact và rollback:** workunit explicit tạo/clear/commit pending keys, tác động auth compatibility/validation. Giữ lab entity, caps và accepted-key phase theo secret policy trước commit; sau commit key cũ có thể hết hiệu lực, hạ CLI/MON không tự khôi phục key. Dừng nếu client auth không tiếp tục hoặc key lifecycle sai, phục hồi identity theo workflow đã kiểm với MON release gate phù hợp. Redact key material trong logs và dùng entity lab riêng; không dùng key production cho recipe.
 
 ### OSD-066 — Recipe mới kiểm ước lượng di chuyển khi đổi CRUSH map
 
@@ -534,6 +664,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên lab cô lập chạy recipe với map không đổi và map sửa trọng số, lưu OSDMap/PG dump, output `crushdiff`, PG state và object count trước/sau. Xác nhận `import` trong script chỉ tác động cluster lab, đối chiếu ước lượng với dịch chuyển quan sát được; không chạy script này trên cluster sản xuất chỉ để lấy kết quả phân tích.
 
+**Activation và rollback:** chọn recipe explicit tạo pools/bench writes và import CRUSH; tool compare không undo import. Giữ CRUSH binary/OSDMap epoch, PG stats và object checkpoint trước đổi weight, dừng nếu subprocess lỗi, estimate khác mapping hoặc health/hash không đạt. Khôi phục map có remap/backfill riêng cần đo, còn hạ recipe không thu hồi I/O đã ghi hay trả placement cũ. Log-ignorelist PG_DEGRADED không thay kiểm recovery/clean riêng.
+
 ### OSD-067 — Hai recipe RADOS cơ bản bỏ bộ lọc lỗi MON và pool quá rộng
 
 **CSV:** `qa/suites/rados/basic/tasks/rados_api_tests.yaml` và `rados_python.yaml`. Endpoint Pacific có các mẫu `MON_DOWN`, `mons down`, `out of quorum`, cảnh báo application pool và thiếu hit-set trong `overrides.ceph.log-ignorelist`. Endpoint Quincy bỏ các mẫu đó; `rados_api_tests.yaml` còn bỏ `CEPHADM_STRAY_DAEMON`, `rados_python.yaml` giữ các mẫu khác như `POOL_APP_NOT_ENABLED`. `qa/tasks/ceph.py` chỉ đánh dấu bài thử thất bại khi dòng `[ERR]`, `[WRN]` hoặc `[SEC]` còn lại sau lọc. Do đó cùng một cảnh báo MON/quorum có thể làm bài test target thất bại dù từng được bỏ qua ở recipe base. `rados_api_tests.yaml` có thêm hunk mở class ở OSD-062. Không dùng lịch sử commit đơn tuyến để suy chiều thay đổi vì hai endpoint thuộc hai release branch.
@@ -541,6 +673,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chạy một trong hai recipe, cảnh báo bị bỏ khỏi ignorelist xuất hiện trong cluster log và không khớp mẫu còn lại. Trong mixed-version, tín hiệu đỗ phụ thuộc recipe/teuthology đang dùng và log của các daemon thực chạy; sau full upgrade recipe target có gate chặt hơn với các mẫu nêu trên. **Evidence confidence:** high cho hunk và mã quét log, medium cho tần suất cảnh báo thực tế chưa được đo.
 
 **Kiểm chứng:** trong lab chạy từng recipe với cùng workload, giữ cluster log đầy đủ, ghi mẫu nào bị loại và dòng nào làm `ctx.summary['success']` thành false. Với cảnh báo MON/quorum, kiểm thêm trạng thái MON và client IO để phân biệt lỗi thật với nhiễu do test setup.
+
+**Impact và rollback:** acceptance/observability chặt hơn khi explicit chọn recipe target; filter change tự động lúc quét log, không tạo MON fault. Giữ expanded config và raw log/health/IO timeline để giải thích fail. Rollback filter hoặc dùng recipe cũ chỉ đổi verdict và không sửa quorum/pool/client lỗi; nếu gate production cần những warning đó, không bỏ filter failure để tiếp tục rollout. Rerun phải giữ topology/workload/pins tương đương và xử lý cảnh báo availability thật.
 
 ### OSD-068 — Gate counter MGR yêu cầu thêm một lần hoàn thành finisher telemetry
 
@@ -550,6 +684,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab chạy workunit `mgr/test_per_module_finisher.sh`, lưu `perf dump` của active MGR trước/sau, xác nhận count đạt 2 hoặc ghi failure từ `check-counter`; lặp khi active MGR failover nếu rollout cần kiểm giai đoạn mixed-version.
 
+**Activation/impact và rollback:** counter-min áp tự động trong task explicit, ảnh hưởng acceptance chứ không tự tăng telemetry completion. Giữ active MGR/version, ASOK response và before/after perf dump; cần xác nhận daemon thực đã được query, không dùng skip/missing response làm PASS cho counter. Hạ ngưỡng/recipe không undo telemetry đã chạy hoặc sửa evidence thiếu; dừng khi không có dump hợp lệ/count2, rồi rerun đúng workload/active-MGR phase. Failover/restart reset RAM counter cần ghi process lifetime.
+
 ### OSD-069 — Bài thử progress dùng profile mClock ưu tiên recovery
 
 **CSV:** `qa/suites/rados/mgr/tasks/progress.yaml`. Pacific recipe không đặt profile mClock; Quincy thêm `overrides.ceph.conf.osd.osd mclock profile: high_recovery_ops` (commit `cc1fc98ea4a`) và lọc `POOL_APP_NOT_ENABLED` ở OSD-055. Option `osd_mclock_profile` trong target chỉ được xét khi `osd_op_queue = mclock_scheduler`; profile mới đổi cách phân bổ QoS cho recovery/scrub/client, nên thời gian PG trở lại clean và tín hiệu progress trong chính bài thử có thể khác. Đây là cấu hình lab, không phải default sản xuất.
@@ -557,6 +693,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chạy bài progress với OSD dùng mClock. Với WPQ, option này không được scheduler xét. Trong mixed-version, ghi scheduler/profile hiệu dụng từng OSD; sau full upgrade recipe target vẫn dùng profile lab thay vì mặc định nếu override được áp dụng. **Evidence confidence:** high cho recipe và điều kiện option, medium cho thời gian phục hồi thực tế chưa chạy.
 
 **Kiểm chứng:** lab chạy `tasks.mgr.test_progress` với profile target và profile mặc định, lưu config hiệu dụng, PG state, event progress và thời gian recovery; nếu gate rollout dùng recipe này, đối chiếu thêm cấu hình scheduler/profile dự kiến của cluster.
+
+**Impact và rollback:** performance/acceptance của recovery đổi tự động theo override khi recipe explicit chọn mClock. Giữ scheduler/profile/capacity và MON config trước run, so default workload riêng; không dùng progress PASS dưới high_recovery_ops để chứng nhận client latency của balanced. Restore profile/config là bước rollback riêng; hạ recipe không undo recovery đã commit hoặc khôi phục override đã profile xóa. Dừng nếu effective config không đúng hoặc events/PG completion không đạt, rerun fixture cùng tải.
 
 ### OSD-070 — Selftest MGR bỏ qua cảnh báo module crash trong cluster log
 
@@ -566,6 +704,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab chạy selftest, lưu cluster log, `ceph health detail`, danh sách crash và kết quả test; xác nhận mẫu bị bỏ qua còn các lỗi khác vẫn fail. Nếu dùng làm gate rollout, kiểm crash MGR riêng thay vì suy từ trạng thái đỗ của recipe.
 
+**Activation/impact và rollback:** crash whitelist tự áp khi task explicit quét log, ảnh hưởng observability và verdict selftest. Giữ crash IDs/backtrace, raw log và health trước accept; exact pattern một module crash không đại diện mọi crash count. Rollback ignorelist cần đánh giá lại log/rerun, không sửa module crash hay state `.mgr` đã ghi; archive crash cũng không chứng minh lỗi đã giải quyết. Dừng gate nếu crash thật chưa được giải thích, kiểm module function/restart riêng.
+
 ### OSD-071 — Tách bài ObjectStore QA theo backend và nhóm test dài
 
 **CSV:** Git ghép `qa/suites/rados/objectstore/backends/objectstore.yaml` với `objectstore-bluestore-a.yaml` ở trạng thái `R067`, đồng thời thêm `objectstore-bluestore-b.yaml` và `objectstore-filestore-memstore.yaml`. Pacific chạy `ceph_test_objectstore --gtest_filter=-*/3`, tức loại tham số `/3` của các suite parameterized; Quincy chia thành `*/2:-*SyntheticMatrixC*`, `*SyntheticMatrixC*/2` và `*/1:*/0`. Trong `src/test/objectstore/store_test.cc`, ba `StoreTest` chính đăng ký thứ tự memstore `/0`, filestore `/1`, bluestore `/2`, kstore `/3`; các suite khác có thể có thứ tự riêng. Commit `d4ac4f3b788` nêu mục đích tách ca dài, đặc biệt nhóm SyntheticMatrixC, nhưng ghép rename của Git khác đường rename trong commit nên không suy nó là một dịch chuyển logic thuần túy. Bộ lọc và phân chia job QA thay đổi thời lượng, điểm fail và khả năng bỏ sót ca nếu pipeline không chạy đủ ba recipe. Không có dữ liệu thời gian thực tế ở hai endpoint để định lượng mức giảm.
@@ -573,6 +713,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chọn các recipe ObjectStore làm gate; phạm vi kiểm còn tùy bản build có backend nào và `gtest_list_tests` thực tế. Trong mixed-version, binary test và backend library cần được ghi rõ, vì bộ lọc target không chứng minh binary base có cùng tập test; sau full upgrade cần chạy đủ ba phần để đối chiếu độ phủ. **Evidence confidence:** high cho hunk/filter và thứ tự `StoreTest` chính, medium cho toàn bộ test inventory và thời gian chạy chưa đo.
 
 **Kiểm chứng:** trên build lab, xuất `ceph_test_objectstore --gtest_list_tests`, áp ba filter target và filter base vào danh sách tên thực, kiểm phần hợp/thiếu/trùng; chạy ba recipe riêng, lưu thời lượng, exit code và log backend. Nếu chỉ một recipe được pipeline chọn, đánh dấu rõ phần backend chưa được thử trước khi dùng kết quả làm gate rollout.
+
+**Activation/impact và rollback:** filter/split job áp khi pipeline explicit chọn recipe, ảnh hưởng coverage/duration; tên `/2` chỉ có nghĩa theo binary test đã pin. Giữ expanded test list, backend parameter map, selected/skipped cases và resource settings trước accept. Hạ recipe không phục hồi test bị bỏ khỏi job đã chạy hoặc undo data fixture; phải recreate/rerun đủ partition và bỏ verdict của selection thiếu. Dừng nếu backend/case mapping khác expectation, không suy chỉ một BlueStore subset là toàn bộ coverage.
 
 ### OSD-072 — Cấu hình chung của QA RADOS đổi điều kiện kiểm thử OSD
 
@@ -582,6 +724,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** ở lab, lưu effective config từng OSD và danh sách recipe được chọn; chạy cùng workload RADOS với baseline của hai endpoint, đối chiếu kết quả test, PG recovery và lỗi BlueStore. Nếu dùng QA này làm gate rollout, tách lỗi do code khỏi lỗi do cấu hình test đổi.
 
+**Rollback boundary:** nạp config QA explicit đổi effective options tự động theo daemon endpoint; giữ merged config, scheduler và backend trước run. Restore recipe không undo zero-block handling hoặc I/O/recovery đã commit, mClock profile còn có thể xóa overrides ở MON. Dừng nếu config/provenance không khớp baseline hoặc data/PG fails; rerun fixture sạch với production options để tách regression binary khỏi cấu hình QA riêng.
+
 ### OSD-073 — Lối vào suite upgrade của RADOS chuyển sang Pacific parallel
 
 **CSV:** `qa/suites/rados/upgrade/nautilus-x-singleton` bị xóa, còn `qa/suites/rados/upgrade/parallel` là symlink mới tới `../../upgrade/pacific-x/parallel/`. Base có suite Nautilus singleton ở đường cũ; target có `qa/suites/upgrade/pacific-x/parallel/0-start.yaml`, `1-tasks.yaml`, `upgrade-sequence.yaml` và workload tương ứng. Trong target, `0-start.yaml` cài Pacific; `1-tasks.yaml` chạy `parallel` giữa workload và upgrade; `upgrade-sequence.yaml` gọi `ceph orch upgrade start` rồi đợi hết `in_progress`, kiểm tra `ceph versions` còn một overall version và chứa SHA mục tiêu. Commit `a9c4d1f1e71` bỏ đường Nautilus, `b6c84d56216` trỏ lối vào tới suite parallel. Đây là thay đổi tập ca có thể được pipeline chọn, không chứng minh một pipeline cụ thể đã chạy ca này hoặc rolling upgrade production đã được kiểm chứng.
@@ -589,6 +733,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline khám phá và chọn `qa/suites/rados/upgrade/`; cần biết nó có đi theo symlink mới và chạy đủ workload hay không. Pha mixed-version được suite mô phỏng khi workload chạy song song với orchestrator; kiểm tra cuối cùng chỉ xác nhận số version overall và SHA theo recipe, chưa tự chứng minh tính toàn vẹn dữ liệu hay mọi cảnh báo health đã được xử lý. **Evidence confidence:** high cho endpoint symlink/recipe, medium cho độ phủ gate triển khai chưa biết.
 
 **Kiểm chứng:** trong lab, liệt kê job thực tế từ pipeline và resolve symlink; chạy suite với artifact 16.2.15/17.2.7 đã pin rõ, lưu `ceph versions`, trạng thái orchestrator, kết quả từng workload, PG/health và checksum dữ liệu trước/sau. Không coi recipe có `pacific` branch chung là bằng chứng nó đã dùng đúng tag 16.2.15 nếu artifact chưa được khóa.
+
+**Activation/impact và rollback:** selector/symlink được pipeline explicit resolve, workload/upgrade chạy theo recipe target; coverage/scheduling đổi chứ recipe không chứng minh exact-hop PASS. Giữ fully expanded job, immutable images/packages/SHA và workload checkpoints trước upgrade. Hạ recipe/cephadm không undo release flags, MON/store migrations hoặc I/O workload đã commit; rollback daemon phải có rehearsal gate riêng. Dừng nếu version check thiếu offline nodes, artifact sai tag, workload/PG/hash fail; completion một overall version không thay data validation.
 
 ### OSD-074 — Bài thrash giảm danh sách cảnh báo health được bỏ qua
 
@@ -598,6 +744,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** chạy bài thrash trong lab với cùng workload, lưu log thô, tập mẫu filter và kết quả job. Phân biệt fail vì cảnh báo availability thật với fail do kỳ vọng QA đổi; kiểm thêm quorum, OSD/PG state và client IO tại thời điểm cảnh báo.
 
+**Activation và rollback:** filter mới tự áp trong job thrash explicit; rollback filter chỉ đổi cách accept log và không khôi phục OSD/MON/PG availability. Giữ raw warnings cùng fault timing, quorum/IO/PG state và task return; dừng khi warning là lỗi ngoài expected fault window. Muốn so lại verdict phải dùng cùng log/filter hoặc rerun pinned fixture, không bỏ mẫu fail để tiếp tục rollout. Hạ thrasher recipe không undo recovery/remap/kill đã thực hiện.
+
 ### OSD-075 — Suite thrash với client cũ đổi nơi chọn và bổ sung client Pacific
 
 **CSV:** 45 hàng dưới `qa/suites/rados/thrash-old-clients/`. Ở endpoint base, suite tương ứng nằm dưới `qa/suites/orch/cephadm/thrash-old-clients/`; endpoint target đặt nó dưới nhánh RADOS và thêm `1-install/pacific.yaml`. Các recipe cài Nautilus/Octopus nay loại thêm gói `ceph-volume`; các nhánh thrasher thêm lọc `POOL_APP_NOT_ENABLED`. Suite vẫn ghép các lựa chọn version client, backoff, thrasher, lỗi messenger, cấu hình cluster và workload RADOS/RBD, nên đường dẫn chọn job cùng ma trận thử tương thích client có thể đổi. Commit `c8e1f4c2b54` chuyển suite, `b7237c9e2d8` bỏ Luminous/Mimic khỏi ma trận, `0b361fc8b94` đổi danh sách gói cài, và `7ca74183226` bổ sung cấu hình auth của cephadm trong suite. Git ghi 44 hàng `R` và một hàng `A`, nhưng một số `R100` của symlink/marker được ghép từ đường dẫn không liên quan; đây là heuristic và không chứng minh từng file có một “logical move” tương ứng.
@@ -605,6 +753,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline có khám phá và chạy suite mới tại đường RADOS, với client Pacific hoặc cũ hơn kết nối tới daemon target; chỉ khi đó thay đổi này là gate validation của rollout. Recipe `1-install/pacific.yaml` dùng branch `pacific` chung, không khóa chính xác `v16.2.15`, nên kết quả mặc định không chứng nhận cặp tag của báo cáo. Trong mixed-version, kết quả còn tùy version client được chọn, daemon đang phục vụ request và biến thể msgr/backoff; sau full upgrade, cùng workload kiểm tương thích client với cluster target. **Evidence confidence:** high cho endpoint path/recipe và các hunk được đối chiếu, medium cho độ phủ pipeline và kết quả runtime chưa có.
 
 **Kiểm chứng:** liệt kê job thực được pipeline chọn trước/sau và phiên bản package/image của từng client; chạy ma trận có pin client 16.2.15 và daemon 17.2.7 trong lab, lưu lỗi auth, kết quả workload RADOS/RBD, OSD/PG state và log lọc thrasher. Nếu cần đánh giá client Nautilus/Octopus, ghi rõ đó là ca riêng ngoài cặp endpoint chính.
+
+**Activation/impact và rollback:** ma trận client/selector/package exclusions áp khi explicit chọn job, tác động compatibility coverage và delivery của fixture. Giữ client/daemon artifact manifests và expanded combinations thay vì tin R100 marker là logical move. Hạ recipe không hoàn nguyên package solver, cephadm deployment hay RADOS/RBD writes; recreate lab image từ pin và đối soát workload checkpoint. Dừng nếu missing combinations, branch client không exacttag, auth/IO failure hoặc package closure thiếu; testcase Nautilus/Octopus cần scope riêng.
 
 ### OSD-076 — Suite RADOS thrash cỡ lớn đổi phương thức triển khai và workload
 
@@ -614,6 +764,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên lab đối chiếu danh sách job được sinh từ hai endpoint, số daemon thực triển khai, lựa chọn thrasher và thời lượng radosbench; chạy ca target, lưu health/PG, client IO, lỗi cephadm/NVMe loop và kết quả test. Không so pass/fail hai endpoint mà bỏ qua khác biệt topology và phương thức triển khai.
 
+**Activation/impact và rollback:** thay đổi recipe có hiệu lực khi explicit chọn suite rồi merge fragments; nó tác động delivery của fixture và độ phủ kiểm thử availability/recovery. `big.yaml` còn tăng số host/client khai báo từ 51 role client hoạt động ở base lên 67 ở target, nên tên `big` không bảo đảm cùng quy mô tải. Khôi phục YAML base chỉ đổi job lần sau; nó không hoàn nguyên HWE kernel, thiết bị NVMe loop, daemon cephadm hoặc dữ liệu benchmark đã tạo. Trước khi đổi recipe phải lưu manifest package/image, topology và workload; nếu triển khai thiếu daemon/device hoặc không còn ca thrash cần làm gate, dừng dùng kết quả đó để đóng validation rồi dựng lại fixture lab đã pin.
+
 ### OSD-077 — Crimson MON client bỏ msgr1 và đổi đường phục hồi phiên
 
 **CSV:** `src/crimson/mon/MonClient.cc`, `.h`. Base có `Connection::authenticate_v1()` và chọn v1/v2 theo địa chỉ MON; target bỏ v1, `choose_client_addr()` chỉ lấy địa chỉ msgr2 rồi gọi `authenticate_v2()`. `Client::reopen_session()` nay trả `bool`, dọn connection cũ và gọi `on_session_opened()` để renew key/subscription, gửi hàng đợi và gửi lại MON command; `tick()` thử xác thực lại khi đang hunt. Mã target còn đợi config từ MON tại `src/crimson/osd/main.cc`. Commit `b682a0c2d87`, `26f205dbead`, `f5cf1a36ad4`, `44e45cfc762` giải thích các cụm đổi này. Đây là đường Crimson OSD, không suy rộng sang OSD classic.
@@ -621,6 +773,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** chạy Crimson OSD; MON phải công bố và cho kết nối msgr2 khả dụng. Với MON chỉ có v1, Crimson target không có đường fallback như base. Trong mixed-version, Crimson base/target có thể khác nhau về khả năng kết nối và phục hồi phiên khi MON đổi leader/reset; sau full upgrade mọi Crimson OSD target dùng đường mới. **Evidence confidence:** high cho nhánh endpoint, medium cho mức phơi nhiễm vì chưa có cấu hình MON/Crimson của cluster.
 
 **Kiểm chứng:** trong lab có Crimson, ghi MON address vector, thử MON v2 khả dụng và ca chỉ v1, rồi reset/failover MON khi PG peering và MON command đang chờ. Kiểm OSD tiếp tục nhận map/config, hàng đợi command được hoàn tất một lần, PG trở lại clean; ghi rõ daemon nào dùng code base/target.
+
+**Activation/impact và rollback:** code tự động áp sau restart Crimson target; không cần operator bật thêm MON-client feature, nhưng address msgr2 của MON phải routable và auth phải hoàn tất. Tác động chính là compatibility/availability của boot, map/config subscription và MON command khi phiên mất. `pending_messages`, `ready_to_send` và bản copy `mon_commands` là state trong tiến trình; restart không tái tạo được request còn chờ từ bộ nhớ, còn lệnh MON đã thực thi có thể đã đổi cluster state. Downgrade cục bộ chỉ được cân nhắc sau khi dừng caller, đối soát command/OSDMap và xác nhận các gate release/store của H2; nó không hoàn nguyên command đã chạy hay chứng nhận data mount. Dừng rollout nếu target không có MON address tương thích, auth hunt kéo dài hoặc command không có kết quả đối soát được.
 
 ### OSD-078 — Crimson không assert khi mất kết nối MGR lúc gửi thống kê
 
@@ -630,13 +784,17 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab làm MGR failover/reset khi Crimson đang báo PG stats, kiểm daemon không thoát, warning `report: no conn available`, và report kế tiếp sau reconnect; so PG stats/MGR view trước và sau.
 
+**Activation/impact và rollback:** guard tự động chạy trong lượt timer sau restart daemon target; không có config mới cần bật. Tác động availability là tránh assert ở đúng nhánh `conn` rỗng, còn observability là mất một lượt PG stats. `reconnect()` chờ `mgr_connect_retry_interval` rồi chọn địa chỉ từ MGRMap; guard không chứng minh reconnection luôn thành công. Rollback về code base đưa assert trở lại và không gửi bù report đã bỏ; dữ liệu PG chưa được suy là hỏng chỉ từ telemetry bị thiếu. Khi kiểm canary, đối chiếu OSD trực tiếp với MGR view và chặn quyết định tiếp tục nếu stats vẫn cũ sau reconnect; hạ daemon còn phải tuân gate on-disk/release của H2.
+
 ### OSD-079 — Radosbench QA mặc định chạy trên mọi client role
 
-**CSV:** `qa/tasks/radosbench.py`. Base mặc định `clients: ['client.0']`; target lấy `teuthology.all_roles_of_type(ctx.cluster, 'client')` và thêm prefix `client.`, rồi chạy vòng lặp theo các role ấy. Commit `e1e173876d` nêu mục đích đổi mặc định. Recipe ghi rõ `clients` không bị đổi bởi nhánh mặc định. Đây là thay đổi tải và độ phủ QA, không phải chính sách client của cluster.
+**CSV:** `qa/tasks/radosbench.py`. Base mặc định `clients: ['client.0']`; target lấy `teuthology.all_roles_of_type(ctx.cluster, 'client')` và thêm prefix `client.`, rồi chạy vòng lặp theo các role ấy. Commit `e7bf9242c4e` nêu mục đích đổi mặc định. Recipe ghi rõ `clients` không bị đổi bởi nhánh mặc định. Đây là thay đổi tải và độ phủ QA, không phải chính sách client của cluster.
 
 **Điều kiện:** bài RADOS benchmark không đặt `clients` và topology có hơn một client. Trong mixed-version/full-version, cường độ tải của recipe target có thể cao hơn base và làm kết quả pass/fail hoặc latency khác; cần pin cùng danh sách client trước khi gán khác biệt cho daemon. **Evidence confidence:** high cho task code, medium cho số client thực của pipeline.
 
 **Kiểm chứng:** xuất job/config đã merge, số client role, số tiến trình benchmark và kết quả từng client trên hai endpoint; chạy lại cùng danh sách client cố định để so daemon.
+
+**Activation/impact và rollback:** default mới tự động áp trong task target khi không explicit đặt `clients`; mỗi benchmark chính được launch `wait=False`, nên các client có thể cùng gây tải. Tác động performance/capacity và validation phải gắn với số process, pool và kiểu bench thực, không nhân throughput lý thuyết từ số role. Khôi phục recipe bằng danh sách client cố định làm lần chạy kế tiếp so sánh được, nhưng không hoàn nguyên object/pool đã ghi; task có thể tạo pool riêng và cleanup chỉ theo nhánh cấu hình của nó. Dừng job nếu tải vượt ngân sách lab hoặc còn process chưa join; lưu kết quả từng client, kiểm pool cleanup và dựng lại baseline trước khi dùng pass/fail làm gate.
 
 ### OSD-080 — Scrub QA chỉ chọn PG từ pool bị sửa lỗi có chủ đích
 
@@ -646,6 +804,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab nhiều pool, lưu `pgid`, pool ID và object victim trước khi inject lỗi, xác nhận scrub phát hiện đúng PG/object và không tác động pool khác.
 
+**Activation/impact và rollback:** chọn pool tự động áp khi gọi task target; script vẫn explicit bật objectstore FUSE, ghi object và gây corruption trong các helper. Tác động correctness của validation là tránh lỗi hoặc tác động nhầm PG do chọn pool khác; không đổi logic scrub daemon. Rollback script về base tái đưa lựa chọn PG không lọc trở lại và không phục hồi object đã fuzz, omap đã sửa hay digest/repair đã ghi. Trước injection phải chứng minh victim thuộc pool `rbd` thử nghiệm và giữ bản sao dữ liệu; nếu pool ID không tìm thấy, victim không khớp object hoặc có lỗi ngoài PG đã chọn thì dừng job và phục hồi/recreate fixture. Bài test đã đọc source, chưa được chạy ở hai endpoint.
+
 ### OSD-081 — Workunit dedup thêm ca scrub/repair và đổi điều kiện estimate
 
 **CSV:** `qa/workunits/rados/test_dedup_tool.sh`. Base kiểm estimate bằng các giá trị chunk size; target tạo mẫu 50 chunk dữ liệu + 50 chunk zero, đọc `chunk_size_average`/`examined_bytes`, rồi gọi thêm `test_dedup_chunk_scrub`, `test_dedup_chunk_repair`, `test_dedup_object`. Script mới dựng chunk pool lab, thao tác refcount sai có chủ đích, đòi báo damaged object và kiểm kết quả repair/chunk SHA. Các commit `ed24df159cd`, `c1d2119d5e6`, `e7e875c5474`, `16e7d5578c4` nằm trong lịch sử liên quan; endpoint script là bằng chứng về tiêu chí test cuối cùng. Những lệnh xóa pool trong script là cleanup của workunit, không phải hướng dẫn chạy trên cluster thực.
@@ -653,6 +813,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chạy workunit dedup trên cluster lab có hỗ trợ dedup tier/chunk. Trong mixed-version, kết quả phụ thuộc daemon xử lý chunk op và phiên bản tool; sau full upgrade, target workunit bắt thêm lỗi refcount/repair mà base không kiểm. **Evidence confidence:** high cho script, medium cho kết quả runtime chưa chạy.
 
 **Kiểm chứng:** chạy chỉ trên lab cô lập, pin version tool/daemon, giữ output estimate, damaged count, refs trước/sau repair và checksum chunk; xác nhận cleanup không xóa dữ liệu ngoài pool thử.
+
+**Activation/impact và rollback:** khi explicit chạy workunit target, cuối script gọi cả bốn hàm test thay vì chỉ estimate; các lệnh pool-set, set-chunk, tier-flush và `chunk-repair` thực sự thay đổi lab state. Tác động correctness/validation là bắt thêm lỗi refcount và dữ liệu chunk; đồng thời parser estimate yêu cầu output tool target, nên task/tool lệch version có thể fail trước khi kiểm daemon. Rollback script hoặc tool không đảo manifest, reference count hay object mà repair đã đổi; cleanup xóa hai pool thử cũng làm mất evidence nếu chưa lưu. Dừng ngay khi checksum/refcount lệch hoặc tên pool trùng dữ liệu không thuộc fixture, giữ artifact trước cleanup và dựng lại cặp base/chunk pool cho lần so sánh tiếp theo.
 
 ### OSD-082 — Suite RADOS thu hẹp tập kiểm thử cephadm
 
@@ -662,6 +824,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** dùng đúng phiên bản teuthology của pipeline để xuất danh sách job từ hai endpoint, so tập bài còn/mất, rồi chạy các ca cephadm liên quan activation/redeploy trên lab với image đã pin.
 
+**Activation/impact và rollback:** selector mới áp trong bước explicit expand suite; impact là coverage của gate deployment/activation, không phải code cephadm đang chạy trên cluster. Đổi lại symlink rộng có thể khôi phục tập candidate cho job tương lai, nhưng không chứng minh những bài mất đã được thực thi và không undo daemon/device state do job đã chạy. Giữ phiên bản generator, expanded manifest, filter/subset và image pin; nếu một ca restart/redeploy cần thiết bị loại khỏi manifest, dừng đóng gate đó và chạy ca bổ sung có kết quả lưu riêng. Mức coverage thực vẫn chưa biết cho tới khi đối chiếu pipeline của dự án.
+
 ### OSD-083 — Monthrash bỏ lọc cảnh báo pool ở ba workload
 
 **CSV:** `qa/suites/rados/monthrash/workloads/{pool-create-delete,rados_5925,rados_api_tests}.yaml`. Base bỏ qua `POOL_APP_NOT_ENABLED`; target xóa mẫu lọc này. Nếu cảnh báo xuất hiện, cùng workload có thể fail ở target thay vì được bỏ qua, trái chiều với năm thrasher monthrash bổ sung filter ở OSD-055. Recipe RADOS API còn mở class wildcard ở OSD-062. Không suy chiều từ commit đơn tuyến vì hai endpoint thuộc hai release branch.
@@ -669,6 +833,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** pipeline chọn một trong ba workload và log có cảnh báo này. Trong mixed-version/full-version, pass/fail phụ thuộc filter của recipe đang chạy và daemon phát log. **Evidence confidence:** high cho diff và cơ chế quét log, medium cho cảnh báo thực tế chưa đo.
 
 **Kiểm chứng:** lab chạy cùng workload với log thô và hai bộ filter, ghi dòng làm job fail; kiểm riêng pool application metadata để phân biệt lỗi test với cấu hình pool.
+
+**Activation/impact và rollback:** xóa ignorelist tự động ảnh hưởng scanner cuối job khi explicit chọn recipe target; `qa/tasks/ceph.py` giữ dòng log không bị ignore và đánh dấu failure. Tác động observability/validation là cảnh báo có thể trở thành stop signal, không phải cảnh báo pool bắt đầu tồn tại ở target. Khôi phục filter làm thay đổi verdict của lần chạy sau nhưng không sửa application metadata, không xóa log cũ và không khôi phục pool mà workload create/delete đã đổi. Nếu failure chỉ xuất phát từ dòng này, giữ raw log và effective merged filter, xác nhận pool tạo bởi testcase rồi ghi nguyên nhân; không bỏ qua cảnh báo trên pool workload thực chỉ để gate xanh.
 
 ### OSD-084 — Bài perf QA tăng giới hạn request client đang bay
 
@@ -678,6 +844,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab ghi cap hiệu dụng, counter/throttle client, concurrency và latency/throughput khi chạy cùng tải ở 256 và 5000; giữ riêng kết quả filter cảnh báo pool.
 
+**Activation/impact và rollback:** recipe explicit đặt cap khi dựng fixture; `OSD::handle_conf_change()` có thể cập nhật throttler ngay khi config hiệu dụng đổi, nên restart không phải điều kiện duy nhất. Cả hai endpoint khai báo default `256`; impact performance/capacity là benchmark target dùng giới hạn in-flight khác, có thể làm thay đổi backpressure và memory pressure, chưa có số đo hướng hay độ lớn. Rollback config về cap cũ chỉ đổi tiếp nhận request về sau, không hủy IO đã nhận hoặc undo benchmark writes; cần đợi workload/drain rồi xác nhận effective cap trên từng OSD. Nếu timeout, memory pressure hoặc throttle khác ngoài dự kiến xuất hiện, dừng đo và tạo baseline cùng cap trước khi kết luận về binary.
+
 ### OSD-085 — Admin socket Crimson đổi đăng ký hook và thêm `config help`
 
 **CSV:** `src/crimson/admin/admin_socket.cc`, `.h`. Base `register_command()`/`register_admin_commands()` trả future và dùng shared lock khi execute; target đăng ký đồng bộ, bỏ lock này và thêm `ConfigHelpHook` xuất schema options. Vòng nhận kết nối đổi từ `do_until` sang `keep_doing` với `try_with_gate`; `OSD::start_asok_admin()` gọi đăng ký hook sau khi socket start. Commit `47a5447bdc6`, `e023bf4a546`, `1c45d3ae025` giải thích các thay đổi. Không đủ bằng chứng từ diff để kết luận có race hoặc lỗi khởi động mới.
@@ -685,6 +853,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** sử dụng admin socket của Crimson khi daemon start/stop hoặc runbook cần `config help`. Trong mixed-version, lệnh mới chỉ có ở daemon target và vòng đời trả lời có thể khác; sau full upgrade tất cả Crimson target dùng API mới. **Evidence confidence:** high cho code path, medium cho khác biệt timing thực tế.
 
 **Kiểm chứng:** lab gọi `help`, `config help`, `config show` trong lúc start/stop/restart Crimson; kiểm JSON và exit status, xác nhận socket được dọn sau shutdown và không mất phản hồi đang chờ.
+
+**Activation/impact và rollback:** đăng ký đồng bộ tự động áp trong `OSD::start_asok_admin()` sau restart Crimson target; `config help` chỉ trả schema khi explicit được gọi. Tác động compatibility/observability là inventory lệnh và output mà runbook sử dụng khác theo daemon. Riêng hook help không ghi store state, còn cùng socket có `config set`/`injectargs`; undo parser/runbook không hoàn nguyên giá trị đã đặt qua các hook đó. Rollback công cụ nên chọn lệnh theo `get_command_descriptions` của từng daemon và lưu snapshot config hiệu dụng trước/sau; downgrade daemon phải xét riêng backend và release gates. Dừng ca chẩn đoán nếu socket không trả lời, path còn tồn tại sau stop hoặc tool đọc sai JSON; diff không chứng nhận loại bỏ mọi race trong lifecycle.
 
 ### OSD-086 — Crimson thêm metric và fault-injection qua admin socket
 
@@ -694,6 +864,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trong lab cô lập, đối chiếu output `dump_metrics`/`perfcounters_dump` với counter có sẵn; dùng object thử riêng để inject lỗi và xác nhận bài repair nhận đúng failure signal. Không gọi fault-injection trên cluster sản xuất từ phân tích này.
 
+**Activation/impact và rollback:** metric hooks được đăng ký tự động khi start Crimson target; fault injection cần explicit command có pool/object/shard cụ thể. Tác động observability là `dump_metrics` thay tên `perf dump_seastar` và thêm label/type/histogram; impact correctness của repair validation chỉ có khi backend thực hiện injection. `FuturizedStore` mặc định hai injection methods là no-op; `AlienStore` override để gọi backend, còn `ObjectStore` cũng có default no-op. Với BlueStore, `BlueStore.h` ghi object vào hai debug sets trong RAM và `_debug_{data,mdata}_eio()` chỉ trả lỗi khi `bluestore_debug_inject_read_err` bật; phản hồi `ok` không chứng minh byte trên đĩa bị sửa. Restart/recreate backend xóa state injection trong RAM, nhưng không hoàn nguyên object/omap đã được testcase khác sửa hoặc repair đã commit. Metric reads không cần undo dữ liệu; rollback tooling phải khôi phục parser theo daemon version. Giữ cấu hình debug, backend và failure signal đúng object; dừng gate nếu injection không gây lỗi dự kiến hoặc checksum/PG không khớp sau repair. Hiện chưa có kết quả runtime xác nhận backend của dự án.
+
 ### OSD-087 — Dashboard QA đổi topology và thêm bài e2e cephadm
 
 **CSV:** năm hàng ở `qa/suites/rados/dashboard`. Base dùng selector CentOS container tools và `2-node-mgr`; target bỏ chúng, thêm `single-container-host`, đặt rõ hai host/role trong `tasks/dashboard.yaml`, bật override `osd mclock override recovery settings` và thêm `tasks/e2e.yaml` chạy `cephadm/create_iscsi_disks.sh` cùng `cephadm/test_dashboard_e2e.sh`. Thay đổi này tác động môi trường và độ phủ bài QA Dashboard/OSD, không trực tiếp thay default daemon sản xuất.
@@ -702,21 +874,27 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** xuất ma trận job đã merge, role thực, effective mClock config và kết quả từng workunit; so sánh cùng topology trước/sau nếu dùng bài này làm gate.
 
+**Activation/impact và rollback:** topology/override áp khi explicit chọn task Dashboard; e2e còn cài package/browser, tạo file-backed iSCSI devices, thay Dashboard admin password rồi chạy các spec orchestration theo thứ tự. `create_iscsi_disks.sh` target kiểm distro thuộc RHEL trước khi tạo target/LUN; `test_dashboard_e2e.sh` lấy `orch device ls`/`orch ps` làm fixture và ca OSD có timeout riêng. Impact là delivery và validation correctness/availability dưới môi trường này, không chứng nhận cùng độ phủ trên distro khác. Rollback YAML không tháo iSCSI session/LUN, không hoàn nguyên host/OSD do e2e tạo và không đổi lại mật khẩu; recreate lab từ manifest trước chạy hoặc thực hiện cleanup riêng có đối soát tài nguyên. Dừng gate nếu thiếu device/role, chạy sai thứ tự spec hay khác effective mClock config, giữ raw Cypress/orchestrator artifacts trước cleanup.
+
 ### OSD-088 — Selector MGR objectstore đổi tên chọn ngẫu nhiên
 
-**CSV:** `qa/suites/rados/mgr/objectstore` được Git nhận là rename 100% sang `qa/suites/rados/mgr/random-objectstore$`; nội dung symlink không đổi. Hành vi backend được kiểm trong một job có thể thay đổi khi suite generator diễn giải tiền tố `random-` và dấu `$`; bản thân đường target khác đường base nên pipeline lọc theo path cũng có thể thay đổi tập job.
+**CSV:** hai hàng: Git net diff ghi `D qa/suites/rados/mgr/objectstore` và `R100 qa/suites/big/rados-thrash/objectstore → qa/suites/rados/mgr/random-objectstore$`. Cả hai path base và path target đều là symlink mode `120000`, cùng blob `848c65f9e13` chứa `.qa/objectstore_debug`; vì hai source giống hệt nhau, cặp rename heuristic không chứng minh logical move từ suite big sang MGR. Commit `116a8c42088` ghi logical đổi tên selector trong `rados/mgr`. Theo `qa/README` ở target, symlink có tên kết thúc `$` chọn ngẫu nhiên một facet thay vì expand toàn bộ; không có bằng chứng tiền tố `random-` tự tạo semantics. Do đó độ phủ backend mỗi run có thể giảm nếu generator của pipeline áp quy tắc này, còn filter theo path cũng có thể đổi job được chọn.
 
-**Điều kiện:** pipeline chọn suite `rados/mgr` và áp quy tắc selector của teuthology. **Evidence confidence:** high cho rename, medium cho job được chọn vì chưa có manifest đã expand.
+**Điều kiện:** pipeline chọn suite `rados/mgr` và áp quy tắc selector của teuthology. Trong mixed-version, một run có thể chỉ kiểm một biến thể objectstore, nên không đủ đại diện cho mọi backend/config của cohort; sau full upgrade cần vẫn kiểm đủ backend thực được triển khai. **Evidence confidence:** high cho metadata Git, commit và semantics được `qa/README` mô tả, medium cho job được chọn vì chưa có manifest đã expand và version generator.
 
 **Kiểm chứng:** xuất ma trận suite hai endpoint, đếm backend được chọn mỗi run và chạy đủ backend cần làm gate nâng cấp.
 
+**Activation/impact và rollback:** suffix `$` có hiệu lực tự động trong bước expand nếu pipeline hiểu selector, sau khi explicit chọn suite; impact là validation coverage, không tự đổi backend của OSD production. Khôi phục selector base thay tập job tương lai, nhưng không biến những backend chưa chạy thành ca đã pass và không undo dữ liệu của workload MGR đã thực thi. Lưu manifest với facet thực được chọn cùng backend/config/image; nếu một biến thể bắt buộc bị thiếu thì dừng đóng gate, chạy job pin facet đó hoặc expand lại bằng selector đầy đủ. Chưa biết số lượng run/random seed của pipeline, nên không suy coverage toàn chiến dịch chỉ từ tên file.
+
 ### OSD-089 — Suite standalone thêm bài kiểm backfill
 
-**CSV:** `qa/suites/rados/standalone/workloads/osd-backfill.yaml` mới đặt ba OSD, một client và `workunit` trỏ `qa/standalone/osd-backfill`. Đây là đường vào mới cho các kịch bản backfill đã chuyển vào thư mục standalone; thay đổi độ phủ QA nếu selector chạy recipe này, không phải default backfill runtime.
+**CSV:** base không có `qa/suites/rados/standalone/workloads/osd-backfill.yaml`; target thêm recipe đặt ba OSD, một client, ba volume 10 GB mỗi instance và `workunit` có `basedir: qa/standalone`, chọn `osd-backfill`. Commit `0f65e5cffa2` tách bốn script `osd-backfill-{prio,recovery-log,space,stats}.sh` khỏi thư mục `qa/standalone/osd` sang `qa/standalone/osd-backfill`, giữ nội dung tại commit đó; endpoint script có thay đổi riêng cần đọc theo testcase. Đây là đường vào riêng cho các kịch bản backfill, thay đổi độ phủ QA nếu selector chạy recipe mới, không phải default backfill runtime.
 
-**Điều kiện:** pipeline chọn workload standalone và có môi trường lab đủ volume/OSD. **Evidence confidence:** high cho recipe và đường workunit; medium cho kết quả chưa chạy.
+**Điều kiện:** pipeline chọn workload standalone và có môi trường lab đủ volume/OSD. Trong mixed-version, recipe mới không tự dựng ma trận daemon hai phiên bản: phải kiểm helper/binary thực mà từng script launch; sau full upgrade nó cung cấp một gate standalone riêng nếu cả bốn script được chọn. Ví dụ endpoint `osd-backfill-prio.sh` tự gọi `run_mon`/`run_mgr`/`run_osd`, đặt `osd-op-queue=wpq`, nên không chứng nhận priority dưới mClock. **Evidence confidence:** high cho recipe, path và caller helper đã đọc; medium cho kết quả và version fixture chưa chạy.
 
 **Kiểm chứng:** kiểm danh sách script trong `qa/standalone/osd-backfill`, chạy trên lab, lưu PG state, recovery/backfill progress và exit code của từng script.
+
+**Activation/impact và rollback:** ca mới được explicit chọn qua standalone workunit; sau đó helper dựng và teardown cluster thử, với pool/PG/OSD state thay đổi theo testcase. Impact là validation correctness/availability của backfill và tách thời lượng test; tên recipe không cho biết độ dài thực hay chứng nhận mixed cohort. Rollback selector có thể chọn lại thư mục base cho lần sau nhưng không hoàn nguyên fixture/volume/PG đã tạo, cũng không cung cấp kết quả cho script bị bỏ khỏi matrix. Giữ danh sách workunit đã thực thi, binary pin, queue hiệu dụng và failure logs; nếu volume thiếu, helper dùng binary sai tag, có stuck PG hay timeout thì dừng gate rồi rebuild fixture cô lập trước chạy lại.
 
 ### OSD-090 — Crimson đổi cách chọn và khởi tạo ObjectStore
 
@@ -726,6 +904,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** trên bản sao OSD data ở lab, pin type/build flag, thử `mkfs`, restart/mount và đọc object với backend dự kiến; lưu lỗi activation và tuyệt đối không dùng data production để thử type mới.
 
+**Activation/impact và rollback:** factory tự động chạy khi restart Crimson; `osd_objectstore` và build `WITH_BLUESTORE` quyết định nhánh, còn `mkfs` là explicit thao tác tạo store. Impact compatibility/availability là cùng string `memstore` không còn ánh xạ trực tiếp tới CyanStore như base: target đi qua fallback `ObjectStore::create` khi có BlueStore build; `cyanstore`/`seastore` target lại không có nhánh tương ứng ở factory base. Đổi config type không chuyển đổi dữ liệu của backend. Rollback binary/config chỉ có thể đánh giá trên bản sao của chính backend đã ghi, xét format/release gates của H2 và kiểm mount/replay/checksum; không được dùng `mkfs` để thử mở data cũ. Dừng activation nếu factory không hỗ trợ type, mount trả stateful error hoặc superblock/backend không khớp; hiện chưa có thử nghiệm downgrade/store migration.
+
 ### OSD-091 — AlienStore phân luồng theo collection và bảo vệ shutdown
 
 **CSV:** sáu hàng ở `src/crimson/os/alienstore` gồm `alien_collection.h`, `alien_store.cc/.h`, `semaphore.h`, `thread_pool.cc/.h`. Base có một worker/queue chính; target dùng `crimson_alien_op_num_threads`, hàng đợi theo worker và `cid.hash_to_shard(tp->size())`, khóa collection, `op_gate` và CPU affinity, đồng thời chặn SIGHUP trên alien threads. Hunk `get_attr` kéo dài đời chuỗi tên trước khi chuyển thread, `get_attrs` bỏ ép kiểu map không an toàn; commit `5a7fc07933c` sửa race lúc shutdown. Đây là đường IO và lifecycle thực của Crimson qua AlienStore.
@@ -733,6 +913,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson dùng backend qua AlienStore và có IO đồng thời hoặc restart/shutdown trong khi còn request. Trong mixed-version, độ song song/latency có thể khác theo daemon, không có số đo để khẳng định nhanh hơn. **Evidence confidence:** high cho concurrency/code, medium cho hiệu năng.
 
 **Kiểm chứng:** lab chạy IO nhiều collection và cùng collection, fault/restart khi còn IO, theo dõi completion, data checksum, hang/crash và queue latency; lặp với thread count/CPU set hiệu dụng.
+
+**Activation/impact và rollback:** scheduling mới tự động áp khi AlienStore start sau restart Crimson; số worker và affinity lấy từ config `crimson_alien_op_num_threads`/`crimson_alien_thread_cpu_cores`. Tác động correctness/availability là giữ lifetime attr, serialize transaction theo collection và đợi `op_gate` trước umount; impact performance còn chưa đo. Sau full upgrade mỗi Crimson dùng thread count/CPU set thực của mình, không suy tất cả daemon có cùng mức song song. Worker queue, locks và gate là state trong RAM; transaction đã commit qua backend không bị undo khi rollback binary. Trước failback cần quiesce IO, đối soát commit/completion và kiểm backend replay cùng global store/release gates. Dừng ca nếu shutdown treo, có missing completion hoặc checksum khác; chưa biết CPU set/container quota của dự án và chưa có stress/restart runtime để xác nhận race đã hết trong môi trường đó.
 
 ### OSD-092 — Crimson đổi mkfs, địa chỉ khởi động và vòng đời daemon
 
@@ -742,6 +924,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab thử mkfs mới, restart data cũ, keyfile/key config, lỗi FSID/OSD ID, bind public/cluster, MON config và shutdown có request; lưu metadata, `ceph osd tree`, OSDMap address, cluster log và health.
 
+**Activation/impact và rollback:** parse environment, default `--smp 1`, MON config fetch và bind/boot flow tự động áp khi restart target; `--no-mon-config` explicit bỏ fetch, còn `--mkfs`/`--mkkey` explicit ghi store/key. Impact availability/compatibility là môi trường khởi động, kết nối MON và advertised address có thể khác; dữ liệu `ceph_fsid`, `magic`, `whoami`, `osd_key`, `ready` và superblock là state persistent. Khôi phục command line/environment không hoàn nguyên key/metadata đã tạo hoặc OSDMap/CRUSH thay đổi khi boot; tránh chạy lại mkfs như một bước rollback. Phải lưu effective args/config/key provenance và kiểm identity/backend trước đánh giá failback trên bản sao data, tuân global release/store gates. Nếu MON fetch không kết thúc, FSID/ID mismatch, bind thất bại hoặc address map không routable thì dừng rollout ở daemon đó; chưa có boot/replay thử để chứng nhận compatibility.
+
 ### OSD-093 — Crimson thực thi thêm helper object class dùng bởi RGW
 
 **CSV:** `src/crimson/osd/objclass.cc`. Base trả thành công giả cho `cls_cxx_stat2`, `cls_cxx_getxattrs`, `cls_cxx_map_clear`, `cls_cxx_map_remove_key` và version bằng 0; target gọi `OpsExecuter` cho STAT/GETXATTRS/OMAPCLEAR/OMAPRMKEYS, decode kết quả và lấy `get_last_user_version()`. Commit `b51f2e04e72` nêu các helper dùng bởi `cls_rgw`. Hai hàm gather mới vẫn là stub, nên không suy object class RGW đã đầy đủ.
@@ -750,6 +934,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 
 **Kiểm chứng:** lab RGW trên Crimson thử stat/xattr/omap và version trước/sau, kiểm dữ liệu và lỗi trả về; xác nhận tính tương thích khi object chuyển primary giữa base/target.
 
+**Activation/impact và rollback:** helper target tự động được gọi khi class method chạy sau restart Crimson, không có feature gate riêng cho hunk này. Impact correctness là STAT/xattr/version trả dữ liệu thực và OMAP removal thực thi thay vì success stub. Caller `cls_rgw.cc` dùng `cls_cxx_map_remove_key` khi hoàn tất delete/cancel và trim usage, dùng `cls_cxx_map_clear` để clear usage log; vì vậy target có thể xóa index/log key đúng theo request mà base chỉ báo thành công. Rollback binary không khôi phục key đã xóa hoặc bù operation từng bị stub; phải đối soát RGW object/index/version và dùng recovery phù hợp với workload, không suy downgrade an toàn từ việc helper không thêm encoding. Dừng gate nếu chuyển primary làm lệch kết quả class op, lỗi decode `-EIO`, index khác object hoặc method cần gather stub chưa được kiểm; RGW-on-Crimson applicability/runtime vẫn chưa biết.
+
 ### OSD-094 — Compound peering Crimson dùng completion có thể bị ngắt
 
 **CSV:** `src/crimson/osd/osd_operations/compound_peering_request.cc`. Base `PeeringSubEvent::complete_rctx` trả future thường và khởi `BufferedRecoveryMessages` với release Octopus; target trả `PeeringEvent::interruptible_future`, dùng constructor mặc định của API buffer mới. Đường này gom message từ các subevent PG-create/peering trước khi gửi. Hunk chuyển namespace chỉ là thích ứng API; khác biệt cần kiểm là completion/cancellation khi peering bị thay thế.
@@ -757,6 +943,8 @@ Owner này phụ trách OSD, PG, peering, recovery/backfill, scrub và EC. Ngu�
 **Điều kiện:** Crimson xử lý compound peering trong lúc PG create hoặc map đổi. Trong mixed-version, peer base/target có thể gặp cùng sự kiện nhưng scheduling/cancellation riêng; chưa có bằng chứng wire incompatibility. **Evidence confidence:** high cho type/code, medium cho tác động race runtime.
 
 **Kiểm chứng:** lab tạo PG rồi thay map/fail peer liên tục, đo peering completion, stuck PG và số recovery message, so với base trên cùng topology.
+
+**Activation/impact và rollback:** completion interruptible tự động áp khi Crimson target xử lý compound PG-create/peering sau restart; không cần explicit bật config. Impact availability/correctness liên quan cancellation và hội tụ PG, nhưng type đổi chưa chứng minh có khác wire behavior. `complete_rctx()` chuyển buffered messages vào shared compound context và có thể gọi `ShardServices::dispatch_context_transaction()` để submit transaction qua store; cancellation không được suy là undo những transaction đã commit. Rollback daemon phải quiesce request, ghi epoch/PG state và kiểm replay/peering từ state backend hiện có cùng global store/release gates, không tạo lại PG bằng dữ liệu cũ để giả lập undo. Dừng canary nếu completion thiếu, PG stuck hoặc message/transaction không đối soát được; chưa có race test thực cho cặp binary này.
 
 ## Các hàng đã xác nhận trivial
 

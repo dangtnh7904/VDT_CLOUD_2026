@@ -1,6 +1,8 @@
+> **Điều hướng 13/10/2026:** đây là hồ sơ kế hoạch phân tích H1. Dùng [comparison tổng](../README.md) cho action/checklist hợp nhất và [plan tổng PA2](../../plan-tổng.md) cho workflow hiện hành.
+
 # Kế hoạch phân tích diff Ceph Pacific 16.2.5 → 16.2.15
 
-Trạng thái: **Hoàn tất. Đã chốt nguồn, tạo inventory, hoàn thành đủ các cặp phân tích `01`–`15`, enrich mọi component CSV và chạy acceptance gate cho toàn suite.**
+Trạng thái: **Hoàn tất source/binary gate, coverage và finding-quality strict 127/127. Mười một kiểm tra offline đã có; runtime chưa chạy.**
 
 ## 1. Mục tiêu và phạm vi
 
@@ -189,4 +191,4 @@ Không cần As-Is inventory để bắt đầu phân tích code. Thông tin dep
 4. Các cặp báo cáo RADOS/RBD, CephFS và RGW.
 5. Các cặp packaging/submodules, security, validation và README tổng hợp.
 
-Plan đã được áp dụng cho `00-file-inventory.{md,csv}` và đủ mười lăm cặp `01`–`15`. Component partition, immutable CSV prefix, disposition/evidence, thống kê và liên kết chéo đã được đối soát; giới hạn còn lại là dữ liệu As-Is và runtime/lab/canary evidence của cluster đích, không phải scope phân tích source.
+Plan đã được áp dụng cho `00-file-inventory.{md,csv}` và đủ mười lăm cặp `01`–`15`. Component partition, immutable CSV prefix, binary impact `517 affect + 2.148 trivial = 2.665`, finding mapping, thống kê và liên kết chéo đã được đối soát. [Finding-quality](./FINDING-QUALITY-STATUS.md) đạt strict 127/127. [Exact-hop register](./EXACT-HOP-PINS.md) giữ 12 pin `PENDING_INPUT`; [runtime evidence template](./RUNTIME-EVIDENCE-MANIFEST.template.json) giữ 85 ID `NOT_RUN`; [test selection](./RUNTIME-TEST-SELECTION.md) có 16 pack `NOT_RUN` và 26 source asset tại target. [As-Is register](./AS-IS-EVIDENCE.md) có 20 nhóm `NOT_CAPTURED`, [action register](./UPGRADE-ACTION-REGISTER.md) có 20 việc `PENDING_INPUT`, và [GO/NO-GO register](./GO-NO-GO-REGISTER.md) là `NOT_READY_FOR_DECISION`.

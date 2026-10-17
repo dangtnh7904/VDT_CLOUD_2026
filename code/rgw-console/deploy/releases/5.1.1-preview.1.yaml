@@ -1,0 +1,139 @@
+schema_version: 1
+status: local_only_unreleased_preview
+validated_on: "2026-10-13"
+timezone: Asia/Saigon
+deployment:
+  superseded_by_local_deployment_manifest: 5.1.1-preview.2.yaml
+  localhost_8080: deployed_local_lab_5.1.1_preview_1
+  changed_on: "2026-10-13"
+  configuration_path: ../local-images.preview.json
+  local_deployment_manifest: localhost-20261013-preview.yaml
+  deployed_worker_version: 16.2.15-minimal-preview.2
+  deployed_worker_index_digest: sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  deployed_worker_manifest: osdmap-16.2.15-minimal-preview.2.yaml
+  docker_hub: unchanged_5.1.0_rc_1
+  production_test_8443: unchanged
+  ceph_mutations: none
+application:
+  local_tag: storage-lab-console:5.1.1-preview.1
+  local_index_digest: sha256:8fee0b7383ceb64a4b464ff0dadaad7f8fc6b52a9f132d42eb83123b60eea3cc
+  platform: linux/amd64
+  published: false
+  schema: 21
+  osdmap_service_sha256: d43931a85927dcd8341a82e20b04a70e15fe0705f9690d110ce075636d033543
+  strict_worker_handshake: true
+  strict_result_identity_and_scope: true
+  security:
+    scanner: Docker Scout 1.20.4
+    packages_indexed: 167
+    findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
+    sbom_path: ../dist/minimal-worker-preview-20261013/application.spdx.json
+    sbom_sha256: 7cb4ee68797646815c7005c10e2ba3e42ad5e0363f682d85c0d8a202c7f893da
+    report_path: ../dist/minimal-worker-preview-20261013/application-vulnerabilities.md
+    report_sha256: d4d833f4f522fcd87421be8846a805b70847070dee43d2c6582828d50a68951f
+experimental_worker:
+  local_tag: storage-lab-osdmap:16.2.15-minimal-preview.1
+  local_index_digest: sha256:452ba2b9b3e4c1660b5e1e89a45b0d2a8aba6190d4d0bfa84d058403b147cff5
+  platform: linux/amd64
+  published: false
+  approved_for_production: false
+  dockerfile: ../../packaging/osdmap/Dockerfile.minimal
+  donor: quay.io/ceph/ceph:v16.2.15@sha256:f15b41add2c01a65229b0db515d2dd57925636ea39678ccc682a49e2e9713d98
+  base: registry.access.redhat.com/ubi8/ubi-minimal:8.10@sha256:9ba99bcb387bdb7203f6d778a081950832a5fc500824431d10ec9d3ceacf949f
+  os_dependency_policy: signed_ubi_repositories_only_no_copied_legacy_os_libraries
+  genuine_rpm_count: 114
+  elf_closure_entries: 22
+  parser_version: 2
+  pool_types: [replicated]
+  operations: [crush_weight]
+  binary_sha256:
+    osdmaptool: c1532cfd43e6a0cfab5c6a3bd3da405ac7224606646f9351fe34bf5fb2ed1fe0
+    crushtool: 187ab0d81224f4e692a4376b728a86f380dffa599529bd7b9749389a086952ce
+    libceph_common: e6a4768ebf2e3836c7d38258840b27620bb0ea6bf1070fe90be635ce899462b9
+  security:
+    scanner: Docker Scout 1.20.4
+    packages_indexed: 144
+    findings: {critical: 1, high: 28, medium: 40, low: 6, unspecified: 0}
+    production_gate: NOT_PASSED
+    critical_example: CVE-2026-51302
+    critical_fix_reported_by_scanner: Not Fixed
+    critical_primary_triage:
+      reviewed_on: "2026-10-13"
+      cna_state: REJECTED
+      cna_rejected_on: "2026-07-31"
+      evidence_url: https://cveawg.mitre.org/api/cve/CVE-2026-51302
+      upstream_url: https://www.sqlite.org/cves.html
+      interpretation: withdrawn_not_a_confirmed_security_issue_not_a_patch_or_waiver
+      raw_finding_and_report_preserved: true
+    sbom_path: ../dist/minimal-worker-preview-20261013/worker.spdx.json
+    sbom_sha256: 6eff1323d8a87e722e75d2f764398a46a32f054b64573ff3bc5343f3c853bc37
+    report_path: ../dist/minimal-worker-preview-20261013/worker-vulnerabilities.md
+    report_sha256: 9915c89cf0cd6c6f119a7d75ca0b7ffea66c4de9f8994a26b9f16b62d94bf624
+    copied_ceph_sbom_path: ../dist/minimal-worker-preview-20261013/copied-ceph.spdx.json
+    copied_ceph_sbom_sha256: fd593037b7dca7639adf9dbf596ed21f65df4c48fc6d7997fbce7ac289bf2253
+    copied_ceph_report_path: ../dist/minimal-worker-preview-20261013/copied-ceph-vulnerabilities.md
+    copied_ceph_report_sha256: c194375307ea231d6277cae52eea1ce00e6f8d3178eeb8829500ad084bed3ac0
+    copied_ceph_findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
+    copied_ceph_scan_is_not_security_certification: true
+  closure_path: ../dist/minimal-worker-preview-20261013/dependency-closure.json
+  closure_sha256: 1d1d76eeac298c0594680fac4defa09f0bdfbdc81bafab17df5d002e69f594ac
+tests:
+  backend: {total: 296, passed: 296, skipped: 0}
+  worker_minimal: {total: 17, passed: 17, skipped: 0}
+  worker_rc1_baseline: {total: 17, passed: 17, skipped: 0}
+  frontend_executor_collector: unchanged_not_rerun_in_this_slice
+  differential:
+    cases: [no_op, multiple_weights, upmap_no_op]
+    passed: 3
+    canonical_bytes: 104600
+    canonical_sha256: b5dad984d27f13ff56b1c093222dc6ceb106f830af29217828b35332457742d5
+    normalization: only_known_stdout_crush_export_temporary_path
+    original_worker_json_and_stdout: preserved_separately
+    artifacts_path: ../dist/minimal-worker-preview-20261013/compatibility
+  synthetic_api_real_worker:
+    checked_on: "2026-10-13"
+    checks: 38
+    passed: 38
+    generated_map_cases: [no_op, multiple_weights]
+    actual_postgresql_schema: 21
+    actual_repository_artifact_rows: 2
+    source_adapter: in_process_closed_three_read_actions_no_live_ceph
+    readonly_middleware: enabled
+    auth: disabled_only_for_guarded_synthetic_lab
+    worker_network: none
+    database_network: internal_test_only_no_host_ports
+    report_path: ../dist/api-worker-smoke-20261013/report/integration.json
+    report_sha256: 184f1db6ba865c11fb14570aa2e9f64c425dce32d5776d6cd27529d0f8fbe665
+    test_script_sha256: ea523c81ae3da14450c14471a5a1dcac80c1c2fd8d354969840cb3e06bd7cefb
+security_triage:
+  reviewed_on: "2026-10-13"
+  scope: raw_scout_critical_and_high_records_for_this_exact_worker
+  records: 29
+  vendor_fixed_by_matching_product_component_and_rpm_evr: 15
+  vendor_not_affected: 5
+  cna_rejected: 4
+  vendor_affected: 5
+  raw_counts_reports_and_hashes: unchanged
+  suppression_vex_or_production_waiver: none
+  report_path: ../../docs/OSDMAP_SECURITY_TRIAGE.md
+  report_sha256: 42a927bb93f7177bf491f4a0106392279f55b79ce1e8358fc3c430fb70256986
+acceptance:
+  source_matches_built_application_service: PASS
+  mandatory_identity_contract_and_failure_cases: PASS
+  real_tool_fixture_tests: PASS
+  same_map_differential_placement_crush_and_weights: PASS
+  complete_os_dependency_closure: PASS
+  copied_ceph_license_and_provenance: PASS
+  full_image_and_extracted_component_scans: PASS
+  synthetic_api_real_worker_database_and_immutable_export: PASS
+  production_security_gate: NOT_PASSED
+  actual_api_to_minimal_worker_live_cluster_acceptance: NOT_RUN
+  docker_hub_publish: NOT_RUN
+  localhost_update: PASS_LAB_ONLY
+  signature: NOT_RUN
+limitations:
+  - Removing unused packages is not a patch for the retained legacy Ceph code or host kernel.
+  - Scan absence for copied components does not prove every optional dynamic backend is safe.
+  - No production security exception or CVE suppression was granted.
+  - Strict worker identity fields are a data contract, not cryptographic worker attestation.
+  - Destination deployment and live integration must be accepted before promotion.

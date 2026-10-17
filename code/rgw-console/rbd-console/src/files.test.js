@@ -55,13 +55,15 @@ test("SFTP checksum waits for the read stream pipeline and hashes every chunk", 
   assert.equal(sha256, "33afe780793317924bb7703e1a3efb31c6b07f088db2cd1d8868a1ced1001d2d");
 });
 
-test("terminal tickets are opaque, single-use and expire", async () => {
+test("terminal tickets are opaque, single-use and expire", (t) => {
+  let now = 1000;
+  t.mock.method(Date, "now", () => now);
   const store = new TerminalTicketStore({ ttlMs: 10 });
   const issued = store.issue({ volume_id: "volume-1" });
   assert.match(issued.ticket, /^[A-Za-z0-9_-]{32,}$/);
   assert.deepEqual(store.consume(issued.ticket), { volume_id: "volume-1" });
   assert.throws(() => store.consume(issued.ticket), error => error.code === "TERMINAL_TICKET_INVALID");
   const expiring = store.issue({ volume_id: "volume-2" });
-  await new Promise(resolve => setTimeout(resolve, 15));
+  now += 15;
   assert.throws(() => store.consume(expiring.ticket), error => error.code === "TERMINAL_TICKET_INVALID");
 });

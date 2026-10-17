@@ -1,6 +1,6 @@
 # 03 — KV/RocksDB, block device, DB/WAL và compaction: v16.2.15 → v17.2.7
 
-**Binary gate owner 03 đã hoàn tất.** [CSV đầy đủ của owner](./03-rocksdb-block-device.csv) có 38 hàng, là subset theo thứ tự của [master inventory](./00-file-inventory.csv): `affect = 23`, `trivial = 15`, chưa phân loại = 0. Các finding chi tiết dưới đây chỉ lấy từ hàng `affect`. Suite tổng thể vẫn đang phân tích các owner khác.
+**Binary gate owner 03 đã hoàn tất; lab còn mở.** [CSV đầy đủ của owner](./03-rocksdb-block-device.csv) có 38 hàng, là subset theo thứ tự của [master inventory](./00-file-inventory.csv): `affect = 23`, `trivial = 15`, chưa phân loại = 0. Các finding chi tiết dưới đây chỉ lấy từ hàng `affect`; gate liên quan đã được đưa vào [ma trận lab/runtime](./LAB-RUNTIME-GATES.md).
 
 ## Phạm vi và phương pháp
 
@@ -24,6 +24,8 @@ Owner này phụ trách KV/RocksDB, block device, DB/WAL và compaction. Nguồn
 
 **Điều kiện/tác động:** áp dụng cho OSD dùng KernelDevice; nhánh hugepage chỉ hoạt động khi cấu hình pool và hệ điều hành cấp phát được. SPDK phụ thuộc backend thực tế; build thiếu AIO là trường hợp riêng. Đường đọc và đóng writer khi restart/recovery có thể khác về allocation, lỗi mở thiết bị, memory pressure và vòng đời I/O. Chưa suy ra tăng/giảm hiệu năng hay rò bộ nhớ từ diff. **Evidence confidence:** high cho đường code, medium cho tác động tài nguyên vì chưa có lab và As-Is config.
 
+**Mixed/full và rollback:** behavior là local theo OSD/backend; trong mixed cohort, target dùng allocator/IOContext mới còn base giữ đường reap cũ, full rollout chỉ đồng nhất implementation chứ không đổi block format. Local I/O failback cần dừng client/recovery, drain AIO và clean stop; downgrade OSD chỉ được xét sau các persistent-store/release gates ở BLU-001/MON-001; hạ binary không khôi phục I/O đang bay hoặc telemetry memory đã mất. Lưu config/build manifest trước restart và không trộn SPDK/no-AIO artifact giữa hai endpoint.
+
 **Kiểm chứng:** thu `bdev_read_preallocated_huge_buffers`, `bdev_read_buffer_alignment`, backend block, hugepage availability và build options; chạy restart/canary OSD với read/AIO, BlueFS flush/drain và theo dõi memory, read error, crash. Nếu dùng SPDK hoặc custom no-AIO build, thử đúng artifact đó.
 
 ### KV-003 — SMR/zoned device đổi cách mở và quản lý zone
@@ -32,15 +34,21 @@ Owner này phụ trách KV/RocksDB, block device, DB/WAL và compaction. Nguồn
 
 **Điều kiện/tác động:** chỉ cluster dùng HM-SMR/zoned BlueStore. Khởi động lại OSD, báo write pointer và reset zone trong cleanup/recovery có thể khác; không suy rộng sang thiết bị thông thường. **Evidence confidence:** high cho code, applicability chưa biết. **Kiểm chứng:** inventory thiết bị zoned, chạy lab với clone/thiết bị tương đương: open/close, zone report, append/reset, restart sau crash; đối chiếu `zbd_open`/`zbd_report_zones` failure signal.
 
+**Mixed/full và rollback:** mỗi OSD mở device bằng binary local; target/libzbd và base implementation có thể cùng tồn tại ở các OSD khác nhau, nhưng không nên luân phiên trên cùng device khi zone state chưa xác minh. Clean close trước failback là boundary cho binary; một `reset_zone`/`reset_all_zones` đã thực hiện là mutation thiết bị và package downgrade không phục hồi write pointer hay dữ liệu. Chỉ test reset trên clone/disposable device có snapshot/restore procedure.
+
 ### KV-004 — Duyệt KV với prefix rỗng và công cụ histogram
 
 **CSV:** `src/kv/KeyValueDB.h`, `src/kv/KeyValueHistogram.cc/.h`, `src/tools/ceph_kvstore_tool.cc`, `src/tools/kvstore_tool.cc/.h`. `PrefixIteratorImpl` ở target chuyển `seek_to_first/last()` khi prefix rỗng sang iterator toàn DB; lệnh `ceph-kvstore-tool histogram [prefix]` mới duyệt và thống kê key/value. Commit `c50b1412009` mô tả tái sử dụng histogram của BlueStore. Đây là khả năng kiểm tra một bản sao offline store trong rehearsal/recovery, không phải bước migration tự động. Hunk help test xác nhận giao diện nhưng test row là `trivial`.
 
 **Điều kiện/tác động:** ảnh hưởng khi dùng iterator prefix rỗng hoặc chủ động dùng công cụ chẩn đoán để kiểm tra store. Histogram quét toàn DB nên thời gian và I/O phụ thuộc kích thước store; không chạy tùy tiện trên daemon đang phục vụ. **Evidence confidence:** high cho code, medium cho lợi ích vận hành. **Kiểm chứng:** trên bản sao store, chạy histogram với prefix cụ thể và rỗng, đối chiếu số record và thời gian; giữ nguyên quy trình dừng daemon trước khi mở KV store offline.
 
+**Mixed/full, rollback và phần chưa biết:** version của offline tool quyết định semantics; tỷ lệ daemon base/target không ảnh hưởng nếu bản sao store được mở cô lập. Histogram read-only không tạo migration, nên rollback là bỏ output và dùng lại tool/base copy; nếu operator chạy một op ghi khác trong cùng tool session thì snapshot trước mở store mới là boundary. Chưa biết kích thước/prefix distribution và downtime cho phép của store đích, vì vậy chưa thể đặt time/I/O budget production.
+
 ### KV-005 — Ước lượng dung lượng RocksDB và chỉ số đọc
 
 **CSV:** `src/kv/RocksDBStore.cc/.h`. Trong `estimate_prefix_size()`, target gọi `GetApproximateSizes()` không truyền cờ `INCLUDE_FILES` như base; target cũng bỏ perf counter `l_rocksdb_gets` và các lần tăng counter, trong khi latency vẫn còn. Caller `BlueStore.cc` dùng `estimate_prefix_size()` cho thống kê dung lượng OMAP. Đây là thay đổi tín hiệu capacity/monitoring có thể ảnh hưởng tiêu chí ổn định sau rollout; diff chưa đủ để định lượng sai khác khi RocksDB áp dụng default flag. **Evidence confidence:** high cho API/perf schema, medium cho trị số thực tế.
+
+**Activation và rollback:** thay đổi kích hoạt tự động khi code gọi size estimate hoặc exporter đọc perf counters; không có config opt-in hay data migration. Failback binary có thể làm counter xuất hiện lại và đổi phép ước lượng, nhưng không lấp khoảng time-series đã thiếu hoặc biến số approximate cũ thành chính xác. Dashboard/rule phải được version cùng cohort và rollback atomically với OSD telemetry contract.
 
 **Kiểm chứng:** trước/sau canary so sánh OMAP allocated, RocksDB approximate size, metric `rocksdb.get` và latency; sửa dashboard/alert nếu đang phụ thuộc counter đã bỏ. Không dùng một counter biến mất làm bằng chứng giảm tải.
 
@@ -48,7 +56,11 @@ Owner này phụ trách KV/RocksDB, block device, DB/WAL và compaction. Nguồn
 
 **CSV:** `src/kv/rocksdb_cache/BinnedLRUCache.cc/.h`, `ShardedCache.cc/.h`. Target thêm age-bin accounting, `sum_bins`, `shift_bins`, thay cách `request_cache_bytes()` chia priority; BlueStore target gọi `import_bins()` cho KV/onode/meta/data cache. Các hunk còn đổi interface `rocksdb::Cache` để hợp bản thư viện mới (`GetDeleter`, `ApplyToAllEntries`). Commit `56351838337`, `2c445598ce5`, `be3ca10e60a` tương ứng cache binning và tương thích RocksDB. Khi OSD restart trong cửa sổ nâng cấp, phân bổ cache và memory pressure có thể đổi. Không kết luận rằng on-disk format thay đổi. **Evidence confidence:** high cho đường code, medium cho tác động hiệu năng/memory.
 
+**Ranh giới rollback:** cache bins là runtime memory state và được dựng lại sau restart; không có persistent format gate. Không có format transition riêng cho bins; clean stop với cùng cache config chỉ đủ làm lại RAM cache, chưa chứng minh whole-OSD failback. Cache sẽ cold/warm lại và package downgrade không hoàn tác latency/RSS excursion đã xảy ra. Dừng cohort nếu memory/latency vượt guardrail; giữ workload và config ổn định để so sánh, thay vì đổi knob đồng thời.
+
 **Kiểm chứng:** trên canary so cache occupancy theo priority, OSD RSS, RocksDB cache miss, latency và recovery throughput trước/sau restart; kiểm đúng bản RocksDB của binary target và không trộn build artifact khác.
+
+**Phần chưa biết và rollback toàn OSD:** chưa có cache/RSS/latency trace, linked RocksDB baseline hoặc store clone của canary. Bins chỉ là RAM, nhưng whole-daemon failback vẫn bị quyết định bởi BLU-001, onode/zoned representation và MON-001; clean stop/cùng cache config không chứng minh Pacific mở được store target. Giữ artifact/dependency/store checkpoint và đo warmup riêng trước quyết định failback.
 
 ## Trivial changes
 

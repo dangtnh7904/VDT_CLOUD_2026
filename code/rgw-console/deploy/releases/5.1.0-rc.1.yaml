@@ -1,0 +1,103 @@
+schema_version: 1
+status: published_readonly_release_candidate
+release:
+  application: storage-lab-console
+  version: 5.1.0-rc.1
+  published_on: "2026-10-12"
+  source_revision: 8b5119a-dirty
+  source_state: working_tree_including_uncommitted_application_changes
+  built_at: "2026-10-12T15:20:33Z"
+  config_schema: 1
+image:
+  repository: dang7904/storage-lab-console
+  tag: 5.1.0-rc.1
+  reference: dang7904/storage-lab-console@sha256:36b6b7b1664958b792dda841cf7140ab9e0006d3aff436d8b8823056451c86f4
+  index_digest: sha256:36b6b7b1664958b792dda841cf7140ab9e0006d3aff436d8b8823056451c86f4
+  platforms:
+    linux_amd64: sha256:8a32c445ed2fc2c5068b0c7095133d5e9937da0c7de09f6a829de8948b59a993
+  expected_uid_gid: "10001:10001"
+  docker_hub_url: https://hub.docker.com/r/dang7904/storage-lab-console
+  read_only_default: true
+database:
+  engine: PostgreSQL
+  tested_version: "16"
+  min_schema: 21
+  max_schema: 21
+  migration_policy: forward-only
+collector:
+  version: 1.0.5
+  schema_version: 1
+  sha256: 66e8d8199c1060e11ef34a6f75e475b567e5c752e782945be8c709b1f0884d79
+  remote_execution: trusted_user_owned_helper_with_fixed_sudo_ceph_reads
+support:
+  platform: linux/amd64
+  scope: readonly_release_candidate
+  cluster_mutations: disabled
+  benchmark_and_upgrade_dry_run: retired
+security:
+  scanner: Docker Scout 1.20.4
+  scanned_on: "2026-10-12"
+  packages_indexed: 167
+  findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
+  application_cve_gate: PASS
+  overall_production_acceptance: PARTIAL
+  signature: NOT_RUN
+  sbom_path: ../dist/dockerhub-5.1.0-rc.1/application.spdx.json
+  sbom_sha256: 62d30b78444b11b1811464db68a4aefc41a1b3020e8cab2431e8d83fcd63af67
+  vulnerability_report_path: ../dist/dockerhub-5.1.0-rc.1/application-vulnerabilities.md
+  vulnerability_report_sha256: d33044b58c8797d6df2b7c4849e59e0e242401542e9eb446e24c1079a43d702b
+optional_osdmap_worker:
+  repository: dang7904/storage-lab-osdmap
+  tag: 16.2.15-rc.1
+  reference: dang7904/storage-lab-osdmap@sha256:65025d1fb24e90b87ec623b805946bcc6252bce43f8bfd198e70d6ef2a63cdad
+  index_digest: sha256:65025d1fb24e90b87ec623b805946bcc6252bce43f8bfd198e70d6ef2a63cdad
+  linux_amd64_manifest: sha256:ba0eb4888890ed23770d21e3d79e72cab96269d8bff29f2f91769a86e2c7b15e
+  built_at: "2026-10-12T15:20:44Z"
+  scope: optional_lab_offline_only_not_production_approved
+  required_network_mode: none
+  credentials_and_ceph_config: prohibited
+  supported_ceph_mon_version: 16.2.15
+  required_mon_weight_set_mode: true
+  supported_operations: [crush_weight]
+  supported_pool_types: [replicated]
+  parser_version: 2
+  tool_binary_sha256:
+    osdmaptool: c1532cfd43e6a0cfab5c6a3bd3da405ac7224606646f9351fe34bf5fb2ed1fe0
+    crushtool: 187ab0d81224f4e692a4376b728a86f380dffa599529bd7b9749389a086952ce
+  security:
+    scanner: Docker Scout 1.20.4
+    packages_indexed: 651
+    findings: {critical: 9, high: 333, medium: 1333, low: 481, unspecified: 18}
+    production_release_gate: NOT_PASSED
+    sbom_path: ../dist/dockerhub-5.1.0-rc.1/worker.spdx.json
+    sbom_sha256: fee25e216eb6ef52f0b129fba81ff2672b92f983af34140661cb0f03aca3c43f
+    vulnerability_report_path: ../dist/dockerhub-5.1.0-rc.1/worker-vulnerabilities.md
+    vulnerability_report_sha256: 2dc81b719b018bb761c87f6520821641a73841cad1934a024598de637f124022
+tests:
+  backend: {total: 292, passed: 292, skipped: 0}
+  frontend: {passed: 20}
+  executor_and_ssh: {passed: 25}
+  collector: {passed: 26}
+  osdmap_worker: {passed: 11}
+acceptance:
+  docker_hub_application_push: PASS
+  docker_hub_application_api_tag_verification: PASS
+  application_registry_digest_pull: PASS
+  docker_hub_worker_push: PASS
+  worker_registry_verification: PASS
+  packaged_version_command: PASS
+  runtime_content_hygiene: PASS
+  fresh_schema_0021_and_rerun: PASS
+  isolated_tls_auth_readonly_smoke: PASS
+  live_mon_osd_rgw_readonly_schema_smoke: PASS
+  backup_restore_schema_0021_migrations_evidence_as_is: PASS
+  second_live_ceph_environment_same_digest: NOT_RUN
+  arm64: NOT_BUILT
+  complete_offline_distribution_rehearsal: NOT_RUN
+known_limitations:
+  - The optional Pacific worker has known base-image vulnerabilities; do not enable it in production.
+  - Publishing a release candidate does not certify full production acceptance or every plan feature.
+  - RGW/MDS request/session/latency telemetry and multi-host A0 coverage remain incomplete.
+  - Collection is synchronous with a 128-daemon/16-MiB limit; old session history is not projected into the new list.
+  - Destination sites must provision private profiles/secrets, TLS, trusted SSH keys, FSID and approved allowlists.
+  - Existing deployments must back up DB/evidence, run additive migrations and explicitly recreate by the new digest.

@@ -66,6 +66,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cần in
 
 **Đánh giá.** Rủi ro **cao, security**, confidence **high**.
 
+**Rollback boundary.** Hạ RGW serving daemon về base đưa parsing order dễ bị form bucket override trở lại; việc restore config hoặc restart không giữ bản vá target trong binary base. Nếu cần failback availability, giữ endpoint base được drain hoặc chặn Browser POST ở lớp đã kiểm chứng trước khi cấp lại traffic, rồi chạy lại positive/negative cases qua từng backend. Hạ binary không xóa object đã được request trước đó tạo, không thu hồi credential và không thay thế incident assessment. Không có runtime evidence cho fallback policy này; nếu không chứng minh endpoint base đã bị cách ly khỏi Browser POST thì security closure phải mở lại.
+
 ### RGW-002 — Target tránh xóa tail data sau timeout và dừng POST ngay khi write filter lỗi
 
 **Evidence.** `b1ef8f95eb533cb63695e54f11ce49d8b5e2a3cf` xử lý `-ETIMEDOUT` ở `AtomicObjectProcessor::complete()`: head write có thể thành công muộn, nên target clear danh sách tail objects khỏi destructor cleanup để tránh xóa data vẫn được manifest tham chiếu. Trade-off được code nêu rõ: nếu head không thành công, có thể để orphan thay vì corrupt object sống.
@@ -77,6 +79,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cần in
 **Giới hạn.** Timeout vẫn ambiguous cho client; target không biến retry thành exactly-once. Orphan possibility cần quy trình riêng, không được chạy cleanup tùy ý trong canary. FIPS fix cho MD5 dùng mục đích ETag, không phải thay đổi cryptographic policy chung.
 
 **Mixed-version.** Daemon nhận request quyết định writer/cleanup behavior; client retry qua base và target có thể tạo version/ETag khác nhau tùy versioning/idempotency semantics.
+
+**Activation, impact và rollback.** Logic tự động kích hoạt trên PUT/POST/multipart đi qua target, đặc biệt ở timeout/filter error. Impact là durability/correctness của object; trade-off target còn có thể tăng capacity do orphan. Không có format migration, nhưng failback chỉ sau khi drain in-flight request và read-back các request ambiguous. Hạ binary không phục hồi tail đã bị base xóa hoặc sửa object body ngắn; recovery phải chọn version/replica có checksum đúng, còn orphan chỉ cleanup theo evidence riêng.
 
 **Kiểm chứng.** Trên bucket staging, inject latency/timeout quanh head commit cho PUT/POST/multipart; giữ request IDs, read-back full body, checksum, ETag, version listing và raw manifest/tail evidence. Test multipart complete retry và FIPS nếu áp dụng. Stop nếu successful response có checksum lệch, referenced tail mất, object body ngắn hoặc state retry không giải thích được.
 
@@ -91,6 +95,8 @@ Target còn sửa non-ASCII/filtered ordered listing, reshard stats accounting, 
 **Trước → sau.** Base operation giữ stale bucket info có thể complete vào old shard sau reshard. Target kiểm object tồn tại, refresh instance id và trả NoSuchBucket cho delete race; versioned delete/index cleanup cũng xác định hơn.
 
 **Mixed-version.** Bucket index là shared state. Trong rolling window, target daemon có guards mới nhưng base daemon vẫn có thể dùng stale path; do đó reshard + heavy writes nên tránh trong mixed-version window nếu không bắt buộc.
+
+**Activation, impact và rollback.** Path tự động chạy khi dynamic reshard hoặc concurrent PUT/DELETE/LIST chạm bucket đang chuyển shard; impact là index correctness, listing availability và stats consistency. Bucket instance/index update đã commit là shared persistent state, nên hạ binary không dựng lại entry/marker đã mất. Mốc reversible là trước reshard: freeze reshard/writes, snapshot index metadata theo runbook; sau lỗi chỉ dùng read-only `bucket check` để phân loại rồi repair có phê duyệt. Chưa có As-Is về dynamic-reshard flag, bucket shard count, versioning và write/delete concurrency nên không được hạ mức rủi ro trước inventory.
 
 **Kiểm chứng.** Trên staging bucket bật dynamic reshard, chạy concurrent PUT/DELETE/multipart/LIST với ASCII và non-ASCII keys, versioning on/off. Sau hội tụ so object listing với HEAD/read-back, bucket stats, shard instance ids và read-only `bucket check`. Stop nếu object có data nhưng mất index, index trỏ object mất, duplicate marker, stats lệch hoặc request tiếp tục dùng old shard.
 
@@ -108,6 +114,8 @@ Control plane còn reject sync-policy group rỗng (`7e137287e6f86ff6095a48fe643
 
 **Mixed-version.** Source daemon tạo logs, sync daemon tiêu thụ, master xử lý forwarded operation và admin command có thể khác version. Canary phải bao cả source/target zones; không chỉ nâng một zone rồi kết luận global.
 
+**Activation, impact và rollback.** Với multisite bật, log generation/retry/trim chạy tự động; policy/flow/pipe và admin trim là thao tác explicit. Impact gồm cross-zone consistency, sync availability và capacity backlog. Period, policy, log marker và trim progress là persistent: hạ package không tái tạo bilog/datalog đã trim hoặc hoàn tác forwarded policy/delete. Trước canary phải lưu realm/period và marker evidence; chỉ failback sau khi dừng trim, drain writes theo RPO và xác nhận consumers hội tụ, còn restore control-plane dùng period procedure đã diễn tập.
+
 **Kiểm chứng.** Chụp realm/period/zonegroup, allowed sync sources, policy/flow/pipe, mdlog/datalog/bilog markers, error shards và lag. Trong staging tạo object/version/delete/policy changes ở từng source được phép, xác nhận chỉ intended zones nhận, errors retry/hội tụ và trim không đi trước consumers. Stop nếu lag tăng không giới hạn, object/version/checksum lệch hoặc policy operation không tới master.
 
 **Đánh giá.** Rủi ro **cao nếu multisite bật**, confidence **high**.
@@ -121,6 +129,8 @@ Legacy FIFO code thay đổi lớn: remove part tags, merge duplicate journal en
 **Trước → sau.** Target giảm worker hang/crash và queue races. Đây không phải guarantee exactly-once; notification consumer vẫn phải chịu retry/duplicate theo interface contract.
 
 **Mixed-version.** RGW tạo event và notification worker/queue implementation có thể khác version; reshard trong mixed window tăng số state transitions cần kiểm. Lifecycle/GC là background, nên lỗi có thể lộ sau canary ngắn.
+
+**Activation, impact và rollback.** Các worker tự động kích hoạt khi notification/lifecycle/FIFO đã được cấu hình; binary upgrade không tự bật feature mới. Impact là delivery correctness/availability, queue capacity và durability của object bị lifecycle xóa. Queue journal, LC entry và deletion đã commit không được hạ binary hoàn tác; trước failback phải dừng producer/worker theo runbook, chụp backlog/markers và đợi hội tụ. Lost event cần đối soát/replay theo consumer contract, còn object expire sai chỉ phục hồi từ version/backup hợp lệ.
 
 **Kiểm chứng.** Với feature đang dùng, gửi create/copy/multipart/delete events, test endpoint ack modes và reshard; theo dõi queue depth, retry, duplicate/lost event. Chạy lifecycle trên bucket staging với expired versions/multipart, đo progress và daemon stability; xác nhận GC convergence nhưng không ép trim trước retention. Stop nếu worker treo, backlog không giảm, event mất theo test oracle hoặc object bị expire sai.
 
@@ -136,6 +146,8 @@ Chuỗi CORS/HTTP OPTIONS thay đổi canonical/auth handling (`2d78f81aae15efc8
 
 **Mixed-version.** Authorization diễn ra tại daemon nhận request. Load balancer phân phối giữa base/target có thể tạo nondeterministic 2xx/4xx cho cùng credential. Period/user metadata propagation cũng phải hoàn tất trước khi kết luận policy bug.
 
+**Tác động, rollback và phần chưa biết.** Impact là security authorization lẫn availability của request hợp lệ. Nhóm diff đánh giá policy hiện hữu, không tự migrate policy document; failback package đổi behavior allow/deny trở lại nhưng không hoàn tác request đã được phép hay object đã ghi/xóa. Ranh giới an toàn là trước khi đưa traffic vào target: pin canary, lưu golden decision/audit log và drain request trước failback. Chưa có inventory IAM/STS/CORS/OPA usage, cross-tenant policies và temporary credentials thực tế, nên matrix này là gate bắt buộc.
+
 **Kiểm chứng.** Lập golden matrix allow/explicit-deny/implicit-deny cho user, role, STS session, cross-tenant resource, invalid Resource, CORS preflight và backend thực dùng. Pin cùng signed request vào từng daemon, kiểm status/error code và Cloud/audit logs. Stop nếu quyết định khác giữa target nodes, deny bypass hoặc policy hợp lệ bị drop không giải thích được.
 
 **Đánh giá.** Rủi ro **cao, authorization**, confidence **high**.
@@ -149,6 +161,8 @@ Timeout implementation được refactor sang timer riêng; `671de0a392383122465
 S3 surface còn sửa truncated ListBuckets, DeleteMultiObj empty optional, content-length-range minimum, static website crashes và object-lock retention overflow. Các hunk này là correctness/stability, không phải wire-format migration.
 
 **Trước → sau.** Legacy TLS 1.0/1.1 client có thể kết nối ở base nhưng fail handshake với target default. RGW base không ép hai override MON này, còn target yêu cầu secure messenger và CephX khi process khởi động; deployment cố ý dùng auth khác có thể không kết nối MON nếu không có cấu hình đã phê duyệt. Ngược lại, header hợp lệ 4–16 KiB có thể được target chấp nhận. Timeout/disconnect paths ít crash hơn nhưng proxy/client retry vẫn cần test.
+
+**Mixed/full và rollback.** Defaults có hiệu lực khi từng RGW target restart, nên load balancer mixed có thể trả TLS/header/auth behavior khác nhau cho cùng client; chỉ full target hoặc config explicit đồng nhất mới loại nondeterminism. Chụp effective config/certificate trước canary. Có thể failback sau khi drain connection/request, nhưng hạ binary sẽ mở lại default legacy TLS và bỏ MON-auth override; đó là security regression chứ không phải hoàn nguyên vô hại. Muốn giữ policy ổn định qua rollback phải pin options đã duyệt ở config, rồi lặp TLS và MON-auth tests.
 
 **Kiểm chứng.** Export effective `rgw_frontends`, certificate, ciphers/options, `ms_mon_client_mode`, `auth_client_required`, trạng thái CephX, proxies và client TLS matrix. Pin TLS 1.2/1.3 positive tests; xác nhận intended rejection của TLS 1.0/1.1 và một RGW target restart có thể authenticate/kết nối MON. Test headers gần configured limit, slow upload, timeout, keepalive/100-continue và graceful drain under load. Stop nếu supported clients fail, RGW không kết nối MON, daemon crash, request bị double-complete hoặc shutdown bỏ request ngoài SLO.
 
@@ -165,6 +179,8 @@ S3 surface còn sửa truncated ListBuckets, DeleteMultiObj empty optional, cont
 **Kiểm chứng/hành động.** Trước hết chạy read-only check trên bucket staging có versioning/multipart/reshard history, lưu raw output và so listing/HEAD/stats. Rehearse `--fix` trên clone hoặc disposable data, kiểm object versions/OLH/multipart meta sau repair. Không chạy production `--fix` nếu chưa có object-level backup, peer/multisite impact analysis và rollback/restore procedure.
 
 **Đánh giá.** Rủi ro **cao theo operator action**, confidence **high**.
+
+**Mixed/full.** Check/repair chạy bằng phiên bản `radosgw-admin` được gọi, nên full RGW target không tự nâng một admin host còn base và mixed serving fleet không tự ngăn tool target sửa bucket index dùng chung. Base chưa có các subcommand OLH/unlinked này; target `RGWBucket::check_index_olh()`/`check_index_unlinked()` chỉ áp dụng cho versioned buckets, với mutation được chặn bởi `will_fix_index()`. Do đó ghi tool version, bucket versioning/layout và shard count vào từng result; output từ hai tool version không được trộn thành oracle duy nhất. Trong mixed phase chỉ dùng read-only diagnostic đã đối chiếu với listing/HEAD; nếu dự định `--fix`, phải có staging cùng writer/multisite topology và change gate riêng. Sau full target vẫn giữ gate đó vì cleanup shared index/object không tự trở nên reversible khi mọi daemon đã nâng.
 
 ## 5. Trivial/support changes
 

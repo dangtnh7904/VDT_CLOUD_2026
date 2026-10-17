@@ -63,6 +63,8 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 
 **Tác động.** Observability/package correctness; `medium` vì mất sudoers file làm SMART/NVMe scrape thất bại nhưng không trực tiếp làm hỏng dữ liệu. Confidence `high` từ endpoint manifests và commit intent.
 
+**Ranh giới rollback.** Ghi lại package owner/checksum và sao lưu local override trước transaction. Downgrade toàn bộ package set có thể đưa manifest cũ trở lại, nhưng không tự phân biệt file orphan/local với file do package quản lý; tuyệt đối không xóa tên cũ chỉ vì target đã đổi tên. Nếu validation lỗi, rollback transaction nguyên tử rồi restore override đã review, thay vì trộn `ceph-base` target với `ceph-osd` base.
+
 **Validation đề xuất.** Với cả RPM và DEB đang dùng, kiểm tra package file list, mode `0440`, parser sudoers và một health scrape không tương tác trên staging. Xác nhận file cũ không còn do package quản lý, nhưng không tự xóa file local không rõ nguồn gốc trong bước audit. Stop condition: missing/new file sai mode, invalid sudoers, hoặc scrape mất dữ liệu.
 
 ### BLD-003 — weak dependency của SMART/NVMe chuyển lên package nền
@@ -72,6 +74,8 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 **Trước → sau.** Base gắn `nvme-cli` và `smartmontools` vào MON/OSD. Target bỏ chúng khỏi hai package này và thêm vào `ceph-base` (`Recommends`, riêng nhánh SUSE RPM giữ `smartmontools` là `Requires`). Điều này khớp việc sudoers cũng chuyển lên package nền.
 
 **Kích hoạt và mixed/full.** Áp dụng cho RPM/DEB; kết quả phụ thuộc policy cài weak dependencies như `--no-install-recommends`. Node target có thể thiếu executable dù sudoers đã đúng nếu policy bỏ Recommends. Không có mixed-version protocol effect.
+
+**Activation và rollback.** Dependency resolution chạy tự động khi package manager lập transaction; không có daemon restart hay data migration. Chụp resolved transaction trước apply. Nếu binary health tool thiếu, rollback bằng downgrade package set/reinstall dependency đã pin; không dùng autoremove rộng vì có thể xóa package dùng chung. Package rollback không khôi phục khoảng trống telemetry đã xảy ra, nên scrape continuity vẫn phải kiểm riêng.
 
 **Tác động.** Package/observability, `low–medium`; confidence `high`. Validation cần kiểm tra resolved transaction trong đúng repository/distro của môi trường, không suy ra chỉ từ spec nguồn.
 
@@ -90,6 +94,8 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 
 **Tác động.** Delivery correctness, `medium` với custom DEB pipeline; confidence `high`. Failure signal là build dependency không resolve, module bị đặt sai path hoặc MGR import lỗi sau restart.
 
+**Ranh giới rollback và phần chưa biết.** Artifact/manifest checksum là boundary: rollback phải thay toàn bộ DEB/Python module set về cùng build, rồi restart/smoke-test MGR; chỉ copy lại một module tạo ABI/import skew. Nhóm này không đổi persistent cluster format, nhưng hạ package không hoàn tác request/module failure trong thời gian chạy. Chưa biết distro/Python scheme, build profile và repository closure của môi trường đích, nên custom artifact chưa được coi là deployable trước clean-root validation.
+
 **Repository evidence/validation.** `src/test/pybind/CMakeLists.txt` chuyển các test liên quan sang runner target, nhưng audit không chạy build/test. Đề xuất dựng source package với và không với `pkg.ceph.check`, kiểm tra package dependencies/files, import ba pure-Python modules trong clean install root, rồi smoke-start MGR trên staging. Stop condition: missing dependency, file ngoài `dist-packages`, import/link error.
 
 ### BLD-005 — scripts dựng dependency, DEB và source tarball
@@ -100,7 +106,9 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 
 **Kích hoạt và mixed/full.** Chỉ pipeline dùng chính các scripts này bị tác động. Prebuilt package/image không chạy chúng trong rolling upgrade. Nếu các node nhận artifact khác nhau do build không tái lập, đó là artifact skew chứ không phải protocol skew.
 
-**Tác động.** Maintainability/delivery, `low–medium`; confidence `high`. Đề xuất build cùng commit hai lần trong clean supported builders, so manifest/checksum, chạy package smoke tests và lưu compiler/dependency provenance. Audit không chạy script vì chúng cài/xóa dependency trên build host.
+**Activation, rollback và phần chưa biết.** Scripts chỉ chạy explicit trong build pipeline; production daemon restart không kích hoạt. Giữ source tarball, builder image, dependency lock và artifact checksum của build đã chấp thuận. Rollback deployment bằng đúng artifact set trước đó, không rebuild lại từ nguồn floating. Chưa biết pipeline đích có gọi các script này, distro builder và mirror URL/pin nào; vì vậy applicability phải được xác nhận từ provenance.
+
+**Tác động.** Maintainability/delivery, `low–medium`; confidence `high`. **Kiểm chứng:** build cùng commit hai lần trong clean supported builders, so manifest/checksum, chạy package smoke test và lưu compiler/dependency provenance. Audit không chạy script vì chúng cài/xóa dependency trên build host.
 
 ### BLD-006 — `ceph-dencoder` yêu cầu plugin package đồng bộ
 
@@ -112,6 +120,8 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 
 **Tác động.** Validation/recovery tooling, `medium`; confidence `high`. Không có bằng chứng thay đổi wire/on-disk format chỉ từ build refactor này.
 
+**Ranh giới rollback.** Binary và toàn bộ `denc-mod-*` là một atomic artifact cohort. Có thể downgrade vì refactor không ghi cluster state, nhưng phải thay cả executable lẫn module package rồi chạy lại `list_types`; hạ riêng một nửa dễ tạo `dlopen`/symbol skew và làm recovery output không đáng tin. Mọi decode/encode artifact sinh bởi bộ lỗi phải bị loại và tạo lại bằng cohort đã xác minh.
+
 **Repository evidence/validation.** Build targets `tests` và `cephfs_testing` thêm dependency `ceph-dencoder-modules`; các scripts encoding hiện có dùng `list_types` và encode/decode round-trip. Đề xuất kiểm tra package contents, chạy `ceph-dencoder list_types`, chọn representative common/OSD/RBD/RGW/CephFS types theo feature build và chạy test encoding trong staging. Stop condition: `dlopen`/symbol error, thiếu family types, hoặc round-trip khác kỳ vọng. Chưa test nào được thực thi ở đây.
 
 ### BLD-007 — custom CMake/toolchain compatibility thay đổi
@@ -122,6 +132,8 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 
 **Kích hoạt và mixed/full.** Chỉ custom build/variant tương ứng kích hoạt. Artifact vendor đã qua build acceptance không bị thay đổi tại thời điểm node restart; custom artifacts phải nhất quán trên mọi node để tránh khác feature/link closure. Đây không phải một migration dữ liệu tự động.
 
+**Ranh giới rollback.** Lưu toolchain/container, flags, submodule pins, linked-library manifest và artifact checksum. Rollback phải triển khai lại nguyên artifact cohort đã ký; không thay một `.so` hoặc Python runtime riêng lẻ. Không có persistent migration trong finding, nhưng binary đã tạo state ứng dụng vẫn cần normal daemon drain/validation trước failback; artifact không tái lập thì dừng ở staging.
+
 **Tác động.** Build compatibility, `medium` khi tự build và không áp dụng nếu dùng artifact chuẩn đã kiểm chứng; confidence `high`. Đề xuất cấu hình/build đúng matrix production (distro, compiler, Python, PMEM/DPDK/RGW/RBD/CephFS flags), chạy `ctest`/make-check có chọn lọc và kiểm tra linked-library manifest. Stop condition: CMake chọn sai interpreter, unresolved symbol, missing feature module hoặc artifact khác manifest chuẩn.
 
 ### BLD-008 — ISA-L AArch64 text-relocation fix đã được kiểm nội bộ
@@ -131,6 +143,8 @@ Không finding nào tự tạo kết luận GO/NO-GO. Trước rollout cần ch�
 **Trước → sau.** Sáu assembly routines `gf_*vect_mad_neon` thay literal load bằng `adrp` + `:lo12:` và chuyển `const_tbl` từ `.data` sang `.rodata`, đúng mục tiêu loại text relocation trên AArch64. Không có thay đổi thuật toán EC hoặc persistent encoding được thấy trong internal diff.
 
 **Kích hoạt và mixed/full.** Chỉ artifact AArch64 build kèm ISA-L EC plugin dùng code này. x86_64 không đi qua hunk. Trong rolling upgrade, khác biệt nằm trong local plugin implementation; không có bằng chứng endpoint về feature bit hay on-disk format mới.
+
+**Activation và rollback.** Path tự động được dùng khi OSD AArch64 load ISA-L plugin và xử lý EC encode/decode; không có config migration. Vì encoding không đổi, có thể failback nguyên OSD/plugin package sau drain/restart và scrub/read validation. Hạ binary không hoàn tác shard write đã commit; nếu checksum mismatch xuất hiện, dừng cohort và recovery từ các shard đã xác minh thay vì đổi plugin qua lại.
 
 **Tác động.** Build/load hardening và availability của EC path trên AArch64, `medium` có điều kiện; confidence `high` vì internal dependency diff đã đọc, không còn gap “thiếu submodule object”. Đề xuất build/link AArch64 với relocation checks, chạy ISA-L unit/EC non-regression tests và workload ghi/đọc/scrub trên EC pool staging. Stop condition: text relocation còn tồn tại, loader error hoặc data mismatch.
 
@@ -151,6 +165,8 @@ Nhánh SELinux `%post` target có thể điều khiển stop/start ngay trong fi
 
 **Tác động.** Availability và access continuity, risk `high`: mất cephadm user/key có thể chặn orchestration; restart ngoài kế hoạch có thể phá sequencing. Confidence `high` cho code và RPM execution order, nhưng applicability vẫn cần artifact/distro thật; chưa giải macro expansion hoặc chạy transaction của repository đang dùng.
 
+**Ranh giới rollback.** Snapshot account/UID/GID, home, authorized_keys/config checksum, service state và RPM transaction trước apply là bắt buộc. Nếu old `%postun` đã `userdel -r`, package downgrade không tái tạo key/home đã mất; phải dừng transaction flow và phục hồi identity/file từ bản sao đã kiểm, giữ ownership chính xác, rồi mới cho cephadm kết nối lại. Với restart trái policy, rollback package cũng không đảo availability event đã xảy ra—phải xác minh quorum/workload trước bước tiếp.
+
 **Validation đề xuất.** Trước production, bắt buộc chạy đúng direct transaction base RPM → target RPM trong disposable node có state đại diện: key đã sửa, cephadm account/home, policy `yes/no`, SELinux và cache service theo As-Is. Thu lại scriptlet expansion/order và kiểm key/account/UID sau old `%postun`, daemon restart events, labels và cache-service state. Thử upgrade tiếp từ target và uninstall riêng để tách first-hop hazard khỏi hành vi đã sửa. Stop condition: key/account mất, restart trái policy, relabel error hoặc cache state sai; nếu first hop tái hiện xóa account thì phải có mitigation/package path do owner RPM phê duyệt trước rollout. Không transaction nào được chạy trong audit source.
 
 ### BLD-010 — Debian package bổ sung service assets cho `cephfs-mirror`
@@ -162,6 +178,8 @@ Nhánh SELinux `%post` target có thể điều khiển stop/start ngay trong fi
 **Kích hoạt và mixed/full.** Chỉ Debian deployments dùng cephfs-mirror. Node đã nâng target có unit, node base có thể không có; operator action vẫn cần theo runbook để enable/start service, manifest không tự chứng minh service đã chạy.
 
 **Tác động.** Service manageability/availability, `low–medium`; confidence `high`. Đề xuất kiểm package contents, systemd unit parse, enable/start/stop trong staging và mirror failover scenario ở report 11. Stop condition: unit absent/unloadable hoặc mirror không reconnect.
+
+**Applicability, activation và rollback.** Finding áp dụng nếu rollout dùng package Debian `cephfs-mirror`; container khác hoặc installation thủ công cần kiểm artifact riêng. Package installation tự động đưa unit/man page vào filesystem nhưng không chứng minh unit được enable/start; đó là explicit service action theo policy packaging và runbook host. Trước package failback phải kiểm service đã quiesce và chụp unit/drop-in/enablement state: manifest base không ship unit, nên downgrade có thể làm host mất service-management files dù executable còn. Khôi phục package/unit đã pin rồi daemon-reload và kiểm start/stop chỉ trong staging; không dùng việc unit load được để kết luận snapshot replication đã hội tụ hoặc state mirror có thể downgrade. Runtime/metadata rollback tiếp tục theo CEPHFS-008; chưa xác minh maintainer-script behavior và local unit overrides của các package thực được phân phối.
 
 ## 4. Validation matrix đề xuất
 

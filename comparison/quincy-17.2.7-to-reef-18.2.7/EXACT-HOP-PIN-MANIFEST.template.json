@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "comparison": "quincy-17.2.7-to-reef-18.2.7",
+  "validation_label": "NOT_EXACT_HOP_VALID",
+  "base": {
+    "ref": "v17.2.7",
+    "source_sha": "b12291d110049b2f35e32e0de30d70e9a4c060d2",
+    "package_nevra_or_versions": [],
+    "image_reference": "",
+    "image_digest": "",
+    "image_inspect_sha256": "",
+    "cephadm_sha256": "",
+    "cephadm_provenance": ""
+  },
+  "target": {
+    "ref": "v18.2.7",
+    "source_sha": "6b0e988052ec84cf2d4a54ff9bbbc5e720b621ad",
+    "package_nevra_or_versions": [],
+    "image_reference": "",
+    "image_digest": "",
+    "image_inspect_sha256": "",
+    "cephadm_sha256": "",
+    "cephadm_provenance": ""
+  },
+  "job": {
+    "run_id": "",
+    "packs": [],
+    "expanded_job_config_sha256": "",
+    "workload_seed": "",
+    "started_utc": "",
+    "ended_utc": "",
+    "topology_evidence": ""
+  },
+  "delivery": {
+    "registry": "",
+    "mirror": "",
+    "pull_by_digest_verified": false,
+    "pull_test_evidence": "",
+    "use_repo_digest": {
+      "parallel": null,
+      "stress_split": null,
+      "telemetry": null
+    },
+    "effective_setting_evidence": []
+  },
+  "distro_lanes": [],
+  "harness": {
+    "ceph_suite_sha": "6b0e988052ec84cf2d4a54ff9bbbc5e720b621ad",
+    "teuthology_sha": "",
+    "task_plugin_disposition": "PENDING_INPUT",
+    "task_plugins": [],
+    "local_patches": [],
+    "expanded_yaml_evidence": ""
+  },
+  "completion_oracle": {
+    "passed": false,
+    "ceph_versions_sha256": "",
+    "orch_ps_sha256": "",
+    "image_inspect_sha256s": [],
+    "expected_daemon_counts": {},
+    "observed_daemon_counts": {},
+    "role_inventory_evidence": ""
+  },
+  "client_matrix": {
+    "disposition": "PENDING_INPUT",
+    "reason": "",
+    "evidence": [],
+    "old_client_new_daemon": [],
+    "new_client_old_daemon": []
+  },
+  "release_floor_guard": {
+    "disposition": "PENDING_INPUT",
+    "reason": "",
+    "fixture_quarantined": false,
+    "approval_evidence": "",
+    "old_client_negative_result": "",
+    "evidence": []
+  },
+  "archive": {
+    "uri": "",
+    "manifest_sha256": "",
+    "owner": "",
+    "failure_triage": "",
+    "rerun_of": ""
+  },
+  "pins": [
+    { "id": "PIN-01", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-02", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-03", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-04", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-05", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-06", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-07", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-08", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-09", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-10", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-11", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-12", "status": "PENDING_INPUT", "reason": "", "evidence": [] }
+  ]
+}

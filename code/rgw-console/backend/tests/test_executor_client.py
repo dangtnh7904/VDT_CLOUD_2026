@@ -12,6 +12,15 @@ TOKEN = "test-executor-token-with-at-least-32-characters"
 
 
 class ExecutorClientTests(unittest.TestCase):
+    def test_retired_benchmark_actions_are_rejected_before_transport(self):
+        def unexpected(request):
+            self.fail("Retired actions must never reach the executor")
+
+        for action in ("benchmark.preflight", "benchmark.start", "benchmark.status", "benchmark.stop"):
+            with self.subTest(action=action), self.assertRaises(ExecutorClientError) as caught:
+                self.client(unexpected).request(action)
+            self.assertEqual(caught.exception.code, "ACTION_NOT_ALLOWED")
+
     def client(self, handler):
         return ExecutorClient(
             "http://executor:3001",
@@ -97,6 +106,31 @@ class ExecutorClientTests(unittest.TestCase):
         with self.assertRaises(ExecutorClientError) as raised:
             self.client(handler).request("rbd.device.list")
         self.assertEqual(raised.exception.code, "VOLUME_BUSY")
+
+    def test_osd_info_collection_uses_closed_read_only_action(self):
+        def handler(request: httpx.Request):
+            payload = __import__("json").loads(request.content)
+            self.assertEqual(payload["action"], "ceph.osd_info_collect")
+            self.assertEqual(payload["params"], {"osd_ids": [0, 4]})
+            return httpx.Response(
+                200,
+                json={
+                    "version": 1,
+                    "request_id": payload["request_id"],
+                    "ok": True,
+                    "result": {
+                        "action": payload["action"],
+                        "fsid": FSID,
+                        "collected_at": "2026-10-08T00:00:00Z",
+                        "data": {"kind": "CEPH_OSD_BASELINE", "cluster_fsid": FSID},
+                    },
+                },
+            )
+
+        result = self.client(handler).ceph_osd_info_collect([0, 4])
+
+        self.assertEqual(result["kind"], "CEPH_OSD_BASELINE")
+        self.assertEqual(result["fsid"], FSID)
 
     def test_fsid_mismatch_is_rejected(self):
         def handler(request: httpx.Request):

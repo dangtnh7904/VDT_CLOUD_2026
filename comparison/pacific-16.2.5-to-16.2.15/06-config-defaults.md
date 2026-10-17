@@ -56,6 +56,8 @@ Giới hạn `256` có thể làm OSD target backpressure sớm hơn cluster bas
 
 **Hành động.** Trước canary, ghi lại effective values từ config database/daemon, đặc biệt nếu cluster từng tune client cap hoặc reply cap. Theo dõi client latency/backpressure, OSD memory, PG log, cluster-log rate/MON DB và thời gian monitor đánh dấu OSD trong mỗi restart. Không cần migrate dữ liệu từ riêng các default này.
 
+**Impact và rollback boundary.** Impact category là availability/observability và resource pressure trong restart window; không có schema/on-disk migration. Có thể rollback behavior bằng override explicit hoặc hạ OSD sau stop sạch, nhưng phải khôi phục snapshot config trước đó để base không nhận key chỉ target hiểu. Log đã aggregate và notification đã gửi không thể tái tạo bằng rollback, nên giữ raw telemetry trước failback.
+
 **Đánh giá.** `P1`; rủi ro **trung bình**, confidence **high**. Chưa biết override và profile workload của cluster.
 
 ### CFG-002 — mClock bỏ key capacity chung và có thể benchmark thiết bị lúc OSD boot
@@ -72,6 +74,8 @@ Giới hạn `256` có thể làm OSD target backpressure sớm hơn cluster bas
 **Tác động.** Override cũ cho generic key không còn điều khiển capacity target; để nguyên key cũ có thể tạo cảm giác đã tune nhưng thực tế OSD dùng key theo media. Benchmark boot có I/O và kéo dài startup, nên có thể cộng hưởng với recovery/backfill trong rolling upgrade. Kết quả capacity mới cũng đổi QoS mClock của OSD target trong khi OSD base còn hành vi cũ.
 
 **Hành động.** Nếu dùng mClock: chuyển override sang đúng key `_hdd`/`_ssd`, quyết định rõ `skip`/`force`, kiểm tra media classification và canary một OSD trước. Không bật `force` trên cả failure domain cùng lúc. Nếu không dùng `mclock_scheduler`, finding này không kích hoạt.
+
+**Validation và rollback boundary.** Lab validation phải chứng minh một OSD HDD và SSD khởi động với giá trị intended, có hoặc không chạy benchmark đúng quyết định, rồi so latency/recovery trước sau. Benchmark có thể ghi capacity mới vào MON config store, nên last reversible point là snapshot config trước restart. Failback cần phục hồi generic key cho base, dọn hoặc cô lập target `_hdd/_ssd` keys theo runbook và xác nhận effective scheduler; hạ binary đơn thuần không đảo config đã ghi.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo điều kiện**, confidence **high**. API config mới tự nó là support code; tác động đến upgrade đến từ caller mClock.
 
@@ -95,6 +99,8 @@ Ba guard mới thay failure behavior trong cửa sổ upgrade: MON target cho MD
 Rename client key là vấn đề migration cấu hình: override cũ không còn gắn với option target. Hai thay đổi type seconds chủ yếu làm schema rõ nghĩa hơn; chúng đáng kiểm nếu deployment sinh giá trị có suffix/float, nhưng net diff không tự chứng minh mọi giá trị cũ sẽ bị từ chối.
 
 **Hành động.** Audit key cũ, chuyển sang `client_max_retries_on_remount_failure`; ghi nhận effective MDS/client values trước và sau canary. Test mount/remount, readdir lớn, MON election + MDS beacon grace, laggy-OSD client eviction, oversized/non-advancing session, active/standby failover và thời gian warm-up. Cluster không dùng CephFS có thể đánh dấu finding này không áp dụng.
+
+**Rollback boundary và unresolved.** Các default không đổi persistent CephFS format, nên có thể failback rank sau snapshot config và stop/failover có kiểm soát. Tuy vậy session đã bị blocklist/evict hoặc client đã timeout không được hoàn nguyên bằng hạ MDS; phải phục hồi client/session theo runbook riêng. Unresolved là client mix, active/standby topology, override cũ và session metadata distribution; thiếu các dữ liệu đó thì không được chốt applicability hoặc warm-up budget.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo điều kiện** vì có client blocklist/eviction semantics; confidence **high** cho default/branch, **medium** cho tần suất và mức latency thực tế.
 
@@ -132,6 +138,8 @@ RBD mirror target cho phép thêm snapshot trước khi chạm giới hạn; đi
 
 **Hành động.** Không đồng loạt override các knob mới chỉ vì chúng xuất hiện. Canary OMAP-heavy workload với iterator bounds mặc định; giám sát BlueFS allocation/ENOSPC; chỉ tune compaction/allocator sau benchmark. Không có bằng chứng từ owner set này về thay đổi DB/WAL format.
 
+**Mixed/full-version, rollback và unresolved.** Trong mixed phase, OSD target dùng iterator/cooldown mới còn OSD base giữ behavior cũ; sau full target, effective config mới đồng nhất theo cohort. Không có format migration, nên rollback binary hoặc override có thể phục hồi policy, nhưng compaction/fsck mutation đã explicit chạy không được đảo bằng config. Unresolved là OMAP/tombstone density, free BlueFS space, allocator và mọi override; cần benchmark cùng device snapshot trước khi bật nhánh opt-in.
+
 **Đánh giá.** Rủi ro **trung bình-thấp**, tăng lên khi workload OMAP nặng hoặc store đang sát dung lượng; confidence **high** cho activation, **medium** cho tác động hiệu năng.
 
 ### CFG-006 — Pool/autoscaler có controls mới, không tự đổi pool hiện hữu chỉ vì upgrade
@@ -145,7 +153,11 @@ RBD mirror target cho phép thêm snapshot trước khi chạm giới hạn; đi
 
 **Tác động.** Default bulk là `false`, nên pool mới giữ hành vi không-bulk trừ khi command/automation yêu cầu. Giới hạn thay đổi PG có thể làm autoscaler hội tụ qua nhiều bước hơn, đáng chú ý trong stabilization sau upgrade nhưng giảm bước nhảy lớn. Không có bằng chứng các option này tự mutate pool hiện hữu ngay lúc nâng cấp nếu không có proposal/autoscaler action.
 
+**Endpoint behavior và activation mode.** Base không có `bulk` default/control và không có cùng per-step cap; target chỉ áp dụng automatic default lúc tạo pool mới hoặc explicit autoscaler/command proposal. Upgrade/restart đơn thuần không rewrite pool hiện hữu. Trong mixed phase, MON/MGR đang chủ trì command quyết định behavior; sau full target, command path và cap mới đồng nhất.
+
 **Hành động.** Soát automation tạo pool để không vô tình phụ thuộc default, ghi lại autoscaler mode và pending recommendations trước rolling upgrade, không thực hiện rebalance/PG expansion lớn đồng thời nếu không cần. Cross-check chi tiết command/OSDMap ở `04-mon-osdmap-crush.md`.
+
+**Validation và rollback boundary.** Trên lab, tạo pool không bulk và explicit bulk, lưu OSDMap epoch, rồi xác nhận autoscaler chỉ thay PG theo cap và hội tụ qua nhiều bước. Last reversible point là trước pool-create hoặc PG proposal commit; hạ binary không xóa pool hay đảo PG changes đã commit. Rollback phải dùng OSDMap/config snapshot và kế hoạch scale-back được owner MON/OSDMap duyệt, không dựa vào package downgrade.
 
 **Đánh giá.** Rủi ro **trung bình theo điều kiện**, confidence **high**.
 
@@ -163,6 +175,8 @@ RBD mirror target cho phép thêm snapshot trước khi chạm giới hạn; đi
 **Hành động.** Dùng preflight config-assimilate/config-check tương ứng với quy trình triển khai, tìm unknown/deprecated keys trong log canary, và xác minh effective values sau restart. Giữ bản chụp config database để rollback cấu hình; không tự xóa key trước khi xác nhận consumer và rollback plan.
 
 **Đánh giá.** Rủi ro **thấp-trung bình**, confidence **medium-high** vì outcome validation cụ thể phụ thuộc cách cluster inject cấu hình.
+
+**Mixed/full.** Trong mixed fleet, cùng config database có thể vẫn chứa key base nhận nhưng target đã bỏ, hoặc giá trị `0` base chấp nhận nhưng target đặt minimum `1`; việc nâng một daemon không chứng minh các consumer khác đã chuyển. Vì vậy giữ inventory consumer theo daemon/client version và kiểm từng canary bằng binary của cohort đó. Sau khi toàn bộ consumer liên quan lên target, mới xử lý stale key với mapping rollback đã kiểm; không thay `ms_async_max_op_threads` bằng `ms_async_reap_threshold` trên cả fleet vì hai option có nghĩa khác nhau. Với PWL, phải kiểm cả client sử dụng cache chứ không chỉ OSD version.
 
 ## 5. Coverage/disposition ledger
 

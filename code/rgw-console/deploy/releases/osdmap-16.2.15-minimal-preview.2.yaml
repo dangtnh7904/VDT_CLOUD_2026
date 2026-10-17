@@ -1,0 +1,129 @@
+schema_version: 1
+status: local_only_unreleased_preview_with_open_stability_review
+validated_on: "2026-10-13"
+timezone: Asia/Saigon
+image:
+  local_tag: storage-lab-osdmap:16.2.15-minimal-preview.2
+  local_index_digest: sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  linux_amd64_manifest: sha256:a46ac884e971645d878400e1233226758a2fbdb72e7d756dce0d544a97d51620
+  built_at: "2026-10-13T01:46:02Z"
+  platform: linux/amd64
+  published: false
+  approved_for_production: false
+  dockerfile: ../../packaging/osdmap/Dockerfile.minimal
+  strip_package_manager_extras: true
+runtime:
+  genuine_rpm_headers: 103
+  elf_closure_entries: 22
+  exact_hash_checks_passed: 25
+  uid_gid: "10001:10001"
+  network: none
+  readonly_root: true
+  cap_drop: [ALL]
+  no_new_privileges: true
+  credentials_and_ceph_config: absent_from_synthetic_test
+  parser_version: 2
+  operations: [crush_weight]
+  pool_types: [replicated]
+  removed_by_real_package_solver: [microdnf, libdnf, librepo, librhsm, libpeas, gobject-introspection, json-glib, libmodulemd, libsolv, gpgme, gnupg2, glib2, gnutls]
+  preserved: [rpm_database, rpm_query, chown, python3_12, three_pinned_ceph_elf_files]
+  copied_ceph:
+    donor: quay.io/ceph/ceph:v16.2.15@sha256:f15b41add2c01a65229b0db515d2dd57925636ea39678ccc682a49e2e9713d98
+    osdmaptool_sha256: c1532cfd43e6a0cfab5c6a3bd3da405ac7224606646f9351fe34bf5fb2ed1fe0
+    crushtool_sha256: 187ab0d81224f4e692a4376b728a86f380dffa599529bd7b9749389a086952ce
+    libceph_common_sha256: e6a4768ebf2e3836c7d38258840b27620bb0ea6bf1070fe90be635ce899462b9
+  closure_path: ../dist/minimal-worker-preview2-20261013/dependency-closure.json
+  closure_sha256: de85ec6100b0aee72161e0321f42d713126f341f622c8f0c56e9fd11950e39bc
+security:
+  scanner: Docker Scout 1.20.4
+  packages_indexed: 133
+  findings: {critical: 1, high: 21, medium: 35, low: 2, unspecified: 0}
+  reported_compressed_size_mb: 80
+  previous_preview_reported_compressed_size_mb: 66
+  no_claim_of_smaller_image: true
+  production_gate: NOT_PASSED
+  raw_scout_report_path: ../dist/minimal-worker-preview2-20261013/worker-vulnerabilities.md
+  raw_scout_report_sha256: bc4793baf8ff0bf4954ba5781b1d2af41f2c28544a97985b47bfc809bd6bc765
+  sbom_path: ../dist/minimal-worker-preview2-20261013/worker.spdx.json
+  sbom_sha256: d6abd4acd012ecce0a873e121ffaea4938ded21b9648ae99df25a993c32f4ef1
+  copied_ceph_sbom_path: ../dist/minimal-worker-preview2-20261013/copied-ceph.spdx.json
+  copied_ceph_sbom_sha256: fd593037b7dca7639adf9dbf596ed21f65df4c48fc6d7997fbce7ac289bf2253
+  copied_ceph_report_path: ../dist/minimal-worker-preview2-20261013/copied-ceph-vulnerabilities.md
+  copied_ceph_report_sha256: 9a0ca9f826e78d0fd908421d742e8fef13e86d72ba573655d14652d06e7269b1
+  copied_ceph_scan_findings: 0
+  copied_ceph_scan_is_not_security_certification: true
+  critical_high_primary_triage:
+    records: 22
+    vendor_fixed_by_matching_rpm_evr: 12
+    vendor_not_affected: 3
+    cna_rejected: 4
+    vendor_affected: 3
+    still_affected: [CVE-2026-84782, CVE-2026-103111, CVE-2026-77214]
+    critical_cve_cna_state: REJECTED
+    suppression_vex_or_production_waiver: none
+    baseline_triage_path: ../../docs/OSDMAP_SECURITY_TRIAGE.md
+    baseline_triage_sha256: 42a927bb93f7177bf491f4a0106392279f55b79ce1e8358fc3c430fb70256986
+tests:
+  worker: {total: 17, passed: 17, skipped: 0}
+  synthetic_database_target_guard: {total: 9, passed: 9, skipped: 0}
+  test_script_sha256: 41d1f80589e41e8a9183ec268386a17ddce06063616509a998acbbf9bfb3830e
+  differential:
+    cases: 3
+    passed: 3
+    canonical_sha256: b5dad984d27f13ff56b1c093222dc6ceb106f830af29217828b35332457742d5
+    normalization: only_known_stdout_crush_export_temporary_path
+    artifacts_path: ../dist/minimal-worker-preview2-20261013/compatibility
+  synthetic_api_real_worker:
+    application_image: storage-lab-console:5.1.1-preview.1
+    postgres_schema: 21
+    checks_per_successful_run: 38
+    consecutive_successful_runs: 4
+    first_attempt:
+      status: FAILED
+      passed_before_failure: 32
+      failure: tampered_real_worker_result_identity_rejected
+      failure_response_details: not_captured_before_diagnostic_added
+      actual_database_artifact_rows: 2
+      bad_third_result_was_not_saved: true
+      root_cause: NOT_REPRODUCED_NOT_CONFIRMED
+      latest_investigation_manifest: integration-rootcause-20261013.yaml
+      report_path: ../dist/api-worker-smoke-20261013/report/integration-preview2.json
+      report_sha256: fc5594a095ea68578eb5442edfa5bf212fa4026aa5ebf81a617d52dcacc568fc
+    diagnostic:
+      status: PASS
+      tampered_result_http_status: 503
+      tampered_result_code: OSDMAP_RESULT_IDENTITY_MISMATCH
+      report_path: ../dist/api-worker-smoke-20261013/report/integration-preview2-diagnostic.json
+      report_sha256: ced0af5ccc3ccaaae980b7be6ac6374385a4e40139fa914ed6b70126301325c4
+    repeat1:
+      status: PASS
+      report_path: ../dist/api-worker-smoke-20261013/report/integration-preview2-repeat1.json
+      report_sha256: 9441c60941b4525e101569eede711bdb58df4f0ec2c2ceb325b4ae23910c2f1f
+    repeat2:
+      status: PASS
+      report_path: ../dist/api-worker-smoke-20261013/report/integration-preview2-repeat2.json
+      report_sha256: 4e2882b5f84d240ea5f2ebfea9647a4a66d12b220560d6b024d4ef7294b08d3b
+    repeat3:
+      status: PASS
+      report_path: ../dist/api-worker-smoke-20261013/report/integration-preview2-repeat3.json
+      report_sha256: 8f5454c392b7090a6d8920ece94914535080d0256a5f4fe7e00729e3cfe3d4b7
+acceptance:
+  real_solver_package_removal_and_metadata: PASS
+  pinned_tools_and_dependency_closure: PASS
+  real_tool_unit_cases: PASS
+  same_map_differential_placement_and_crush: PASS
+  synthetic_integration_repeated_replays: PASS
+  first_run_failure_stability_review: OPEN
+  database_guard_no_libpq_destination_override: PASS
+  overall_promotion: NOT_PASSED
+  live_cluster_destination_acceptance: PARTIAL_LOCAL_LAB_SMOKE_NOT_FULL_SITE_ACCEPTANCE
+  docker_hub_publish: NOT_RUN
+  localhost_update: PASS_LAB_ONLY
+deployment:
+  localhost_8080: deployed_local_lab_5.1.1_preview_2_with_minimal_preview_2
+  changed_on: "2026-10-13"
+  configuration_path: ../local-images.preview.json
+  local_deployment_manifest: 5.1.1-preview.2.yaml
+  docker_hub: unchanged_5.1.0_rc_1
+  production_test_8443: unchanged
+  ceph_mutations: none

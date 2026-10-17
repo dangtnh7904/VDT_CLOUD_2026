@@ -56,6 +56,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cho clus
 
 **Activation/mixed phase.** Binary ceph-volume nào được cephadm gọi quyết định behavior; OSD data format không tự đổi. Sai bind mount, executable path hoặc host/container namespace có thể làm inventory trống/sai, activation thất bại hoặc — ở provisioning path — thao tác nhầm LVM metadata.
 
+**Activation mode và rollback boundary.** Host-namespace wrapper được dùng automatic khi target `ceph-volume` gọi LVM; inventory là read-only, còn prepare/zap/provision vẫn là explicit action. Chạy inventory target không dịch rollback boundary. Nếu target wrapper đã thực hiện LVM mutation, hạ package không hoàn nguyên PV/VG/LV metadata; phải dừng reconciliation và dùng snapshot/backup LVM metadata hoặc runbook rollback của chính operation.
+
 **Kiểm chứng.** Trên mỗi kiểu host, chạy read-only inventory/list từ đúng cephadm context và đối chiếu host `lsblk -f`, `pvs`, `vgs`, `lvs`, LV tags và symlink. Stop rollout nếu cùng thiết bị có identity/availability khác giữa host và container.
 
 **Đánh giá.** Rủi ro **cao khi containerized**, confidence **high**. Không có runtime test trên host đích trong báo cáo này.
@@ -67,6 +69,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cho clus
 **Endpoint/history nuance.** Refactor `5fc104acb007c8eaa4be350031da61be2c695bda` gom inventory calls nhưng làm `_get_bluestore_info()` bị gọi theo cấp số nhân ở một trạng thái trung gian; `d322bb891dbaf420dd1d1d32d4ce3e8582bd715b` sửa trước endpoint. Tương tự, generic activation được thêm rồi sửa argument mismatch bởi `6beba5055c4a4befd94afd446eacec54e8448beb`. Vì vậy target không mang hai regression đó, còn base chưa có chính feature/refactor gây regression.
 
 **Tác động upgrade.** OSD đang chạy không bị activate lại chỉ vì package/image đổi; edge xuất hiện ở restart/redeploy/host reboot. Raw OSD có separate DB/WAL, LVM tag không hoàn chỉnh hoặc legacy simple deployment là các nhánh cần test riêng.
+
+**Applicability, mixed/full và rollback boundary.** Finding áp dụng theo từng layout raw, LVM hoặc legacy simple hiện có; layout không tồn tại phải được chứng minh bằng As-Is, không suy từ orchestrator mode. Trong mixed phase, mỗi host dùng activation code của artifact ceph-volume được gọi; sau full target, mọi restart đi qua fallback/order mới. Activation không migrate format, nên có thể failback package khi OSD đã dừng sạch, nhưng symlink/device mapping đã sửa thủ công phải được restore từ snapshot và xác nhận FSID trước khi start base.
 
 **Kiểm chứng.** Chụp OSD ID/FSID, objectstore, block/DB/WAL device và symlink trước restart. Canary một OSD cho mỗi layout; sau start xác nhận đúng device identity, systemd/container state, BlueStore mount và client I/O. Đo thời gian inventory/activation nhưng không áp số benchmark trong commit cho hardware đích.
 
@@ -80,6 +84,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cho clus
 
 **Activation/mixed phase.** Inventory read-only không đổi disk, nhưng cephadm drive-group và operator automation có thể dùng chính output đó để chọn candidate. Một device đổi classification giữa active MGR/ceph-volume versions có thể làm plan tạo OSD khác nhau.
 
+**Activation mode, unresolved và rollback boundary.** Khác biệt xuất hiện automatic khi target inventory chạy; mutation chỉ xảy ra khi automation explicit dùng kết quả để apply drive-group hoặc provisioning. Inventory tự nó không cần rollback, nhưng plan đã apply không thể đảo bằng hạ binary. Unresolved evidence là topology thật, stable serial/WWN, multipath policy và spec reconciliation state; vì vậy phải lưu cả output base/target và chặn apply cho tới khi candidate delta được review.
+
 **Kiểm chứng.** Export inventory JSON ở base và target trên host có NVMe/SATA, partition, multipath, symlink/by-id và LVM. Diff theo stable identity, không chỉ `/dev/sdX`; mọi candidate mới phải được operator xác nhận trước apply. Theo dõi runtime và số subprocess trên host nhiều device nếu maintenance window nhạy cảm.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo topology/automation**, confidence **high**.
@@ -92,6 +98,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cho clus
 
 **Ranh giới an toàn.** `zap --destroy`, prepare và rollback có side effect không thể xem là validation read-only. Vì discovery semantics đổi theo CVOL-003, một automation dựa trên `available=true` mà không pin device ID là rủi ro lớn hơn bản thân code fix.
 
+**Impact.** Impact category là data safety và availability: target harden failure cleanup nhưng một plan sai vẫn có thể xóa partition/LVM metadata hoặc làm OSD không activate. Correctness của guard không biến thao tác destructive thành an toàn mặc định; last reversible point là trước prepare/zap khi device backup và allowlist còn nguyên.
+
 **Kiểm chứng.** Trước rollout đóng băng thay đổi OSD spec nếu không cần thiết. Trong lab, chạy batch report/dry-run với cùng inventory, so số OSD, data/DB/WAL allocation và VG free extents; thử failure rollback trên disposable devices. Production chỉ apply sau review allowlist theo serial/WWN.
 
 **Đánh giá.** Rủi ro **cao khi provisioning/zap được kích hoạt**, confidence **high**.
@@ -103,6 +111,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cho clus
 **Contract endpoint.** Code kiểm tra OSD đã dừng bằng systemd trừ khi operator chủ động dùng `--no-systemd`; target phải là LV; source/target type phải khớp rule. Nó cập nhật tags, gọi `ceph-bluestore-tool`, dọn source DB/WAL trên success và cố `undo()` tags trên exception.
 
 **Tác động/rollback.** Đây là mutation BlueFS placement và LVM metadata, không phải bước tự động của nâng 16.2.5→16.2.15. Undo tag không chứng minh mọi partial write/device mutation của tool đã được đảo ngược; package downgrade cũng không hoàn tác device layout.
+
+**Mixed/full-version và unresolved.** Phiên bản tool trên host điều khiển workflow; không có protocol mixed-version giữa OSD khác. OSD đang migrate phải dừng và chỉ được trả lại cohort sau khi target mount/check đạt, còn trạng thái full fleet không làm partial migration tự hội tụ. Unresolved là layout DB/WAL thật, free extents, encryption, khả năng snapshot và hành vi sau interruption tại từng bước; các dữ liệu này phải được capture trước khi change được coi là applicable.
 
 **Kiểm chứng.** Tách change riêng sau khi cluster ổn định. Chụp LV tags, symlink, BlueFS device labels/usage và backup/DR prerequisite; stop đúng OSD, chạy trên canary, rồi activate, kiểm tra mount, DB/WAL mapping, spillover/space và scrub/workload. Stop condition là tool non-zero, tag/symlink lệch hoặc OSD không mount; không thử lại mù trước khi kiểm tra state.
 
@@ -119,6 +129,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cho clus
 **Kiểm chứng.** Inventory OSD encrypted, key-size setting, mapper/device mapping và key access trước rollout. Canary deactivate/activate; xác nhận mapper đóng/mở đúng, OSD I/O phục hồi và log không chứa secret. Không đưa raw log có key vào ticket; rotate credential theo security process nếu đã có lịch sử log exposure.
 
 **Đánh giá.** Rủi ro **cao khi dùng dm-crypt**, confidence **high**.
+
+**Rollback và evidence gap.** Endpoint `encryption.py` thêm `--key-size` cho cryptsetup format/open, chỉ nhận `256`/`512` và fallback `512`; KEK tạo bởi `create_dmcrypt_key()` là `128` byte random, không đồng nhất với LUKS volume-key size. Hạ ceph-volume không hoàn nguyên LUKS header hay DB/WAL mapping đã tạo/migrate. Với OSD hiện hữu chỉ restart, phải giữ lockbox/config-key access và header/device identity rồi rehearse base activation trên bản sao; với encrypted migration, ranh giới phục hồi theo CVOL-005 và backup mapping/header, không theo package version. Hunk `deactivate.py` dùng `dmcrypt_close(mapping=lv.lv_uuid, skip_path_check=True)` vì UUID không phải filesystem path, nên failback về base có thể lại để mapper mở. Chưa kiểm cryptsetup version, key retrieval và holder lifecycle thực trên host; stop nếu không truy được đúng key, mapper của sai device bị chọn hoặc migration chưa có restore path đã thử.
 
 ## 5. Trivial/support changes
 

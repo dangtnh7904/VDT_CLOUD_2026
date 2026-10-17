@@ -16,6 +16,8 @@ Owner này phụ trách ceph-volume, device discovery, LVM và activation. Ngu�
 
 **Kiểm chứng:** thu JSON inventory base theo từng host, nhất là mapper/partition/multipath; canary target image trên cùng host và đối chiếu path, `available`, LVM membership, device count. Quan sát `ceph orch device ls` và drive selection trước khi cho phép provisioning; không chạy zap hoặc tạo OSD trong bước so sánh. Test `test_lvm.py`, `test_device.py`, `test_disk.py` đã đọc ở mức hunk nhưng chưa chạy.
 
+**Activation và rollback:** filtering chạy tự động mỗi lần caller thực thi inventory target; `--list-all` là lựa chọn explicit. Hunk `Inventory.main/get_report` chỉ dựng report, không ghi LVM/partition, nên có thể chạy lại tool base để đối chiếu. Nhưng drive selection dùng report đó để provision là bước ghi riêng: sau prepare/create, đổi tool không hoàn nguyên OSD/device. Ranh giới để dừng là trước khi approve drivegroup; lưu cả JSON inventory, đường mapper chuẩn hóa và spec đã chọn để tránh retry provisioning trên một device chỉ bị lọc khỏi output.
+
 ### VOL-002 — Cleanup encrypted partition khi gọi zap
 
 **CSV:** `src/ceph-volume/ceph_volume/devices/lvm/zap.py`. `Zap.zap_partition()` trước đây tìm mapper holder qua `parent_device.sys_api['partitions'][devname]['holders']`; target dùng `device.sys_api['holders']` trực tiếp, rồi `dmcrypt_close()` trước unmount/wipe. Commit `90401ffd3ded129ad6085cb7a23635e2284fd624` và `956f9599010dc1f8ef7c639b16360280ddf08a96` liên quan đến holder/mapper handling.
@@ -24,11 +26,15 @@ Owner này phụ trách ceph-volume, device discovery, LVM và activation. Ngu�
 
 **Kiểm chứng:** chỉ trong lab với device disposable đã mã hóa, so sánh holder discovery/close behavior và error signal; không dùng device production. Ghi rõ quy trình recovery nếu OSD provisioning fail.
 
+**Activation và rollback:** `Zap.zap_partition()` chỉ chạy explicit trong zap/cleanup; code target lấy holders của partition rồi tìm mapper để đóng trước wipe. Snapshot partition/LVM, mapper identity và key material theo policy trước thao tác là ranh giới recovery. Sau unmount/wipe, downgrade ceph-volume không khôi phục dữ liệu hay mapper state; một holder list rỗng cũng không chứng minh device an toàn để xóa. Trong lab, stop ngay nếu còn holder đang dùng hoặc identity không khớp disposable device đã chọn.
+
 ### VOL-003 — Tox mặc định kiểm ít hơn ở một số mục
 
 **CSV:** `src/ceph-volume/tox.ini`. Base default envlist gồm `py36, py3, py3-flake8` và flake8 chạy toàn bộ rule mặc định; target bỏ `py36` và thêm `--select F,E9,W291`. Đây là hunk thay đổi **đường acceptance** nếu đội dùng `tox` mặc định làm gate trước rollout; không đổi runtime ceph-volume khi package đã chạy. Commit liên quan `1589b4799d30e67fbef6dd50e17b9443c1ceeb05` cùng các thay đổi tox trong range.
 
 **Điều kiện:** áp dụng khi lab/CI chạy default tox theo repo này; nếu gate dự án dùng lệnh khác thì không áp dụng. Không có mixed-daemon effect; chỉ thay đổi validation coverage của target source. **Evidence confidence:** high cho tox config, medium cho applicability vì chưa biết gate dự án. **Kiểm chứng:** ghi lệnh CI/lab thực tế, chạy test phù hợp cả Python runtime đã triển khai và rule lint dự án yêu cầu; không dùng pass của tox target làm bằng chứng đã kiểm py36.
+
+**Tác động và rollback:** impact là validation coverage: `skip_missing_interpreters=true` và envlist target không kiểm Python 3.6, còn `--select F,E9,W291` thu hẹp lint oracle. Không có mutation cluster; muốn hoàn nguyên coverage phải pin envlist/rule set explicit và rerun job trong clean environment. Giữ test inventory, interpreter version, skipped count và exit status; đổi tox file sau khi job đã PASS không bổ sung bằng chứng cho job cũ.
 
 ## Trivial changes
 

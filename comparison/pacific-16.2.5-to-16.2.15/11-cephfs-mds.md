@@ -61,6 +61,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cần x�
 
 **Mixed-version.** Active MDS version quyết định enforcement. Client base hoặc target đều có thể bị evict nếu không advance; reconnect behavior lại do client version quyết định.
 
+**Tác động, rollback và phần chưa biết.** Impact chính là availability của client bị evict để bảo vệ availability/durability của MDS khỏi chuyển read-only. Fix không tạo format mới nên có thể failback MDS sau khi rank/standby ổn định, nhưng hạ binary không hoàn tác blocklist/eviction đã commit hoặc khôi phục session cũ; client phải reconnect thành session mới. Chưa có phân bố encoded session size, client ID/version và threshold override của cluster đích, nên phải lấy As-Is trước khi đặt ngưỡng dừng.
+
 **Kiểm chứng.** Chụp `session ls`, client metadata/completed requests và perf counter trước rollout. Trong lab hạ threshold có kiểm soát, tạo non-advancing request, xác nhận `mdthresh_evicted`, client reconnect và MDS không read-only. Stop production rollout nếu eviction tăng bất thường, session churn hoặc client I/O không hồi phục.
 
 **Đánh giá.** Rủi ro **cao theo pathological client**, confidence **high**.
@@ -74,6 +76,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; applicability cần x�
 **Trước → sau.** Base có thể chặn promotion/upgrade hoặc gặp assertion trong một số FSMap cũ/standby-replay transition. Target chấp nhận các state hợp lệ hơn và phân loại damaged rank rõ hơn.
 
 **Mixed-version.** Monitor target quản lý FSMap transition; active/standby MDS version và compat set quyết định promotion. Việc có code compatibility không bảo đảm mọi thứ tự rollout đều an toàn.
+
+**Ranh giới rollback và phần chưa biết.** Trước promotion/failover, daemon binary còn có thể quay lại sau clean stop. Khi FSMap epoch đã promote/remove rank, đánh dấu damaged hoặc blocklist daemon, hạ phiên bản không dựng lại topology trước đó; rollback phải dùng sequence FSMap/MDS recovery đã diễn tập và snapshot MON state, không chỉnh epoch thủ công. Chưa biết rank topology, standby-replay assignment, compat set và damaged history thực tế; thiếu chúng thì không được coi transition là áp dụng an toàn.
 
 **Kiểm chứng.** Trước rollout xác nhận không có MDS pre-v16.2.5, không rank damaged, đủ standby và topology khớp plan. Canary failover một rank theo đúng orchestrator sequence; quan sát state `replay → resolve/reconnect → active`, client reconnect và FS health. Stop nếu rank vào `damaged`, compat không merge như dự kiến hoặc filesystem unavailable.
 
@@ -109,6 +113,8 @@ Target cũng sửa cap/session correctness: delayed flush cho dirty caps/snapcap
 
 **Giới hạn.** Đây là bằng chứng protocol negotiation, không phải tuyên bố mọi kernel/FUSE release đều tương thích. Các commit chặn retry/forward vượt 256 là guard cho pathological routing, không phải workload bình thường.
 
+**Activation/mixed và rollback.** Wire field được chọn tự động khi session mở/refresh và feature được negotiate; không có config opt-in hoặc on-disk migration. Trong mixed window, từng cặp client↔MDS quyết định behavior. Có thể failback binary sau khi quiesce workload, flush dirty caps/unsafe requests và buộc reconnect sạch; hạ binary không hoàn tác metadata operation đã commit và không cứu dirty client state chưa flush, nên checkpoint cuối là clean unmount/session close đã xác minh.
+
 **Kiểm chứng.** Lập matrix kernel mount, ceph-fuse và libcephfs thực tế; kiểm base client ↔ target MDS và target client ↔ base MDS qua reconnect/failover, fsync, cap revoke và clean unmount. Stop nếu session feature không refresh, request loop/hang, dirty data không flush hoặc cap revoke không hoàn tất.
 
 **Đánh giá.** Rủi ro **trung bình-cao trong mixed-client window**, confidence **high**.
@@ -120,6 +126,8 @@ Target cũng sửa cap/session correctness: delayed flush cho dirty caps/snapcap
 **Trước → sau.** Trong deployment đúng điều kiện, base 16.2.5 có thể discover legacy subvolume sai và Manila user nhận CephX path restriction không đúng, cho phép truy cập phần khác của hierarchy. Target sửa discovery/metadata validation.
 
 **Security boundary.** Nâng target không chứng minh key/caps đã cấp trước đây được thu hồi hoặc sửa. Advisory yêu cầu audit CephX keys. Không mở rộng kết luận sang NFS-Ganesha hoặc Manila dùng protocol khác nếu không có cùng native-CephFS path.
+
+**Activation và rollback.** Fix được thực thi khi volumes/Manila discovery hoặc import legacy subvolume chạy; chỉ cài/restart package không tự rotate/revoke key cũ. Auth cap/key do audit thay đổi là state bền vững trong MON: hạ binary không hoàn tác và tuyệt đối không được phục hồi cap rộng chỉ để rollback package. Trước remediation phải export auth inventory có kiểm soát; nếu ứng dụng mất quyền, sửa cap về scope tối thiểu đã duyệt rồi chạy lại negative test, không khôi phục credential dễ tổn thương.
 
 **Kiểm chứng/hành động.** Xác minh upgrade history và Manila share protocol. Nếu áp dụng, inventory auth entities do Manila tạo, so `allow rw path=...` với subvolume path canonical, rotate/revoke key sai theo runbook và chạy negative mount/read/write ngoài subvolume. Stop rollout/GO nếu còn key không map được owner/path hoặc negative access thành công.
 
@@ -133,6 +141,8 @@ Target cũng sửa cap/session correctness: delayed flush cho dirty caps/snapcap
 
 **Activation/mixed-version.** MGR active chạy volumes module quyết định code path. Failover MGR giữa base/target trong lúc clone/purge là trạng thái cần kiểm, nhưng report không chứng minh operation đang chạy có thể migrate giữa versions mà không retry.
 
+**Tác động và rollback.** Impact gồm availability của hàng đợi clone/purge, correctness của index/metadata và capacity khi job tiếp tục copy trong OSD-full. Không có schema migration được chứng minh, nên có thể failback MGR sau khi drain/stop job; nhưng clone data, index cleanup và metadata đã commit không được package downgrade hoàn tác. Mốc reversible là trước operation; sau đó dùng status/index và change-specific cleanup đã diễn tập, không xóa đích/source theo suy đoán.
+
 **Kiểm chứng.** Chọn disposable subvolume: clone, cancel ở nhiều timing, xóa source snapshot, failover active MGR và xác nhận job/index hội tụ; kiểm quota, snapshot retain và data checksum. OSD-full/force removal chỉ chạy trong lab. Stop nếu job treo, stale index tái xuất hiện, cancel vẫn copy hoặc metadata state không nhất quán.
 
 **Đánh giá.** Rủi ro **cao theo volumes workflow**, confidence **high**.
@@ -144,6 +154,8 @@ Target cũng sửa cap/session correctness: delayed flush cho dirty caps/snapcap
 **Trước → sau.** Base có thể tạo invalid export, giữ stale caps hoặc restart daemon cho nhiều update. Target validate path và update có chọn lọc hơn.
 
 **Security/availability boundary.** Dynamic RO không đồng nghĩa CephX key đổi sang read-only; path restriction vẫn ở CephX, còn RO do Ganesha request layer. Vì vậy phải kiểm cả hai. Existing export chỉ đổi khi operation/import/apply tương ứng chạy; không tuyên bố cài binary tự rewrite mọi export.
+
+**Mixed/full và rollback.** MGR active version quyết định validate/apply, còn từng Ganesha instance tiêu thụ config object và enforce RO; trong mixed rollout phải pin update vào target MGR rồi xác nhận tất cả daemon đã reload trước khi coi là full. Backup config RADOS object và auth-cap inventory trước apply là ranh giới rollback. Hạ package không undo export/cap đã ghi; muốn quay lại phải apply lại cấu hình cũ đã review rồi lặp negative access test, không chỉ restart Ganesha.
 
 **Kiểm chứng.** Export inventory gồm pseudo, backend path, FSAL user, access type và config RADOS object. Trên canary tạo invalid path (phải fail), đổi RW→RO, kiểm negative write qua NFS, kiểm direct CephX path scope và session continuity/reload. Stop nếu caps rộng hơn path, write qua RO thành công hoặc update gây outage ngoài dự kiến.
 
@@ -160,6 +172,8 @@ Target cũng sửa cap/session correctness: delayed flush cho dirty caps/snapcap
 **Kiểm chứng.** Chụp peers, directory assignment, last synced snapshot và daemon perf/status; blocklist/restart canary trong lab, xác nhận chỉ một active replayer cho directory, lag hội tụ và data/mode/snapshot parity ở remote. Stop nếu duplicate replayer, failed instance không restart hoặc permission/data mismatch.
 
 **Đánh giá.** Rủi ro **cao nếu mirroring bật**, confidence **medium-high**.
+
+**Tác động và rollback boundary.** Availability phụ thuộc restart recovery không chạy trùng; correctness/permission parity phụ thuộc bước `PeerReplayer::sync_perms()` thực sự `ceph_chmod()` remote root trước `sync_snaps()`. Nếu chmod thất bại, target tăng failed count và chưa sync snapshots của lần đó; không nên coi lag tăng là thành công vì daemon vẫn sống. Quyền remote đã sửa là persistent filesystem metadata và không tự quay lại khi hạ cephfs-mirror. Chụp mode của remote root, last synced snapshot, directory lock/assignment và peer status trước canary; trước failback phải dừng replayer target và chứng minh chỉ một instance có quyền xử lý directory. Sau đó kiểm base nối lại từ snapshot đã đồng bộ cùng data/mode parity; nếu phải phục hồi mode thì đó là metadata change riêng có oracle và owner, không phải tác dụng của binary rollback. Chưa có rehearsal failback, và finding này không thay thế các MDS journal/metadata compatibility gate của cluster nguồn/đích.
 
 ## 5. Trivial/support changes
 

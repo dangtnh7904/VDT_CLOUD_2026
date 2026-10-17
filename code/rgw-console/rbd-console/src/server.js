@@ -9,137 +9,174 @@ import "dotenv/config";
 import express from "express";
 import { timingSafeEqual } from "crypto";
 import { createServer } from "http";
+import { pathToFileURL } from "url";
 import { WebSocketServer } from "ws";
 import { connect, disconnect, status as sshStatus } from "./ssh.js";
 import { ExecutorError, publicError } from "./errors.js";
 import { SshExecutor, validateRequest } from "./executor.js";
 import { attachTerminal } from "./terminal.js";
 
-const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
-const server = createServer(app);
-const terminals = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+export function createExecutorServer({ executor = new SshExecutor(), getSshStatus = sshStatus, terminalHandler = attachTerminal } = {}) {
+  const app = express();
+  const server = createServer(app);
+  const terminals = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
-// --- Middleware ---
+  // --- Middleware ---
 
-app.use(express.json({ limit: "1mb" }));
-const executor = new SshExecutor();
+  app.use(express.json({ limit: "1mb" }));
 
-// Request ID
-app.use((req, _res, next) => {
-  req.requestId = `rbd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  next();
-});
-
-// --- Routes ---
-
-app.get("/healthz", (_req, res) => {
-  const ssh = sshStatus();
-  res.status(ssh.connected ? 200 : 503).json({ status: ssh.connected ? "ok" : "disconnected" });
-});
-
-function authenticate(req, _res, next) {
-  const configured = process.env.RBD_EXECUTOR_TOKEN || "";
-  const supplied = String(req.get("X-Executor-Token") || "");
-  const valid = configured.length >= 32 && supplied.length === configured.length
-    && timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
-  if (!valid) return next(new ExecutorError("EXECUTOR_AUTH_FAILED", "Executor authentication failed", { status: 401 }));
-  next();
-}
-
-function decodeFileContext(req) {
-  const encoded = String(req.get("X-RBD-Context") || "");
-  if (!encoded || encoded.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
-    throw new ExecutorError("INVALID_REQUEST", "RBD file context header is missing or invalid");
-  }
-  try {
-    const value = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid context");
-    return value;
-  } catch {
-    throw new ExecutorError("INVALID_REQUEST", "RBD file context header is not valid JSON");
-  }
-}
-
-app.get("/internal/v1/files/content", authenticate, async (req, res, next) => {
-  try {
-    const context = decodeFileContext(req);
-    await executor.downloadFile(context, res, async metadata => {
-      res.status(200);
-      res.set({
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(metadata.size),
-        "X-RBD-File-Path": Buffer.from(metadata.path).toString("base64url"),
-        "X-RBD-File-Mime": metadata.mime_type || "application/octet-stream",
-        "X-Content-Type-Options": "nosniff",
-      });
-      res.flushHeaders();
-    });
-  } catch (error) {
-    if (res.headersSent) return res.destroy(error);
-    next(error);
-  }
-});
-
-app.put("/internal/v1/files/content", authenticate, async (req, res, next) => {
-  try {
-    const context = decodeFileContext(req);
-    const expectedBytes = Number(req.get("Content-Length"));
-    if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) throw new ExecutorError("INVALID_LENGTH", "Content-Length is required for file uploads", { status: 411 });
-    const result = await executor.uploadFile(context, req, expectedBytes);
-    res.json({ version: 1, ok: true, result });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/internal/v1/execute", authenticate, async (req, res, next) => {
-  let requestId = null;
-  try {
-    const request = validateRequest(req.body);
-    requestId = request.request_id;
-    req.executorRequestId = requestId;
-    const result = await executor.dispatch(request.action, request.params);
-    res.json({ version: 1, request_id: requestId, ok: true, result });
-  } catch (error) {
-    if (error instanceof ExecutorError) {
-      return res.status(error.status || 400).json({ version: 1, request_id: requestId, ok: false, error: publicError(error) });
-    }
-    next(error);
-  }
-});
-
-// --- Error handler ---
-
-app.use((err, req, res, _next) => {
-  const status = err.status || 500;
-  const visible = publicError(err);
-  const message = visible.message;
-  console.error(`[${req.requestId}] ${req.method} ${req.path} → ${status}: ${message}`);
-  if (req.path === "/internal/v1/execute") {
-    return res.status(status).json({
-      version: 1,
-      request_id: req.executorRequestId || null,
-      ok: false,
-      error: visible,
-    });
-  }
-  res.status(status).json({
-    error: message,
-    code: visible.code,
-    retryable: visible.retryable,
-    request_id: req.requestId,
+  // Request ID
+  app.use((req, _res, next) => {
+    req.requestId = `rbd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    next();
   });
-});
 
-// 404
-app.use((_req, res) => {
-  res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
-});
+  // --- Routes ---
+
+  app.get("/healthz", (_req, res) => {
+    const ssh = getSshStatus();
+    res.status(ssh.connected ? 200 : 503).json({ status: ssh.connected ? "ok" : "disconnected", read_only: executor.readOnly });
+  });
+
+  function authenticate(req, _res, next) {
+    const canonical = process.env.CEPH_EXECUTOR_TOKEN || "";
+    const legacy = process.env.RBD_EXECUTOR_TOKEN || "";
+    if (canonical && legacy && canonical !== legacy) {
+      return next(new ExecutorError("EXECUTOR_NOT_CONFIGURED", "Canonical and legacy executor tokens disagree", { status: 503 }));
+    }
+    const configured = canonical || legacy;
+    const supplied = String(req.get("X-Executor-Token") || "");
+    const valid = configured.length >= 32 && supplied.length === configured.length
+      && timingSafeEqual(Buffer.from(supplied), Buffer.from(configured));
+    if (!valid) return next(new ExecutorError("EXECUTOR_AUTH_FAILED", "Executor authentication failed", { status: 401 }));
+    next();
+  }
+
+  function decodeFileContext(req) {
+    const encoded = String(req.get("X-RBD-Context") || "");
+    if (!encoded || encoded.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+      throw new ExecutorError("INVALID_REQUEST", "RBD file context header is missing or invalid");
+    }
+    try {
+      const value = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid context");
+      return value;
+    } catch {
+      throw new ExecutorError("INVALID_REQUEST", "RBD file context header is not valid JSON");
+    }
+  }
+
+  app.get("/internal/v1/files/content", authenticate, async (req, res, next) => {
+    try {
+      executor.assertActionAllowed("rbd.files.download");
+      const context = decodeFileContext(req);
+      await executor.downloadFile(context, res, async metadata => {
+        res.status(200);
+        res.set({
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(metadata.size),
+          "X-RBD-File-Path": Buffer.from(metadata.path).toString("base64url"),
+          "X-RBD-File-Mime": metadata.mime_type || "application/octet-stream",
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.flushHeaders();
+      });
+    } catch (error) {
+      if (res.headersSent) return res.destroy(error);
+      next(error);
+    }
+  });
+
+  app.put("/internal/v1/files/content", authenticate, async (req, res, next) => {
+    try {
+      executor.assertActionAllowed("rbd.files.upload");
+      const context = decodeFileContext(req);
+      const expectedBytes = Number(req.get("Content-Length"));
+      if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) throw new ExecutorError("INVALID_LENGTH", "Content-Length is required for file uploads", { status: 411 });
+      const result = await executor.uploadFile(context, req, expectedBytes);
+      res.json({ version: 1, ok: true, result });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/internal/v1/execute", authenticate, async (req, res, next) => {
+    let requestId = null;
+    try {
+      const request = validateRequest(req.body);
+      requestId = request.request_id;
+      req.executorRequestId = requestId;
+      const result = await executor.dispatch(request.action, request.params);
+      res.json({ version: 1, request_id: requestId, ok: true, result });
+    } catch (error) {
+      if (error instanceof ExecutorError) {
+        return res.status(error.status || 400).json({ version: 1, request_id: requestId, ok: false, error: publicError(error) });
+      }
+      next(error);
+    }
+  });
+
+  // --- Error handler ---
+
+  app.use((err, req, res, _next) => {
+    const status = err.status || 500;
+    const visible = publicError(err);
+    const message = visible.message;
+    console.error(`[${req.requestId}] ${req.method} ${req.path} → ${status}: ${message}`);
+    if (req.path === "/internal/v1/execute") {
+      return res.status(status).json({
+        version: 1,
+        request_id: req.executorRequestId || null,
+        ok: false,
+        error: visible,
+      });
+    }
+    res.status(status).json({
+      error: message,
+      code: visible.code,
+      retryable: visible.retryable,
+      request_id: req.requestId,
+    });
+  });
+
+  // 404
+  app.use((_req, res) => {
+    res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+  });
+
+  server.on("upgrade", (request, socket, head) => {
+    let url;
+    try { url = new URL(request.url || "", "http://executor.internal"); }
+    catch { socket.destroy(); return; }
+    if (url.pathname !== "/ws/terminal") { socket.destroy(); return; }
+    const ticket = url.searchParams.get("ticket") || "";
+    let context;
+    try {
+      executor.assertActionAllowed("rbd.terminal.ticket.create");
+      if (!/^[A-Za-z0-9_-]{32,128}$/.test(ticket)) throw new Error("invalid ticket");
+      context = executor.consumeTerminalTicket(ticket);
+    } catch (error) {
+      const status = error?.code === "CONSOLE_READ_ONLY" ? "403 Forbidden" : "401 Unauthorized";
+      socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
+      return;
+    }
+    terminals.handleUpgrade(request, socket, head, ws => {
+      terminalHandler({ ws, context, executor }).catch(error => {
+        console.error(`[terminal] ${error.code || "TERMINAL_OPEN_FAILED"}: ${error.message}`);
+        try { ws.close(1011, "Terminal could not be opened"); } catch { /* best effort */ }
+      });
+    });
+  });
+
+  return { app, server, executor };
+}
 
 // --- Startup ---
 
 async function start() {
+  // Construction validates the production policy before opening SSH/listeners.
+  const { server } = createExecutorServer();
   console.log("╔══════════════════════════════════════════╗");
   console.log("║       RBD Test Console (SSH mode)        ║");
   console.log("╚══════════════════════════════════════════╝");
@@ -148,6 +185,12 @@ async function start() {
   const host = process.env.RBD_HOST;
   if (!host) {
     console.error("[startup] RBD_HOST is required. Set it in .env");
+    process.exit(1);
+  }
+  const canonicalToken = process.env.CEPH_EXECUTOR_TOKEN || "";
+  const legacyToken = process.env.RBD_EXECUTOR_TOKEN || "";
+  if ((canonicalToken && legacyToken && canonicalToken !== legacyToken) || (canonicalToken || legacyToken).length < 32) {
+    console.error("[startup] A single executor token of at least 32 characters is required");
     process.exit(1);
   }
 
@@ -176,29 +219,6 @@ async function start() {
   });
 }
 
-server.on("upgrade", (request, socket, head) => {
-  let url;
-  try { url = new URL(request.url || "", "http://executor.internal"); }
-  catch { socket.destroy(); return; }
-  if (url.pathname !== "/ws/terminal") { socket.destroy(); return; }
-  const ticket = url.searchParams.get("ticket") || "";
-  let context;
-  try {
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(ticket)) throw new Error("invalid ticket");
-    context = executor.consumeTerminalTicket(ticket);
-  } catch {
-    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-  terminals.handleUpgrade(request, socket, head, ws => {
-    attachTerminal({ ws, context, executor }).catch(error => {
-      console.error(`[terminal] ${error.code || "TERMINAL_OPEN_FAILED"}: ${error.message}`);
-      try { ws.close(1011, "Terminal could not be opened"); } catch { /* best effort */ }
-    });
-  });
-});
-
 // Graceful shutdown
 process.on("SIGINT", () => {
   console.log("\n[shutdown] Closing SSH connection...");
@@ -211,7 +231,7 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
-start().catch((err) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) start().catch((err) => {
   console.error("[startup] Fatal:", err);
   process.exit(1);
 });

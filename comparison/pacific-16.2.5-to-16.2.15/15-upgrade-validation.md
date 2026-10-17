@@ -45,6 +45,8 @@ Không có đủ As-Is inventory hoặc execution evidence để đưa ra produc
 
 **Impact.** Security material, availability/observability conditional. Risk cao nếu service vẫn chạy root hoặc target không thể post crash; confidence `high` từ endpoint code và commit mapping. Không tìm thấy dedicated repository test cho privilege path và không có service runtime test nào được chạy.
 
+**Rollback boundary.** Thay đổi này không ghi persistent cluster format: rollback kỹ thuật là dừng target `ceph-crash`, khôi phục package/script base cùng account/path ownership đã snapshot, rồi xác nhận backlog vẫn đọc được. Tuy nhiên hạ binary tái mở hành vi chạy root và CVE đã vá, nên chỉ dùng như failback tạm thời có security approval; không xóa hoặc đổi quyền crash directory mù để ép service chạy.
+
 ### VAL-002 — Empty U64 semantics của `cls/cmpomap` thay đổi trong mixed phase
 
 **Evidence.** CSV rows `1189–1190`, `src/cls/cmpomap/{client.h,server.cc}`; symbols `compare_values_u64()`, `cmp_vals`, `cmp_set_vals`, `cmp_rm_keys`. Implementation và test cùng commit `01e4c1f3f96949d8ed55de9c49c138e3d8f1d808`; supporting rows `1047` và `2408`.
@@ -55,6 +57,8 @@ Không có đủ As-Is inventory hoặc execution evidence để đưa ra produc
 
 **Applicability.** Chỉ khi workload trực tiếp/gián tiếp dùng `cls/cmpomap` U64 comparisons trên empty omap values. Behavior tự đổi khi OSD target phục vụ request; không có operator migration. Risk correctness trung bình theo điều kiện, confidence `high`. Repository tests đã đọc nhưng chưa chạy.
 
+**Rollback boundary.** Không có encoding migration và empty value không bị rewrite bởi fix. Hạ OSD về base sẽ khôi phục semantics cũ, nhưng kết quả lại phụ thuộc OSD/primary phục vụ request; vì vậy phải dừng workload `cmpomap` liên quan, pin primary/cohort và kiểm result trước khi tiếp tục. Package rollback không thể làm hai semantics đồng nhất khi fleet còn mixed.
+
 ### VAL-003 — IPv6 MON address của mount helper
 
 **Evidence.** CSV row `1526`, `src/mount/conf.cc`, `mount_ceph_get_config_info()`; commit `766edcc66e43ed1658afd823aaa4d24950f0e0bf`.
@@ -62,6 +66,8 @@ Không có đủ As-Is inventory hoặc execution evidence để đưa ra produc
 **Trước → sau.** Base ghép `ip_only_to_str() + ':' + port`, có thể tạo chuỗi IPv6 không có brackets. Target gọi `ip_n_port_to_str()`, tạo dạng `[IPv6]:port` phù hợp cho mount helper.
 
 **Activation/mixed version.** Chỉ client host dùng target `mount.ceph` thay đổi; daemon rolling order không kích hoạt. IPv4 và deployment không dùng MON IPv6 không áp dụng. Risk continuity trung bình cho client IPv6, confidence `high`; commit không thêm test riêng cho mount helper và chưa có canary mount được chạy.
+
+**Activation mode, impact và rollback.** Behavior đổi tự động khi target mount helper được gọi; không cần config, feature gate hay migration. Impact category là client compatibility/availability ở lần mount hoặc reconnect. Rollback nằm hoàn toàn trên client: unmount có kiểm soát, khôi phục helper base và mount lại bằng MON address đã xác nhận; không đổi cluster state, nhưng không được hạ helper giữa một mount đang active.
 
 ### VAL-004 — Target CLI parser chấp nhận address/named-argument forms mới
 
@@ -71,6 +77,8 @@ Không có đủ As-Is inventory hoặc execution evidence để đưa ra produc
 
 **Activation/mixed version.** Operator/automation gọi target `ceph` CLI với range blocklist/msgr address hoặc reordered named args mới thấy khác biệt. Client base có thể reject cùng input trước khi gửi request. Risk thấp nhưng cần giữ CLI version nhất quán trong automation; confidence `high`. Relevant unit expectations đã đọc, không chạy.
 
+**Activation mode, impact và rollback.** Đây là thay đổi automatic của local parser khi target CLI process chạy, không cần daemon restart hay persistent migration. Impact category là operator compatibility và validation correctness: automation có thể pass/fail khác nhau trước khi request tới cluster. Rollback là pin lại CLI base cùng cú pháp base-compatible; mọi command đã gửi thành công phải được kiểm riêng vì hạ CLI không đảo ngược cluster mutation đã thực hiện.
+
 ### VAL-005 — `ceph-dencoder` cần binary/plugin package đồng bộ
 
 **Evidence.** CSV rows `2552–2562`; `load_plugins()`, `DencoderPlugin`, `DencoderRegistry`, `register_dencoders()`. Core commits gồm `8da660fe8ae15da3ed873af517358c76f298c417`, `796e990aae7a4e610e845ced2ad9bfdb50b18de2`, `33c110fadc64f16589c066595df78b08da5381ff`, `87feb5734b24ab0177481a7ef9ab7c8666c4ebd7`. Build/package owner được phân tích tại [`BLD-006`](./13-build-packaging-submodules.md).
@@ -78,6 +86,8 @@ Không có đủ As-Is inventory hoặc execution evidence để đưa ra produc
 **Trước → sau.** Base đăng ký types tĩnh trong monolithic executable. Target quét `CEPH_INSTALL_PKGLIBDIR/denc` (hoặc `CEPH_LIB`/dev `lib`) và `dlopen()` các `denc-mod-*` modules. Thiếu hoặc version-skewed module có thể làm `list_types` thiếu type hoặc decode báo unknown, dù daemon production không bị tác động.
 
 **Activation.** Chỉ khi dùng `ceph-dencoder` cho offline validation/recovery/debug. Upgrade package phải giữ executable và plugin set cùng target build; không có cluster migration/restart dependency. Risk tooling trung bình theo điều kiện, confidence `high`; chưa chạy package smoke test.
+
+**Mixed/full-version và rollback boundary.** Trên host có binary target nhưng plugin base, hoặc ngược lại, tool có thể thiếu type dù cluster daemon vẫn khỏe; full target chỉ ổn khi executable và toàn bộ `denc-mod-*` cùng build. Rollback phải thay cả binary và plugin directory như một package set, không copy riêng executable. Decode là read-only, nhưng output/corpus sinh trong trạng thái version-skew không được dùng làm recovery evidence cho tới khi chạy lại bằng set đồng bộ.
 
 ### VAL-006 — Pacific p2p là recipe đúng base nhưng có intentional coverage gaps
 
@@ -87,11 +97,19 @@ Không có đủ As-Is inventory hoặc execution evidence để đưa ra produc
 
 **Evidence boundary.** Repository chỉ chứa recipe; không có artifact chứng minh suite đã chạy trên target SHA, pass rate, logs hoặc failure triage. Vì vậy các rows là `support`, không phải `material` runtime evidence.
 
+**Applicability, activation và impact.** Finding chỉ áp dụng khi Pacific p2p được chọn làm acceptance harness. Nó được kích hoạt explicit bởi test scheduler, không tự tác động cluster production. Trong mixed/full-version, recipe mô tả một chuỗi có intermediate `v16.2.7`, nên không chứng minh direct `v16.2.5→v16.2.15`; impact category là validation coverage và false confidence, không phải runtime defect.
+
+**Confidence, unresolved và rollback boundary.** Confidence `high` cho topology/filter đọc từ target tree; unresolved là exact artifact, result và replacement case cho từng exclusion. Job phải chạy trên disposable clone có snapshot; rollback là abort job và restore fixture checkpoint. Recipe không cung cấp bằng chứng rollback production và không được dùng để vượt qua gate đó.
+
 ### VAL-007 — Legacy upgrade suites chỉ là evidence gián tiếp
 
 **Evidence.** CSV rows `915–936` gồm Nautilus→Pacific và Octopus→Pacific recipes. Commit `446a4ef6d446ee611435249006600dfaf6009571` pin Ragweed prepare/check về branch của starting release (`ceph-nautilus` hoặc `ceph-octopus`) thay vì vô tình dùng `ceph-pacific`. Upgrade sequences cũng đổi từ `wait-for-healthy` sang `wait-for-osds-up` quanh OSD/RGW restarts.
 
 **Applicability.** Các recipes hữu ích để thiết kế legacy-client/RGW workload và restart observation, nhưng starting endpoint khác `v16.2.5`; pass ở đó không chứng minh `v16.2.5→v16.2.15`. Ragweed branch correction cải thiện fidelity của suite, không phải runtime RGW fix. Dùng các suites này làm supporting scenarios, còn acceptance hiện tại phải dựa trên Pacific p2p/canary đúng endpoints.
+
+**Mixed/full-version, impact và confidence.** Các suite này quan sát mixed/full upgrade từ Nautilus hoặc Octopus, không quan sát mixed cohort có base `v16.2.5`. Impact category là evidence applicability: dùng nhầm result có thể tạo false PASS. Confidence `high` về mismatch của starting endpoint; unresolved là estate thực có legacy-origin data/client nào cần scenario bổ trợ.
+
+**Rollback boundary.** Suite legacy chỉ được chạy trên disposable clone và có thể rollback bằng fixture snapshot. Nó không chứng minh package/store/control-state rollback cho hop hiện tại; mọi result phải được gắn nhãn supporting và không được dùng thay rehearsal `v16.2.15→v16.2.5`.
 
 ### VAL-008 — Release-note text phải được đối chiếu theo hunk, version và endpoint code
 
@@ -104,6 +122,10 @@ Ba rule áp dụng:
 3. RGW secure-MON defaults là delta thật: `5943bb5a94bb37429bf3c1bb9f15d69ad636002d` đặt `ms_mon_client_mode=secure`; `77d704ab057c35e26004fe0a09386054da5235a4` đặt `auth_client_required=cephx` và thêm release-note hunk. Runtime code thuộc owner `12`, được phân tích tại [`RGW-007`](./12-rgw.md). Activation là **RGW process restart**, không phải lúc đọc/apply release notes; trong mixed phase RGW base/target có thể khác MON-auth defaults.
 
 Các notice `>=16.2.x` khác chỉ là candidate index tới owner reports; endpoint diff/commit/test ở owner đó mới là evidence quyết định.
+
+**Confidence.** Confidence `high` cho ba rule trên vì blame, endpoint code và owner finding cùng khớp. Confidence của các notice còn lại chưa được promote giữ ở mức `medium` cho tới khi từng claim có hunk, commit và test tại đúng endpoint; release-note wording một mình không nâng confidence hoặc tạo blocker.
+
+**Tác động và rollback boundary.** Impact là độ đúng của acceptance/rollback plan: nếu lấy notice `>=17.0.0` hoặc text đã có ở base làm delta Pacific, runbook có thể yêu cầu thao tác ngoài scope; nếu bỏ notice secure-MON đúng range thì canary RGW có thể bị chặn authentication ngoài kế hoạch. Release-note file không tự ghi cluster state. Sửa hay quay lại văn bản checklist chỉ sửa quyết định; không đảo thao tác config/migration mà operator đã thực hiện theo nó. Mỗi action đã thực hiện cần trace tới owner finding, snapshot và restore gate của action đó — đặc biệt RGW-007 cho config/auth defaults và các migration owner khác. Validation hồ sơ phải chứng minh mỗi notice được dùng có endpoint hunk/commit và đúng phase/consumer; stop nếu action chưa có owner hoặc restore evidence. Các runtime scenarios chưa chạy, nên việc sửa release-note mapping không đóng production gate.
 
 ## 4. Validation matrix đề xuất
 

@@ -1,3 +1,5 @@
+> **Tài liệu nghiên cứu/lịch sử — 09/10/2026:** quyết định triển khai và lộ trình hiện hành nằm ở [README](README.md) và [plan tổng PA2](plan-tổng.md). Nội dung PA1, H0, phương án so sánh hoặc target tương lai bên dưới không phải backlog/gate đang dùng; giữ để đối chiếu nguồn.
+
 **BÁO CÁO NGHIÊN CỨU**
 
 **PHÂN TÍCH NÂNG CẤP CEPH

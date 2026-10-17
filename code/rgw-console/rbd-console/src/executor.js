@@ -10,8 +10,12 @@ import {
 
 export const PROTOCOL_VERSION = 1;
 export const INVENTORY_ACTIONS = new Set([
+  "ceph.fs_dump",
+  "ceph.osd_dump", "ceph.daemon_ls", "ceph.crush_dump", "ceph.pg_dump",
   "ceph.status", "ceph.fsid", "ceph.versions", "ceph.osd_df", "ceph.osd_tree",
   "ceph.pool_ls_detail", "ceph.crush_rule_dump",
+  "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules",
+  "ceph.host_ls", "ceph.health_detail", "ceph.df",
 ]);
 export const RBD_READ_ACTIONS = new Set([
   "rbd.pool.list", "rbd.image.list", "rbd.image.info", "rbd.device.list",
@@ -25,23 +29,65 @@ export const RBD_FILE_ACTIONS = new Set([
 ]);
 export const TERMINAL_ACTIONS = new Set(["rbd.terminal.ticket.create"]);
 export const ALLOWED_ACTIONS = new Set([
-  "health", "capabilities", "ceph.capacity_inventory", ...INVENTORY_ACTIONS, ...RBD_READ_ACTIONS,
+  "ceph.client_environment",
+  "ceph.osdmap_preview_context",
+  "ceph.osd_map_export",
+  "health", "capabilities", "ceph.capacity_inventory", "ceph.osd_info_collect",
+  ...INVENTORY_ACTIONS, ...RBD_READ_ACTIONS,
   ...RBD_MUTATION_ACTIONS, ...RBD_FILE_ACTIONS, ...TERMINAL_ACTIONS,
 ]);
+// This profile deliberately excludes the RBD file/volume/shell surface, including
+// nominal RBD reads. Capacity's fixed aggregate still reads CRUSH rules internally.
+export const READ_ONLY_ACTIONS = new Set([
+  "ceph.fs_dump", "ceph.client_environment",
+  "ceph.osdmap_preview_context",
+  "ceph.osd_map_export", "ceph.osd_dump", "ceph.daemon_ls", "ceph.crush_dump", "ceph.pg_dump",
+  "health", "capabilities", "ceph.fsid", "ceph.status", "ceph.versions",
+  "ceph.osd_df", "ceph.osd_tree", "ceph.pool_ls_detail",
+  "ceph.capacity_inventory", "ceph.osd_info_collect",
+  "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules",
+  "ceph.host_ls", "ceph.health_detail", "ceph.df",
+]);
+
+export function executorPolicy(env = process.env) {
+  const raw = String(env.CONSOLE_READ_ONLY || "false").trim().toLowerCase();
+  ensure(["true", "false"].includes(raw), "EXECUTOR_NOT_CONFIGURED", "CONSOLE_READ_ONLY must be true or false", { status: 503 });
+  const readOnly = raw === "true";
+  if (String(env.APP_ENV || "lab").trim().toLowerCase() === "production") {
+    ensure(readOnly, "EXECUTOR_NOT_CONFIGURED", "Production executor requires CONSOLE_READ_ONLY=true", { status: 503 });
+    for (const flag of ["UPGRADE_MUTATIONS_ENABLED", "RBD_TERMINAL_ENABLED"]) {
+      ensure(!["true", "1", "yes", "on"].includes(String(env[flag] || "false").trim().toLowerCase()), "EXECUTOR_NOT_CONFIGURED", `Production executor requires ${flag}=false`, { status: 503 });
+    }
+  }
+  return { readOnly };
+}
 
 const INVENTORY_COMMANDS = {
+  "ceph.fs_dump": ["ceph", "fs", "dump", "--format=json"],
+  "ceph.osd_dump": ["ceph", "osd", "dump", "--format=json"],
+  "ceph.daemon_ls": ["ceph", "orch", "ps", "--refresh", "--format=json"],
+  "ceph.crush_dump": ["ceph", "osd", "crush", "dump", "--format=json"],
+  "ceph.pg_dump": ["ceph", "pg", "dump", "pgs_brief", "--format=json"],
   "ceph.status": ["ceph", "status", "--format=json"],
   "ceph.versions": ["ceph", "versions", "--format=json"],
   "ceph.osd_df": ["ceph", "osd", "df", "--format=json"],
   "ceph.osd_tree": ["ceph", "osd", "tree", "--format=json"],
   "ceph.pool_ls_detail": ["ceph", "osd", "pool", "ls", "detail", "--format=json"],
   "ceph.crush_rule_dump": ["ceph", "osd", "crush", "rule", "dump", "--format=json"],
+  "ceph.mon_dump": ["ceph", "mon", "dump", "--format=json"],
+  "ceph.quorum_status": ["ceph", "quorum_status", "--format=json"],
+  "ceph.mgr_dump": ["ceph", "mgr", "dump", "--format=json"],
+  "ceph.mgr_modules": ["ceph", "mgr", "module", "ls", "--format=json"],
+  "ceph.host_ls": ["ceph", "orch", "host", "ls", "--format=json"],
+  "ceph.health_detail": ["ceph", "health", "detail", "--format=json"],
+  "ceph.df": ["ceph", "df", "detail", "--format=json"],
 };
 
 const IDENTITY_FIELDS = ["pool", "namespace", "image_name"];
 const MUTATION_COMMON = ["volume_id", "action_id", "fence_token"];
 const FILE_IDENTITY = ["volume_id", ...IDENTITY_FIELDS, "image_id", "device_major", "device_minor", "fs_uuid"];
 const ACTION_FIELDS = {
+  "ceph.osd_info_collect": ["osd_ids"],
   "rbd.image.list": ["pool", "namespace"],
   "rbd.image.info": IDENTITY_FIELDS,
   "rbd.image.create": [...MUTATION_COMMON, ...IDENTITY_FIELDS, "size_bytes"],
@@ -78,6 +124,7 @@ function ensure(condition, code, message, options) {
 
 export class SshExecutor {
   constructor({ transport = ssh, store = new VolumeStateStore(), tickets = new TerminalTicketStore(), wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+    this.readOnly = executorPolicy().readOnly;
     this.transport = transport;
     this.store = store;
     this.files = new SftpFileService(transport);
@@ -89,25 +136,33 @@ export class SshExecutor {
     this.allowedPools = csvSet(process.env.RBD_ALLOWED_POOLS || process.env.RBD_POOL);
     this.allowedNamespaces = new Set([...csvSet(process.env.RBD_ALLOWED_NAMESPACES || "default")].map(item => item === "default" ? "" : item));
     this.imagePrefix = process.env.RBD_IMAGE_PREFIX || "lab-";
+    this.allowedOsds = new Set(
+      [...csvSet(process.env.UPGRADE_ALLOWED_OSDS)].map(item => item.replace(/^osd\./, "")),
+    );
+    this.osdInfoCollectorPath = String(
+      process.env.OSD_INFO_COLLECTOR_PATH || "/opt/storage-lab/collect_osd.py",
+    );
   }
 
   async dispatch(action, params = {}) {
     ensure(ALLOWED_ACTIONS.has(action), "ACTION_NOT_ALLOWED", "The requested executor action is not allowlisted", { status: 404 });
+    this.assertActionAllowed(action);
     this.validateParams(action, params);
     const fsid = await this.assertFsid();
+    ensure(validateUuid(fsid, "fsid").ok, "EXECUTOR_NOT_CONFIGURED", "CEPH_EXPECTED_FSID is required");
     const collectedAt = new Date().toISOString();
 
     if (action === "health") {
-      return { status: "ok", executor_version: "1.0.0", protocol_version: PROTOCOL_VERSION, fsid, collected_at: collectedAt };
+      return { status: "ok", executor_version: "1.1.0", protocol_version: PROTOCOL_VERSION, fsid, read_only: this.readOnly, collected_at: collectedAt };
     }
     if (action === "capabilities") {
       return {
-        executor_version: "1.0.0", protocol_version: PROTOCOL_VERSION, fsid,
-        actions: [...ALLOWED_ACTIONS].sort(), collected_at: collectedAt,
+        executor_version: "1.1.0", protocol_version: PROTOCOL_VERSION, fsid,
+        actions: [...(this.readOnly ? READ_ONLY_ACTIONS : ALLOWED_ACTIONS)].sort(), read_only: this.readOnly, collected_at: collectedAt,
         rbd_scope: {
           pools: [...this.allowedPools].sort(), namespaces: [...this.allowedNamespaces].sort(),
           image_prefixes: [this.imagePrefix], mount_root: this.mountRoot, filesystem: "ext4",
-          file_browser: true, terminal: true,
+          file_browser: !this.readOnly, terminal: !this.readOnly,
           preview_max_bytes: Number(process.env.RBD_FILE_PREVIEW_MAX_BYTES || 5 * 1024 * 1024),
           preview_mime: [...csvSet(process.env.RBD_ALLOWED_PREVIEW_MIME || "text/plain,text/markdown,text/yaml,text/csv,application/json,application/pdf,image/jpeg,image/png,image/gif,image/webp,image/svg+xml")].sort(),
           force_operations: false, lazy_unmount: false,
@@ -118,6 +173,38 @@ export class SshExecutor {
     let data;
     if (action === "ceph.fsid") data = { fsid };
     else if (action === "ceph.capacity_inventory") data = await this.capacityInventory();
+    else if (action === "ceph.osd_info_collect") data = await this.collectOsdInfo(params);
+    else if (action === "ceph.client_environment") {
+      ensure(this.osdInfoCollectorPath.startsWith("/") && !/\s/.test(this.osdInfoCollectorPath), "EXECUTOR_NOT_CONFIGURED", "Invalid collector path", { status: 503 });
+      const asSshUser = String(process.env.OSD_INFO_COLLECTOR_RUN_AS_SSH_USER || "false").toLowerCase();
+      ensure(["true", "false"].includes(asSshUser), "EXECUTOR_NOT_CONFIGURED", "Invalid collector execution mode", { status: 503 });
+      data = await this.runJson(["python3", this.osdInfoCollectorPath, "--environment-only", ...(asSshUser === "true" ? ["--sudo-ceph"] : []), "--timeout", "2"], action,
+        { sudo: false, timeout: 20000, maxOutputBytes: 1024 * 1024 });
+      ensure(data.kind === "CEPH_CLIENT_ENVIRONMENT" && data.scope === "SSH_CLIENT_HOST_ONLY", "INVALID_CEPH_OUTPUT", "Invalid environment evidence");
+      await this.assertFsid();
+    }
+    else if (action === "ceph.osdmap_preview_context") {
+      const monmap = await this.runJson(INVENTORY_COMMANDS["ceph.mon_dump"], "ceph.mon_dump");
+      const names = (monmap.mons || []).map(mon => mon.name);
+      ensure(names.length > 0 && names.length <= 32 && names.every(name => typeof name === "string" && /^[A-Za-z0-9_.-]{1,128}$/.test(name)), "INVALID_CEPH_OUTPUT", "MON identities are invalid");
+      const mons = await Promise.all(names.map(async name => {
+        const value = (await this.runText(["ceph", "config", "show", `mon.${name}`, "osd_crush_update_weight_set"], action)).trim();
+        ensure(["true", "false"].includes(value), "INVALID_CEPH_OUTPUT", "MON weight-set configuration is unavailable");
+        return { name, osd_crush_update_weight_set: value === "true" };
+      }));
+      const versions = await this.runJson(INVENTORY_COMMANDS["ceph.versions"], "ceph.versions");
+      await this.assertFsid();
+      data = { mons, mon_versions: versions.mon, observed_at: new Date().toISOString() };
+    }
+    else if (action === "ceph.osd_map_export") {
+      // Fixed read to stdout: no remote file, caller path or map mutation.
+      const result = await this.run(["ceph", "osd", "getmap", "-o", "/dev/stdout"], action,
+        { binary: true, maxOutputBytes: 16 * 1024 * 1024, timeout: 30000 });
+      ensure(Buffer.isBuffer(result.stdout) && result.stdout.length > 0, "INVALID_CEPH_OUTPUT", "Empty or non-binary OSDMap");
+      await this.assertFsid();
+      data = { encoding: "base64", map: result.stdout.toString("base64"), size_bytes: result.stdout.length,
+        sha256: createHash("sha256").update(result.stdout).digest("hex") };
+    }
     else if (INVENTORY_ACTIONS.has(action)) data = await this.runJson(INVENTORY_COMMANDS[action], action);
     else if (action === "rbd.pool.list") data = await this.poolList();
     else if (action === "rbd.image.list") data = await this.imageList(params);
@@ -128,6 +215,10 @@ export class SshExecutor {
     else if (action === "rbd.terminal.ticket.create") data = await this.issueTerminalTicket(params);
     else data = await this.store.withLock(params.volume_id, () => this.mutate(action, params));
     return { fsid, action, data, collected_at: collectedAt };
+  }
+
+  assertActionAllowed(action) {
+    ensure(!this.readOnly || READ_ONLY_ACTIONS.has(action), "CONSOLE_READ_ONLY", "This executor permits only Ceph inventory collection", { status: 403 });
   }
 
   validateParams(action, params) {
@@ -160,6 +251,14 @@ export class SshExecutor {
       ensure(Array.isArray(params.paths) && params.paths.length >= 1 && params.paths.length <= 100, "INVALID_REQUEST", "paths must contain 1 to 100 entries");
       params.paths.forEach(path => normalizeVolumePath(path));
     }
+    if (required.includes("osd_ids")) {
+      ensure(Array.isArray(params.osd_ids), "INVALID_REQUEST", "osd_ids must be an array");
+      ensure(params.osd_ids.length >= 1 && params.osd_ids.length <= 128, "INVALID_REQUEST", "osd_ids must contain 1 to 128 entries");
+      ensure(params.osd_ids.every(id => Number.isInteger(id) && id >= 0), "INVALID_REQUEST", "osd_ids must contain non-negative integers");
+      ensure(new Set(params.osd_ids).size === params.osd_ids.length, "INVALID_REQUEST", "osd_ids must be unique");
+      ensure(this.allowedOsds.size > 0, "SCOPE_NOT_ALLOWED", "UPGRADE_ALLOWED_OSDS is empty");
+      ensure(params.osd_ids.every(id => this.allowedOsds.has(String(id))), "SCOPE_NOT_ALLOWED", "one or more OSDs are outside UPGRADE_ALLOWED_OSDS");
+    }
   }
 
   async assertFsid() {
@@ -170,10 +269,13 @@ export class SshExecutor {
     return observed;
   }
 
-  async run(parts, action, { sudo = true, allowCodes = [0], timeout } = {}) {
+  async run(parts, action, { sudo = true, allowCodes = [0], timeout, maxOutputBytes, binary = false } = {}) {
+    // CRUSH rule reads are part of the fixed capacity aggregate, never a public
+    // production action. All other remote commands obey the active profile.
+    if (action !== "ceph.crush_rule_dump") this.assertActionAllowed(action);
     let result;
     try {
-      result = await this.transport.exec(safeCommand(parts), { sudo, timeout });
+      result = await this.transport.exec(safeCommand(parts), { sudo, timeout, maxOutputBytes, binary });
     } catch (error) {
       throw new ExecutorError(error?.code || "EXECUTOR_UNAVAILABLE", error?.message || "SSH executor is unavailable", { retryable: true, status: 503 });
     }
@@ -222,6 +324,32 @@ export class SshExecutor {
       pool_details: poolDetails,
       crush_rules: crushRules,
     };
+  }
+
+  async collectOsdInfo(params) {
+    ensure(
+      this.osdInfoCollectorPath.startsWith("/") && !/\s/.test(this.osdInfoCollectorPath),
+      "EXECUTOR_NOT_CONFIGURED",
+      "OSD_INFO_COLLECTOR_PATH must be an absolute path without whitespace",
+      { status: 503 },
+    );
+    const commandTimeoutSeconds = Number(process.env.OSD_INFO_COLLECTOR_COMMAND_TIMEOUT_SECONDS || 45);
+    const timeout = Number(process.env.OSD_INFO_COLLECTOR_TIMEOUT_MS || 300000);
+    const maxOutputBytes = Number(process.env.OSD_INFO_COLLECTOR_MAX_OUTPUT_BYTES || 64 * 1024 * 1024);
+    ensure(Number.isFinite(commandTimeoutSeconds) && commandTimeoutSeconds > 0, "EXECUTOR_NOT_CONFIGURED", "OSD_INFO_COLLECTOR_COMMAND_TIMEOUT_SECONDS is invalid", { status: 503 });
+    ensure(Number.isInteger(timeout) && timeout > 0, "EXECUTOR_NOT_CONFIGURED", "OSD_INFO_COLLECTOR_TIMEOUT_MS is invalid", { status: 503 });
+    ensure(Number.isInteger(maxOutputBytes) && maxOutputBytes > 0, "EXECUTOR_NOT_CONFIGURED", "OSD_INFO_COLLECTOR_MAX_OUTPUT_BYTES is invalid", { status: 503 });
+    const asSshUser = String(process.env.OSD_INFO_COLLECTOR_RUN_AS_SSH_USER || "false").toLowerCase();
+    ensure(["true", "false"].includes(asSshUser), "EXECUTOR_NOT_CONFIGURED", "OSD_INFO_COLLECTOR_RUN_AS_SSH_USER must be true or false", { status: 503 });
+    const args = params.osd_ids.flatMap(id => ["--osd", String(id)]);
+    // Restricted SSH accounts can run the reader in their own home directory
+    // while each fixed Ceph argv uses the existing sudo -n ceph permission.
+    if (asSshUser === "true") args.push("--sudo-ceph");
+    return this.runJson(
+      ["python3", this.osdInfoCollectorPath, ...args, "--timeout", String(commandTimeoutSeconds)],
+      "ceph.osd_info_collect",
+      { timeout, maxOutputBytes, sudo: asSshUser !== "true" },
+    );
   }
 
   async imageList(params) {
@@ -287,6 +415,7 @@ export class SshExecutor {
   }
 
   async mutate(action, params) {
+    this.assertActionAllowed(action);
     if (["rbd.device.unmount", "rbd.device.unmap", "rbd.image.remove"].includes(action)) {
       ensure(!this.activeAccessSessions.get(params.volume_id), "VOLUME_BUSY", "The volume has an active file transfer or terminal session", { status: 409 });
     }
@@ -315,6 +444,7 @@ export class SshExecutor {
   }
 
   async begin(record, action, params) {
+    this.assertActionAllowed(action);
     const state = this.actionState(record, action, params);
     if (state.replay) return state;
     record.actions ||= {};
@@ -326,6 +456,7 @@ export class SshExecutor {
   }
 
   async finish(record, params, result) {
+    this.assertActionAllowed(record.actions?.[params.action_id]?.action);
     record.actions[params.action_id] = { ...record.actions[params.action_id], state: "SUCCEEDED", result };
     await this.store.save(record);
     return result;
@@ -357,6 +488,7 @@ export class SshExecutor {
   }
 
   async fileAction(action, params) {
+    this.assertActionAllowed(action);
     const context = await this.mountedContext(params);
     if (action === "rbd.files.list") return this.files.list(context.mountpoint, params.path);
     if (action === "rbd.files.stat") return this.files.stat(context.mountpoint, params.path);
@@ -367,6 +499,7 @@ export class SshExecutor {
   }
 
   async manifestFiles(params) {
+    this.assertActionAllowed("rbd.files.manifest");
     const context = await this.store.withLock(params.volume_id, async () => {
       const mounted = await this.mountedContext(params);
       this.beginAccessSession(params.volume_id);
@@ -377,15 +510,18 @@ export class SshExecutor {
   }
 
   async issueTerminalTicket(params) {
+    this.assertActionAllowed("rbd.terminal.ticket.create");
     await this.store.withLock(params.volume_id, () => this.mountedContext(params));
     return { ...this.tickets.issue(params), websocket_path: "/ws/terminal" };
   }
 
   consumeTerminalTicket(ticket) {
+    this.assertActionAllowed("rbd.terminal.ticket.create");
     return this.tickets.consume(ticket);
   }
 
   async terminalContext(params) {
+    this.assertActionAllowed("rbd.terminal.ticket.create");
     this.validateParams("rbd.terminal.ticket.create", params);
     await this.assertFsid();
     return this.store.withLock(params.volume_id, async () => {
@@ -406,6 +542,7 @@ export class SshExecutor {
   }
 
   async downloadFile(params, writable, onReady) {
+    this.assertActionAllowed("rbd.files.download");
     this.validateParams("rbd.files.download", params);
     await this.assertFsid();
     const context = await this.store.withLock(params.volume_id, async () => {
@@ -418,6 +555,7 @@ export class SshExecutor {
   }
 
   async uploadFile(params, readable, expectedBytes) {
+    this.assertActionAllowed("rbd.files.upload");
     this.validateParams("rbd.files.upload", params);
     await this.assertFsid();
     const maxBytes = Number(process.env.RBD_FILE_UPLOAD_MAX_BYTES || 16 * 1024 * 1024 * 1024);
@@ -431,6 +569,7 @@ export class SshExecutor {
   }
 
   async createImage(params) {
+    this.assertActionAllowed("rbd.image.create");
     ensure(params.size_bytes % (1024 * 1024) === 0, "INVALID_SIZE", "RBD image size must be MiB-aligned");
     ensure(params.size_bytes <= Number(process.env.RBD_MAX_SIZE_BYTES || 1024 ** 4), "INVALID_SIZE", "RBD image size exceeds the configured maximum");
     let record = await this.store.load(params.volume_id);

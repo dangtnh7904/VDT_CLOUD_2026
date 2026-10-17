@@ -43,6 +43,7 @@ services:
     extra_hosts: *host-database
     volumes:
       - ../data:/data:ro
+      - ./config:/app/config:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -85,9 +86,12 @@ services:
     env_file: .env
     environment:
       RBD_SSH_KEY_PATH: /run/secrets/rbd_ssh_key
+      RBD_SSH_KNOWN_HOSTS_PATH: /run/secrets/rbd_ssh_known_hosts
+      RBD_SSH_HOST_KEY_REQUIRED: "true"
       RBD_EXECUTOR_STATE_ROOT: /var/lib/rbd-executor
     volumes:
       - ${RBD_SSH_PRIVATE_KEY_FILE:-./runtime/id_rsa}:/run/secrets/rbd_ssh_key:ro
+      - ${RBD_SSH_KNOWN_HOSTS_FILE:-./runtime/known_hosts}:/run/secrets/rbd_ssh_known_hosts:ro
       - rbd-executor-state:/var/lib/rbd-executor
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

@@ -6,6 +6,7 @@
  */
 
 import { Client } from "ssh2";
+import { createHash, timingSafeEqual } from "crypto";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -20,14 +21,85 @@ let manualDisconnect = false;
 let reconnectDelayMs = 3000;
 let clientFactory = () => new Client();
 
+function parseRequiredBoolean(name, fallback = true) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (/^(1|true|yes)$/i.test(raw)) return true;
+  if (/^(0|false|no)$/i.test(raw)) return false;
+  throw Object.assign(new Error(`${name} must be true or false`), { code: "SSH_HOST_KEY_CONFIG_INVALID" });
+}
+
+function normalizeFingerprint(value) {
+  const normalized = String(value || "").trim().replace(/^SHA256:/i, "").replace(/=+$/, "");
+  if (!normalized) return null;
+  if (!/^[A-Za-z0-9+/]{43}$/.test(normalized)) {
+    throw Object.assign(new Error("RBD_SSH_HOST_KEY_SHA256 must be an OpenSSH SHA256 fingerprint"), { code: "SSH_HOST_KEY_CONFIG_INVALID" });
+  }
+  return normalized;
+}
+
+function knownHostKeys(path, host, port) {
+  const source = readFileSync(path, "utf8");
+  const expectedHosts = new Set([host, `[${host}]:${port}`]);
+  const keys = [];
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const fields = line.split(/\s+/);
+    if (fields[0].startsWith("@") || fields.length < 3) continue;
+    const hosts = fields[0].split(",");
+    if (!hosts.some(candidate => expectedHosts.has(candidate))) continue;
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(fields[2])) continue;
+    keys.push(Buffer.from(fields[2], "base64"));
+  }
+  return keys;
+}
+
+function hostVerifierConfig(host, port) {
+  const required = parseRequiredBoolean("RBD_SSH_HOST_KEY_REQUIRED", true);
+  const fingerprint = normalizeFingerprint(process.env.RBD_SSH_HOST_KEY_SHA256);
+  const knownHostsPath = process.env.RBD_SSH_KNOWN_HOSTS_PATH;
+  let keys = [];
+  if (knownHostsPath) {
+    const resolved = resolve(knownHostsPath);
+    try {
+      keys = knownHostKeys(resolved, host, port);
+    } catch (error) {
+      throw Object.assign(new Error(`Cannot read SSH known-hosts file ${resolved}: ${error.message}`), { code: "SSH_HOST_KEY_CONFIG_INVALID" });
+    }
+    if (!keys.length) {
+      throw Object.assign(new Error(`SSH known-hosts file has no plain entry for ${host}:${port}`), { code: "SSH_HOST_KEY_CONFIG_INVALID" });
+    }
+  }
+  if (!fingerprint && !keys.length) {
+    if (!required) return {};
+    throw Object.assign(new Error("SSH host-key pinning is required; set RBD_SSH_KNOWN_HOSTS_PATH or RBD_SSH_HOST_KEY_SHA256"), { code: "SSH_HOST_KEY_CONFIG_INVALID" });
+  }
+  return {
+    hostVerifier(key) {
+      const knownKeyMatch = !keys.length || keys.some(expected =>
+        expected.length === key.length && timingSafeEqual(expected, key));
+      const observed = createHash("sha256").update(key).digest("base64").replace(/=+$/, "");
+      const fingerprintMatch = !fingerprint || (
+        fingerprint.length === observed.length
+        && timingSafeEqual(Buffer.from(fingerprint), Buffer.from(observed))
+      );
+      return knownKeyMatch && fingerprintMatch;
+    },
+  };
+}
+
 function getConfig() {
+  const host = process.env.RBD_HOST;
+  const port = parseInt(process.env.RBD_SSH_PORT || "22", 10);
   const cfg = {
-    host: process.env.RBD_HOST,
-    port: parseInt(process.env.RBD_SSH_PORT || "22", 10),
+    host,
+    port,
     username: process.env.RBD_SSH_USER || "root",
     readyTimeout: parseInt(process.env.RBD_SSH_CONNECT_TIMEOUT_MS || "10000", 10),
     keepaliveInterval: 10000,
     keepaliveCountMax: 3,
+    ...hostVerifierConfig(host, port),
   };
   const keyPath = process.env.RBD_SSH_KEY_PATH;
   if (keyPath) {
@@ -159,6 +231,7 @@ export function exec(command, opts = {}) {
     }
 
     let stdout = "";
+    const binaryChunks = [];
     let stderr = "";
     let finished = false;
     let timer = null;
@@ -185,7 +258,8 @@ export function exec(command, opts = {}) {
           reject(Object.assign(new Error(`Command output exceeded ${maxOutputBytes} bytes: ${redactCmd(actualCmd)}`), { code: "COMMAND_OUTPUT_LIMIT" }));
           return;
         }
-        if (target === "stdout") stdout += chunk;
+        if (target === "stdout" && opts.binary) binaryChunks.push(Buffer.from(chunk));
+        else if (target === "stdout") stdout += chunk;
         else stderr += chunk;
       };
       stream.on("data", (chunk) => collect("stdout", chunk));
@@ -195,7 +269,7 @@ export function exec(command, opts = {}) {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
-        resolve({ stdout, stderr, code: code ?? 0 });
+        resolve({ stdout: opts.binary ? Buffer.concat(binaryChunks) : stdout, stderr, code: code ?? 0 });
       });
     });
   });

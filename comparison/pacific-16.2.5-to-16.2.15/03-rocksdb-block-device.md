@@ -51,6 +51,8 @@ Lịch sử có một chuỗi thêm rồi revert hoàn toàn (`d0b03f2`/`7d96030
 
 **Rolling/full upgrade và hành động.** Đây là hành vi local của RocksDB mỗi OSD: OSD cũ giữ đường iterator cũ, OSD đã nâng cấp dùng đường mới; không có negotiation hoặc on-disk migration. Sau full upgrade, mọi OSD target dùng hành vi mới. Không cần repair/rebuild DB. Nếu muốn tắt, cần override config; option không mang `FLAG_RUNTIME` trong `options.cc`, vì vậy nên coi thay đổi cấu hình là cần restart cho tới khi xác minh live-injection trong môi trường đích.
 
+**Rollback boundary.** Iterator bounds không đổi key, column-family layout hay WAL format, nên last reversible point không bị dịch bởi lần đọc target. Có thể tắt option rồi restart target, hoặc hạ riêng OSD về base theo sequence đã duyệt; trước và sau failback phải so key count/checksum vì package rollback không tự phát hiện một lỗi boundary đã ghi nhận ở workload. Không chạy repair hay rebuild DB chỉ để rollback behavior iterator.
+
 **Đánh giá.** Reading priority `P1`; rủi ro nâng cấp **trung bình-thấp** (đường metadata nóng nhưng không đổi format; chuỗi backport từng có revert và một follow-up sửa phạm vi WholeSpaceIterator); confidence **high** cho cơ chế, **medium** cho mức tác động hiệu năng. Chưa biết cluster có override option, CF layout nào, workload OMAP/RGW nào và mật độ tombstone ra sao.
 
 **Test.** Commit không thêm assertion hồi quy chuyên biệt. Đã đọc các test có sẵn `KVTest.RocksDBShardingIteratorTest` (`src/test/objectstore/test_kv.cc:454`) và các test ObjectMap/BlueStore liên quan; các stub `KeyValueDBMemory` chỉ đổi signature trong lịch sử rồi không còn net diff. Chưa chạy test.
@@ -86,6 +88,8 @@ Default `rocksdb_delete_range_threshold=1048576` không đổi giữa hai endpoi
 
 **Rolling/full upgrade và hành động.** Không có tương tác mixed-version: mỗi OSD phải dừng và được xử lý riêng bằng tool phù hợp. Nếu không có kế hoạch reshard thì finding không kích hoạt. Nếu có, dùng binary target trên bản sao/OSD dừng, kiểm tra `fsck` và reopen trước khi đưa OSD lại; báo cáo này không ủy quyền chạy thao tác đó.
 
+**Activation mode và rollback boundary.** Activation là `explicit`: upgrade/restart đơn thuần không gọi reshard. Last reversible point là trước khi tool bắt đầu ghi sharding metadata; phải có device snapshot hoặc bản sao kiểm chứng được. Sau khi reshard commit, hạ package không đảo layout và base tool có thể không hiểu cùng pseudo-option; đường lui là reverse-reshard đã rehearsal bằng target tool hoặc restore snapshot, không phải binary downgrade mù.
+
 **Đánh giá.** Priority `P1`; rủi ro upgrade **thấp khi không reshard**, **trung bình khi có quy trình reshard** vì đây là thao tác ghi metadata DB; confidence **high**. As-Is còn thiếu: sharding spec lưu trên từng OSD và kế hoạch có dùng `ceph-bluestore-tool reshard` hay không.
 
 **Test.** Repository có `RocksDBResharding.basic`, `all_to_shards`, resume/interruption và hash-change cases (`test_kv.cc:1135`–`:1239`) cùng QA `CephManager.test_bluestore_reshard_action`; responsible commit không thêm case chứa pseudo-option `block_cache`. Chưa chạy test.
@@ -104,6 +108,8 @@ Default `rocksdb_delete_range_threshold=1048576` không đổi giữa hai endpoi
 
 **Rolling/full upgrade và hành động.** Local theo OSD; OSD nào target và mở DB với option bật mới có collector. Cần cấu hình rõ ràng và restart/reopen để dựng lại CF options; không cần format migration. Không nên bật đồng loạt trong rolling upgrade nếu chưa đo compaction debt, device latency và recovery load.
 
+**Rollback boundary.** Có thể tắt option và restart/reopen OSD để ngừng collector; RocksDB files đã compact vẫn là format tương thích và không cần đảo vật lý. Compaction đã hoàn tất không thể “uncompact”, nên rollback chỉ phục hồi policy, không phục hồi layout SST trước đó. Nếu latency hoặc write amplification vượt guardrail, dừng rollout, tắt option ở cohort và chờ I/O nền hội tụ trước khi mở batch tiếp.
+
 **Đánh giá.** Priority `P1`; rủi ro mặc định **thấp** vì tắt, rủi ro khi bật **trung bình** do I/O nền; confidence **high** về activation, **medium** về tác động. Không có test Ceph chuyên biệt được thêm cùng commit.
 
 ### KVBD-005/006 — Block-device restart chặn alias trùng và phân loại lỗi đọc đúng hơn
@@ -118,6 +124,8 @@ Một gap đáng lưu ý từ endpoint code: nếu `stat()` thất bại, target
 
 **Rolling/full upgrade và hành động.** Local theo daemon. Trong mixed phase, chỉ OSD target có hard exclusion; không có protocol/format change. Không cần action nếu inventory thiết bị sạch. Trước upgrade nên kiểm tra symlink/LVM/container mapping để phát hiện hai OSD trỏ cùng major/minor.
 
+**Rollback boundary.** O_EXCL và errno normalization không ghi persistent format, nên có thể failback binary sau khi OSD dừng sạch. Tuy nhiên downgrade chỉ bỏ lớp hard exclusion và có thể cho duplicate writer quay lại; remediation đúng là sửa alias/LVM/container mapping, không bypass lock bằng base binary. Nếu target fail open, giữ OSD down và xác minh major/minor ownership trước mọi restart; không dùng package rollback để ép thiết bị được claim.
+
 **Error-path evidence.** Cùng inventory `1100`, commit `25664452919d360bd37fa3a9eb62202a58ac72e7` sửa `KernelDevice::read`: POSIX `pread()` trả `-1` và đặt `errno`, nhưng base truyền `-1` vào `is_expected_ioerr`; target truyền `-errno`. Khi `IOContext::allow_eio=true`, lỗi thuộc tập dự kiến mới được chuẩn hóa đúng thành `-EIO`. Đây là fault path local, tự có sau restart và không thay đổi dữ liệu hay format.
 
 **Đánh giá.** Priority `P1`; rủi ro upgrade **thấp với mapping/device khỏe**, **trung bình về availability nếu đang có conflict alias tiềm ẩn**; confidence **high** cho O_EXCL và error mapping, **medium** cho biểu hiện lỗi `stat` vì chưa chạy. `unittest_bdev` chỉ có `KernelDevice.Ticket45337` trên regular temp file (`src/test/objectstore/test_bdev.cc:45`), không phủ block alias/O_EXCL hay `allow_eio` fault injection.
@@ -131,6 +139,8 @@ Một gap đáng lưu ý từ endpoint code: nếu `stat()` thất bại, target
 **Điều kiện và tác động.** Chỉ khi người vận hành chủ động gọi đường destructive repair cho backend trực tiếp như `rocksdb`/`leveldb`; đường `bluestore-kv` dùng `load_bluestore` riêng. Không tự kích hoạt khi upgrade, start OSD hay replay WAL. Tác động là **maintainability/availability during repair**.
 
 **Rolling/full upgrade và hành động.** Dùng phiên bản tool nào thì có hành vi phiên bản đó; không phụ thuộc cluster mixed-version. Rủi ro **của thay đổi** thấp, nhưng rủi ro **của thao tác destructive repair** cao và có thể làm hỏng dữ liệu khỏe mạnh, đúng như help text cảnh báo. Chỉ dùng trên bản sao/OSD dừng theo runbook được phê duyệt; không phải khuyến nghị thực thi từ báo cáo này.
+
+**Rollback boundary.** Last reversible point là ngay trước lần gọi `destructive_repair`, khi snapshot/bản sao còn nguyên. Fix null-handle chỉ làm tool tới được hàm repair; nó không làm thao tác trở nên reversible. Sau repair, hạ `kvstore_tool` hoặc package không hoàn nguyên mutation DB; nếu fsck/reopen/checksum không đạt thì bỏ fixture hoặc restore snapshot, không chạy repair lặp lại trên bản duy nhất.
 
 **Đánh giá/test.** Priority `P1`; confidence **high**. `qa/workunits/cephtool/test_kvstore_tool.sh:63` chỉ gọi destructive repair qua `bluestore-kv`, nên không bắt đúng null-handle của backend `rocksdb`; responsible commit không thêm test trực tiếp. Chưa chạy tool.
 

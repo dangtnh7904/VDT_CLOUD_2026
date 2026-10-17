@@ -1,0 +1,26 @@
+ceph -s > "$EVIDENCE/00-status.txt"
+ceph health detail > "$EVIDENCE/00-health.txt"
+ceph fsid > "$EVIDENCE/00-fsid.txt"
+ceph versions -f json > "$EVIDENCE/00-versions.json"
+ceph quorum_status -f json > "$EVIDENCE/00-quorum.json"
+ceph osd dump -f json > "$EVIDENCE/00-osd.json"
+ceph osd crush dump -f json > "$EVIDENCE/00-crush.json"
+ceph osd crush rule dump -f json > "$EVIDENCE/00-rules.json"
+ceph osd crush weight-set ls > "$EVIDENCE/00-weightsets.txt"
+ceph osd tree > "$EVIDENCE/00-tree.txt"
+ceph osd df tree > "$EVIDENCE/00-df.txt"
+ceph pg dump pgs -f json > "$EVIDENCE/00-pgs.json"
+ceph osd getmap -o "$EVIDENCE/00-osdmap.bin"
+ceph osd getcrushmap -o "$EVIDENCE/00-crushmap.bin"
+ceph config dump -f json > "$EVIDENCE/00-config.json"
+ceph balancer status -f json > "$EVIDENCE/00-balancer.json"
+ceph osd pool autoscale-status > "$EVIDENCE/00-autoscale.txt"
+ceph orch ls --service_type osd --export \
+  > "$EVIDENCE/00-osd-specs.yaml"
+ceph orch upgrade status > "$EVIDENCE/00-upgrade-status.txt"
+for ID in 0 2 5; do
+  ceph osd find "$ID" -f json > "$EVIDENCE/00-find-$ID.json"
+  ceph osd metadata "$ID" -f json > "$EVIDENCE/00-meta-$ID.json"
+done
+ceph orch ps --daemon_type osd --format json --refresh \
+  > "$EVIDENCE/00-daemons.json"

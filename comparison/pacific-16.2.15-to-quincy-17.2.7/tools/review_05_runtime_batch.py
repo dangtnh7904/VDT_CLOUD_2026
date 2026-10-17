@@ -13,7 +13,7 @@ affect = {
     "src/common/subsys.h": ("MSG-046", "Adds RGW datacache, SeaStore, AlienStore, mClock and exporter log subsystems with independent defaults and config routing."),
     "src/common/tracer.cc": ("MSG-047", "Replaces OpenTracing Jaeger initialization with OpenTelemetry Jaeger exporter and config-gated spans, plus versioned span-context encode/decode."),
     "src/common/tracer.h": ("MSG-047", "Replaces OpenTracing span API with OpenTelemetry types and non-Jaeger stubs used by OSD/RGW tracing call sites."),
-    "src/common/util.cc": ("MSG-048", "Cgroup memory-limit probing is now Linux-only; non-Linux Unix builds return zero without touching Linux cgroup paths."),
+    "src/common/util.cc": ("MSG-048", "Cgroup memory-limit probing becomes Linux-only; the non-Linux branch returns status zero without assigning the output. collect_sys_info can therefore read an uninitialized limit on platforms outside Linux, Apple and Windows, such as FreeBSD."),
     "src/log/LogClock.h": ("MSG-049", "Uses CMake HAVE_SUSECONDS_T probe instead of preprocessor test on a typedef name, affecting portability of log-clock builds."),
     "src/common/crc32c_ppc_asm.S": ("MSG-050", "POWER8 CRC32C vector assembly gains Clang/local header support and configurable constants/symbols; production entrypoint remains __crc32_vpmsum."),
     "src/common/crc32c_ppc_fast_zero_asm.S": ("MSG-050", "POWER8 append-zeros Barrett constants change and reflected reduction is added, requiring checksum equivalence testing on NULL-buffer path."),

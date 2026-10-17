@@ -13,6 +13,9 @@ READ_ONLY_ACTIONS = frozenset(
     {
         "health", "capabilities", "ceph.status", "ceph.fsid", "ceph.versions",
         "ceph.osd_df", "ceph.osd_tree", "ceph.pool_ls_detail", "ceph.capacity_inventory",
+        "ceph.osd_info_collect", "ceph.osd_map_export", "ceph.osd_dump", "ceph.daemon_ls", "ceph.crush_dump", "ceph.pg_dump", "ceph.osdmap_preview_context",
+        "ceph.mon_dump", "ceph.quorum_status", "ceph.mgr_dump", "ceph.mgr_modules",
+        "ceph.host_ls", "ceph.health_detail", "ceph.df", "ceph.fs_dump", "ceph.client_environment",
         "ceph.crush_rule_dump", "rbd.pool.list", "rbd.image.list",
         "rbd.image.info", "rbd.device.list",
     }
@@ -61,6 +64,8 @@ class ExecutorClient:
         expected_fsid: str,
         timeout_seconds: float = 35,
         max_response_bytes: int = 5 * 1024 * 1024,
+        osd_info_timeout_seconds: float = 300,
+        osd_info_max_response_bytes: int = 64 * 1024 * 1024,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         parsed = urlsplit(base_url)
@@ -78,10 +83,16 @@ class ExecutorClient:
             raise ValueError("executor timeout must be greater than zero")
         if max_response_bytes <= 0:
             raise ValueError("executor response limit must be greater than zero")
+        if not math.isfinite(osd_info_timeout_seconds) or osd_info_timeout_seconds <= 0:
+            raise ValueError("OSD info collector timeout must be greater than zero")
+        if osd_info_max_response_bytes <= 0:
+            raise ValueError("OSD info collector response limit must be greater than zero")
         self.endpoint = urljoin(base_url.rstrip("/") + "/", "internal/v1/execute")
         self.token = token
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
+        self.osd_info_timeout_seconds = osd_info_timeout_seconds
+        self.osd_info_max_response_bytes = osd_info_max_response_bytes
         self.transport = transport
 
     @classmethod
@@ -91,12 +102,15 @@ class ExecutorClient:
         settings = get_settings()
         if not settings.ceph_expected_fsid:
             raise ValueError("CEPH_EXPECTED_FSID is required for executor calls")
-        token = settings.rbd_executor_token.get_secret_value() if settings.rbd_executor_token else ""
+        executor_token = settings.effective_executor_token
+        token = executor_token.get_secret_value() if executor_token else ""
         return cls(
-            settings.rbd_executor_url,
+            settings.effective_executor_url,
             token=token,
             expected_fsid=settings.ceph_expected_fsid,
             timeout_seconds=settings.rbd_executor_timeout_seconds,
+            osd_info_timeout_seconds=settings.osd_info_collector_timeout_seconds,
+            osd_info_max_response_bytes=settings.osd_info_collector_max_output_bytes,
         )
 
     def health(self) -> dict[str, Any]:
@@ -128,6 +142,15 @@ class ExecutorClient:
 
     def ceph_capacity_inventory(self) -> dict[str, Any]:
         return self.request("ceph.capacity_inventory")
+
+    def ceph_osd_info_collect(self, osd_ids: list[int]) -> dict[str, Any]:
+        result = self.request(
+            "ceph.osd_info_collect",
+            {"osd_ids": osd_ids},
+            timeout_seconds=self.osd_info_timeout_seconds,
+            max_response_bytes=self.osd_info_max_response_bytes,
+        )
+        return self._rbd_data(result, "ceph.osd_info_collect")
 
     def rbd_pool_list(self) -> dict[str, Any]:
         return self._rbd_data(self.request("rbd.pool.list"), "rbd.pool.list")
@@ -203,6 +226,7 @@ class ExecutorClient:
         *,
         request_id: str | None = None,
         timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         if action not in ALLOWED_ACTIONS:
             raise ExecutorClientError("ACTION_NOT_ALLOWED", "The requested executor action is not allowlisted")
@@ -241,7 +265,10 @@ class ExecutorClient:
             raise ExecutorClientError(
                 "EXECUTOR_UNAVAILABLE", "Could not connect to the SSH executor", retryable=True
             ) from exc
-        if len(response.content) > self.max_response_bytes:
+        response_limit = self.max_response_bytes if max_response_bytes is None else max_response_bytes
+        if not isinstance(response_limit, int) or response_limit <= 0:
+            raise ValueError("executor response limit must be greater than zero")
+        if len(response.content) > response_limit:
             raise ExecutorClientError("EXECUTOR_RESPONSE_TOO_LARGE", "Executor response exceeded the configured size limit")
         try:
             decoded = response.json()

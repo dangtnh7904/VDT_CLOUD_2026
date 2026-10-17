@@ -1,0 +1,126 @@
+schema_version: 1
+status: local_readonly_preview_api_and_targeted_browser_verified
+validated_on: "2026-10-14"
+timezone: Asia/Saigon
+application:
+  version: 5.1.2-preview.1
+  local_reference: storage-lab-console@sha256:98ed06baecb12868acbed65fa67c338da6f2c4d7b584d509b4326cd7cf238297
+  linux_amd64_manifest: sha256:e80e5a6bfe05a69db221dc88dbcbd08b3a5a42c47073bed9a60f5648f8bb9ebb
+  configuration_digest: sha256:a8efd89ec256800481859918a67abface66b0118c127fec77fcf00fc944dfd2f
+  built_at: "2026-10-14T02:32:10Z"
+  source_revision: 8b5119a-dirty
+  published: false
+  prior_published_release_unchanged: 5.1.1-rc.1
+fixes:
+  - Observe/export ASGI disconnect signals cooperative cancellation; pending source commands and waiting collection slots are cancelled.
+  - Active collection slot stays held until its admitted bounded HTTP source calls settle; no global result cache or concurrency-limit inflation.
+  - Shallow observation/export aggregate deadline is 60 seconds; deep uses 60 seconds plus configured collector budget.
+  - Opening the inventory reads a shallow live catalogue; deep data is obtained on explicit selected-daemon detail, export or persisted As-is creation.
+  - Selected metric daemons have explicit fresh-view and export buttons; results appear next to the actions without shrinking the catalogue.
+  - Long source/provenance/limitation blocks replaced by a small accessible warning with concise missing or stale data summary.
+  - Mixed collections match any contained daemon type; filtered row/detail/count/export show only matching daemons; whole original export remains separate.
+  - Exact daemon-key filter scopes both saved exports and comparison; original collection payload/checksum remains immutable.
+tests:
+  backend: {passed: 319, failed: 0, skipped: 0}
+  backend_environment: isolated_PostgreSQL_16_schema_21
+  backend_log: ../dist/local-selection-check-20261014/backend-unittest.log
+  backend_log_sha256: 0d85ca58e90e040809a56484eef5acb5b4c72e6a7c383657fd9c90d417a76db5
+  frontend: {passed: 31, failed: 0, skipped: 0}
+  typescript: PASS
+  packaged_frontend_build: PASS
+  ssr_component_contracts:
+    passed: 10
+    browser_acceptance: false
+    log: ../dist/local-selection-check-20261014/component-render.log
+    log_sha256: ef1ea884843c6aa5c3fc63002de06bf0120edfdf5a296b628b89062ab546a66a
+  actual_http_client_abort_then_fresh_mon_read:
+    abandoned_requests: 2
+    client_aborts: 2
+    next_request_http: 200
+    next_request_elapsed_ms: 9432
+    returned_keys: [mon.ceph-master]
+    log: ../dist/local-selection-check-20261014/live-cancellation.log
+    log_sha256: f6d4ef4cd8212435eb1281d17a369fce052b57f1789a4b74589d6882ce2cd366
+  existing_mixed_collection_filter:
+    source_collection_id: 1fe9b81f-a22a-56d9-ba8e-6e1c77ebc9a2
+    original_count: 3
+    original_keys: [mon.ceph-master, osd.2, osd.5]
+    found_in_osd_history: true
+    osd_export_keys: [osd.2, osd.5]
+    exact_key_export_keys: [osd.2]
+    filtered_export_kind: FILTERED_AS_IS_EXPORT
+    original_sha256_unchanged: true
+    original_sha256: 748fecb9c191857151b5c471f5dcc1aef159976480e2d51141b626e1412ec2be
+  actual_browser_targeted_checks:
+    status: PASS
+    browser: existing_user_opened_Codex_in_app_tab
+    version_visible: 5.1.2-preview.1
+    daemon_pagination: 10_of_14
+    selected_live_view_keys: [mon.ceph-master, osd.2]
+    selected_live_view_completed_local: "2026-10-14T09:47:13+07:00"
+    selected_live_export:
+      kind: LIVE_OBSERVATION
+      returned_keys: [mon.ceph-master, osd.2]
+      downloaded_to: user_Downloads
+      file: hien-trang-moi-e48a272c-4cc9-4ca7-b7de-54da94a1e0b2.json
+      file_sha256: 6ed73caf8cb799495337bdd726a8c3e0e9acf709cfb09be0a07d107e21593b6c
+    mixed_collection_osd_detail: 2_of_3_original_daemons_MON_excluded
+    exact_saved_export:
+      kind: FILTERED_AS_IS_EXPORT
+      returned_keys: [osd.2]
+      downloaded_to: user_Downloads
+      file: collection-da-luu-1fe9b81f-a22a-56d9-ba8e-6e1c77ebc9a2.json
+      file_sha256: 70ea32ade61803806b14ceec08ebac9b31a17767800cd5d84d6e0d778a8fe6b7
+    exact_comparison:
+      source_a: 1fe9b81f-a22a-56d9-ba8e-6e1c77ebc9a2
+      source_b: 0da0f164-301e-579f-b62d-39aeed75e733
+      returned_keys: [osd.2]
+      insufficient_quality_delta: not_computed
+    compact_warning_popup: PASS
+    queue_full_error_seen_in_this_targeted_run: false
+    captured_browser_warning_or_error_logs: 0
+    original_collection_sha256_unchanged_after_browser_checks: true
+    registry_after_browser_checks: {collections: 5, events: 19}
+    screenshots:
+      - file: ../dist/local-selection-check-20261014/browser-osd-filter-warning.jpg
+        sha256: 85032c1a3e9ead7a0f429e16e4ba6e54f1746cb992705f5e37f60fc0eef04eca
+      - file: ../dist/local-selection-check-20261014/browser-exact-osd-comparison.jpg
+        sha256: 5ba1800f4e31dedde2ebdabda203913461863ead7e1170051f03b6fe570d1292
+      - file: ../dist/local-selection-check-20261014/browser-mixed-osd-detail.jpg
+        sha256: a91ff25c7e21a365d7dba70aa484a7b67fe3b6a81cafbbdba75ec31dc625f061
+security:
+  scanner: Docker_Scout_1.20.4
+  packages_indexed: 167
+  application_findings: {critical: 0, high: 0, medium: 0, low: 0, unspecified: 0}
+  report: ../dist/local-selection-check-20261014/application-vulnerabilities.md
+  report_sha256: 0951c84d80b60b75842a257200a5efc6d524c9855a5f3083c3f47b49572de7b9
+deployment:
+  url: http://127.0.0.1:8080
+  runtime_version: 5.1.2-preview.1
+  ready: true
+  schema: 21
+  readonly: true
+  uid_gid: "10001:10001"
+  root_filesystem_readonly: true
+  old_collection_registry_and_deleted_state_unchanged: true
+  collections: 5
+  events_unchanged: 19
+  private_checkpoint: ../../runtime/local-selection-check-20261014
+  database_backup_sha256: 9e365f45a30bbe34407352b3f0c367c3ad5cb5df629a2adcee88a335f2d14a7a
+  previous_containers_retained: true
+  production_test_8443: unchanged_stopped
+  worker_reference: dang7904/storage-lab-osdmap@sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  ceph_mutations: none
+  collections_created_deleted_or_restored_by_this_check: 0
+acceptance:
+  source_and_api_checks: PASS
+  new_browser_visual_and_interaction_verification: PASS_TARGETED_SELECTION_FILTER_WARNING_COMPARISON_DOWNLOAD
+  prior_browser_blocker: resolved_when_user_opened_new_accessible_localhost_tab
+  no_browser_security_workaround: true
+  new_image_docker_hub_publication: NOT_RUN
+  full_production_acceptance: NOT_PASSED
+limitations:
+  - Cancellation stops pending backend commands; already-running SSH commands on the executor still finish under their own timeouts, not instantly.
+  - The bounded two-active/two-wait queue can still return 429 under genuine excess concurrent demand; the single cancellation smoke test is not a long-duration load acceptance.
+  - Worker security and historical integration stability gates from prior manifests remain open; no production promotion is claimed.
+  - Browser checks cover selected metrics, downloads, saved mixed-daemon filters and comparison; they do not certify all OSDMap, collection mutation or production workflows.

@@ -1,0 +1,320 @@
+MOP PA1 OSD
+As-Is
+Tạo thư mục
+export X=1
+export EVIDENCE="$HOME/pa1-prelab-$(date +%Y%m%d-%H%M%S)"
+
+mkdir -p "$EVIDENCE"
+
+echo "X=osd.$X"
+echo "Evidence=$EVIDENCE"
+
+As is
+
+ceph -s | tee "$EVIDENCE/01-ceph-s.txt"
+
+ceph health detail \
+  | tee "$EVIDENCE/02-health-detail.txt"
+
+ceph versions \
+  | tee "$EVIDENCE/03-versions.txt"
+
+ceph quorum_status -f json-pretty \
+  > "$EVIDENCE/04-quorum-status.json"
+
+ceph osd tree \
+  | tee "$EVIDENCE/05-osd-tree.txt"
+
+ceph osd df tree \
+  | tee "$EVIDENCE/06-osd-df-tree.txt"
+
+ceph osd dump -f json-pretty \
+  > "$EVIDENCE/07-osd-dump.json"
+
+ceph osd getcrushmap \
+  > "$EVIDENCE/08-crushmap.bin"
+
+ceph config dump \
+  > "$EVIDENCE/09-config-dump.txt"
+ceph pg ls-by-osd osd.$X \
+  | tee "$EVIDENCE/10-X-pgs.txt"
+
+ceph pg ls-by-primary osd.$X \
+  | tee "$EVIDENCE/11-X-primary-pgs.txt"
+ceph pg ls-by-osd osd.$X -f json-pretty \
+  > "$EVIDENCE/12-X-pgs.json"
+
+ceph pg ls-by-primary osd.$X -f json-pretty \
+  > "$EVIDENCE/13-X-primary-pgs.json"
+ceph pg ls-by-osd osd.$X -f json \
+  | jq -r '.pg_stats[].pgid' \
+  | while read PG; do
+      ceph pg map "$PG"
+    done \
+  | tee "$EVIDENCE/14-X-pg-mapping.txt"
+ceph osd tree \
+  | tee "$EVIDENCE/15-tree-before-S.txt"
+
+ceph osd dump \
+  | tee "$EVIDENCE/16-osd-dump-before-S.txt"
+
+ceph osd dump | grep '^flags' \
+  | tee "$EVIDENCE/17-osd-flags.txt"
+
+ceph osd dump | grep -E 'pg_upmap|pg_temp' \
+  | tee "$EVIDENCE/18-existing-overrides.txt"
+
+ceph balancer status \
+  | tee "$EVIDENCE/19-balancer-status.txt"
+
+ceph osd pool autoscale-status \
+  | tee "$EVIDENCE/20-autoscale-status.txt"
+Ok to stop 
+ceph -s
+ceph osd ok-to-stop 1
+ceph balancer status
+ceph pg ls-by-osd 1
+ceph pg ls-by-primary 1
+phải để unmanaged: true
+tắt balancer
+ceph config set osd osd_crush_initial_weight 0
+ceph balancer off
+ceph balancer status
+rồi bắt đầu add osd 
+additional : phải tắt pg autoscale
+ceph osd pool autoscale-status \
+  > "$EVIDENCE/58-autoscale-before-freeze.txt"
+for POOL in $(ceph osd pool ls); do
+    ceph osd pool set "$POOL" pg_autoscale_mode off
+done
+ceph osd pool autoscale-status \
+  > "$EVIDENCE/59-autoscale-after-freeze.txt"
+ceph orch daemon add osd ${S_HOST}:${S_DEV} (osd S backup)
+
+Trả initial
+ceph config rm osd osd_crush_initial_weight
+
+as is m1
+EVIDENCE=~/pa1-prelab-20260923-090845
+ceph -s > "$EVIDENCE/21-after-S-ceph-s.txt"
+ceph osd tree > "$EVIDENCE/22-after-S-tree.txt"
+ceph osd df tree > "$EVIDENCE/23-after-S-df.txt"
+ceph osd dump > "$EVIDENCE/24-after-S-osd-dump.txt"
+ceph osd getmap -o "$EVIDENCE/25-osdmap-S-weight0.bin"
+ceph osd getcrushmap -o "$EVIDENCE/26-crush-S-weight0.bin"
+ceph pg dump pgs > "$EVIDENCE/27-pgs-S-weight0.txt"
+ceph pg ls-by-osd $S > "$EVIDENCE/28-S-pgs-weight0.txt"
+rồi giờ tạo giả lập mô phỏng với S
+ceph osd crush reweight osd.$S 0.0001
+cp "$EVIDENCE/25-osdmap-S-weight0.bin" \
+   "$EVIDENCE/29-osdmap-S-small.bin"
+osdmaptool "$EVIDENCE/29-osdmap-S-small.bin" \
+  --adjust-crush-weight ${S}:0.0001 \
+  --save
+Simulation luôn với weight của 25 29
+osdmaptool "$EVIDENCE/25-osdmap-S-weight0.bin" \
+  --test-map-pgs \
+  > "$EVIDENCE/30-map-weight0.txt" 2>&1
+
+osdmaptool "$EVIDENCE/29-osdmap-S-small.bin" \
+  --test-map-pgs \
+  > "$EVIDENCE/31-map-small.txt" 2>&1
+
+Diff
+diff -u \
+  "$EVIDENCE/30-map-weight0.txt" \
+  "$EVIDENCE/31-map-small.txt" \
+  | tee "$EVIDENCE/32-map-diff.txt"
+
+Để weight thành 0.001 để cho Vì `pg-upmap-items` tới một OSD có effective weight bằng 0 có thể bị MON coi là mapping không hợp lệ, S phải có weight dương khi thật sự nhận PG.
+ceph osd crush reweight osd.$S 0.0001
+
+đã kiểm tra và chưa được gắn thêm với PG nào
+Lưu primary hiện tại:
+ceph pg ls-by-primary $X > "$EVIDENCE/33-X-primary-before.txt"
+Snapshot trước của bạn cho thấy osd.1 có khá nhiều primary, nên giờ:
+ceph osd primary-affinity osd.$X 0
+ceph osd primary-affinity osd.$S 0
+
+chụp checkpoint
+ceph osd tree > "$EVIDENCE/34-after-primary-affinity-tree.txt"
+ceph pg ls-by-primary $X > "$EVIDENCE/35-X-primary-after.txt"
+ceph -s > "$EVIDENCE/36-after-primary-affinity-ceph-s.txt"
+
+lưu mapping
+ceph pg map $PG \
+  | tee "$EVIDENCE/37-canary-${PG}-before.txt"
+
+
+Canary 9.6(least affect one )
+ceph osd pg-upmap-items $PG $X $S
+
+ 
+chỉ có mỗi canary PG vừa làm
+
+lưu lại
+ceph pg map $PG \
+  > "$EVIDENCE/38-canary-${PG}-after.txt"
+
+ceph pg ls-by-osd $S \
+  > "$EVIDENCE/39-S-pgs-after-canary.txt"
+
+ceph -s \
+  > "$EVIDENCE/40-after-canary-ceph-s.txt"
+
+Lấy toàn bộ PG trên X
+ceph pg ls-by-osd $X -f json \
+  | jq -r '.pg_stats[].pgid' \
+  > "$EVIDENCE/41-X-all-pgs-to-drain.txt"
+
+wc -l "$EVIDENCE/41-X-all-pgs-to-drain.txt"
+
+giờ drain từng pg theo batch 1 
+for BATCH in "$EVIDENCE"/batch-*; do
+    echo
+    echo "========================================="
+    echo "Running: $BATCH"
+    echo "========================================="
+
+    while IFS= read -r PG; do
+        [ -z "$PG" ] && continue
+
+        echo "UPMAP $PG : osd.$X -> osd.$S"
+
+        ceph osd pg-upmap-items "$PG" "$X" "$S" </dev/null || exit 1
+    done < "$BATCH"
+
+    echo "Waiting for all PGs to become active+clean..."
+
+    while :; do
+        BAD=$(
+            ceph pg dump pgs_brief -f json 2>/dev/null \
+            | jq '[.pg_stats[] | select(.state != "active+clean")] | length'
+        )
+
+        echo "PG not active+clean: $BAD"
+
+        if [ "$BAD" -eq 0 ]; then
+            echo "Batch converged."
+            break
+        fi
+
+        sleep 5
+    done
+done
+
+đã hết pg sau khi drain và đã ok-to-stop
+
+
+A5: nâng đúng osd.$X lên 16.2.15, giữ toàn bộ PG ở S/Y/Z.
+
+Ckpt cuối trước update:
+ceph -s > "$EVIDENCE/54-dr-ready-ceph-s.txt"
+ceph health detail > "$EVIDENCE/55-dr-ready-health.txt"
+ceph pg ls-by-osd $X > "$EVIDENCE/56-X-pgs-before-upgrade.txt"
+ceph osd ok-to-stop $X \
+  > "$EVIDENCE/57-X-ok-to-stop.txt" 2>&1
+ceph versions > "$EVIDENCE/58-versions-before-upgrade.txt"
+
+set noout
+ceph osd set-group noout osd.$X
+
+
+kiểm tra daemon hiện tại
+ceph orch ps --daemon_type osd --format yaml | less
+
+
+ceph orch ps --daemon_type osd --format yaml \
+  > "$EVIDENCE/60-osd-containers-before-X-upgrade.yaml"
+
+ceph versions \
+  > "$EVIDENCE/61-versions-before-X-upgrade.txt"
+
+ceph pg ls-by-osd $X \
+  > "$EVIDENCE/62-X-pgs-final-before-upgrade.txt"
+
+Lấy public image:
+export TARGET_IMAGE='quay.io/ceph/ceph:v16.2.15'
+echo "$TARGET_IMAGE"
+osd 1 nằm trên ceph-node2 nên là phải sang ceph node2 
+
+pull public image
+sudo docker pull quay.io/ceph/ceph:v16.2.15
+ceph orch daemon redeploy osd.$X --image "$TARGET_IMAGE"
+kiểm tra daemon
+ceph versions ceph osd metadata $X | grep -E '"ceph_version"|"hostname"' ceph orch ps --daemon_type osd --format yaml
+
+
+A6
+ceph versions \
+  > "$EVIDENCE/59-versions-after-X-upgrade.txt"
+
+ceph -s \
+  > "$EVIDENCE/60-after-X-upgrade-ceph-s.txt"
+
+ceph osd tree \
+  > "$EVIDENCE/61-after-X-upgrade-tree.txt"
+
+ceph pg ls-by-osd $X \
+  > "$EVIDENCE/62-X-pgs-after-upgrade.txt"
+
+ceph health detail \
+  > "$EVIDENCE/63-after-X-upgrade-health.txt"
+
+ceph osd rm-pg-upmap-items $PG
+
+đây là để trả lại hết pg về
+while IFS= read -r PG; do
+    [ -z "$PG" ] && continue
+
+    echo "RETURN $PG : clear X=$X -> S=$S upmap"
+
+    ceph osd rm-pg-upmap-items "$PG" </dev/null || true
+done < "$EVIDENCE/41-X-all-pgs-to-drain.txt"
+
+
+
+
+
+
+while :; do
+    BAD=$(
+        ceph pg dump pgs_brief -f json 2>/dev/null \
+        | jq '[.pg_stats[] | select(.state != "active+clean")] | length'
+    )
+
+    echo "$(date) PG not active+clean: $BAD"
+
+    if [ "$BAD" -eq 0 ]; then
+        echo "ALL PGs converged."
+        break
+    fi
+
+    sleep 5
+done
+check
+
+
+kiểm tra xem là cái upmap còn không 
+ceph osd dump -f json \
+  | jq '.pg_upmap_items'
+
+Rétore afinity
+ceph osd primary-affinity osd.$X 1
+
+reweight lại về 0 cái S
+ceph osd crush reweight osd.$S 0
+
+kiểm tra xem osd S back up còn PG được crush map mới đẩy vào không 
+ceph pg ls-by-osd $S
+
+set bỏ noout
+ceph osd unset-group noout osd.$X
+
+đã checksum lại so với bản gốc bản này là bản sau khi osd X được làm primary
+
+
+chứng minh không bị ảnh hưởng osd x mồ côi , drained dữ liệu và upmap, 
+deep scrub truowsc upgrade, chuwnsg minh check sum H0 taijsao no can kem error
+
+

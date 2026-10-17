@@ -1,0 +1,137 @@
+[
+  {
+    "path": "[Content_Types].xml",
+    "size": 1495,
+    "sha256": "f4a154de51c1396353eed90c1d91ee06703f94ce8fb8e7f2f79311c648249d99"
+  },
+  {
+    "path": "_rels/.rels",
+    "size": 590,
+    "sha256": "e19238d7a71fa7a2490776252686f70e2de6238c87cd509b5e3a3cc07c2ea4df"
+  },
+  {
+    "path": "word/document.xml",
+    "size": 131483,
+    "sha256": "e99bbb972f2e2dc7febf200007c46f05f84eecc0aa14c420696e2bba0d6783ff"
+  },
+  {
+    "path": "word/_rels/document.xml.rels",
+    "size": 2948,
+    "sha256": "ade6341288fe0347ca0997c515665f62178647b7a15c7d0533c6e1f8bd9b1772"
+  },
+  {
+    "path": "word/media/image1.png",
+    "size": 30494,
+    "sha256": "e4fabf43c1d93981bf7dfd9ea8b8b41e47106c0310c2ec40a976770c36d13d82"
+  },
+  {
+    "path": "word/media/image2.png",
+    "size": 74114,
+    "sha256": "f01642f8d4b44d4d1e0c2fb9e1495bc3053c95eb739ac9bc955b3e6dcb7cd4bf"
+  },
+  {
+    "path": "word/media/image3.png",
+    "size": 21527,
+    "sha256": "881c2f015275224f2285dd0a170da5f5ad4996a444584737a0593fce847132c9"
+  },
+  {
+    "path": "word/media/image4.png",
+    "size": 43386,
+    "sha256": "d23265f69216a95f35ce539b743022bfd88e46d68c24467a8f1800528dc33a58"
+  },
+  {
+    "path": "word/media/image5.png",
+    "size": 37623,
+    "sha256": "09661da2bcdda6a7c56dc9e5e30cc70ad0bf976e0869c2a65e07d0d27ea28bc9"
+  },
+  {
+    "path": "word/media/image6.png",
+    "size": 37080,
+    "sha256": "4c62408c4c0147b0c4576a3d49d66d25929c39d516145260f3f460115b37188a"
+  },
+  {
+    "path": "word/media/image7.png",
+    "size": 87154,
+    "sha256": "6941351edcbf1fac93d547f806be89766a54fb86ea315d73f8bab4efe06aa899"
+  },
+  {
+    "path": "word/media/image8.png",
+    "size": 53276,
+    "sha256": "b9c52c36daced0564a00d39864ca3ed60876740c6211e879a1cc12a0514a0e16"
+  },
+  {
+    "path": "word/media/image9.png",
+    "size": 70254,
+    "sha256": "9e5f03b9f05c1b9f23867816255047b7df6631ae7843a474d30e13e95d59bcab"
+  },
+  {
+    "path": "word/media/image10.png",
+    "size": 319610,
+    "sha256": "b03789f928c43a435ab63efc1fe3cac7491a7638a06eb56e6dafdb71b16b9cf3"
+  },
+  {
+    "path": "word/media/image11.png",
+    "size": 315136,
+    "sha256": "f7b5b08988477ae8d228d193338ffde3a56771cccfc2779a2c61be1fc837a39c"
+  },
+  {
+    "path": "word/media/image12.png",
+    "size": 58431,
+    "sha256": "ef594d228392cb22f73a6a2efb3f41c816fadcf9ddaa12affa3a6f1190711e03"
+  },
+  {
+    "path": "word/media/image13.png",
+    "size": 255267,
+    "sha256": "ab1ca12fc50e50b96ba80e56c3a1d109befbb35abdfaf750930a59e66a84251c"
+  },
+  {
+    "path": "word/media/image14.png",
+    "size": 9983,
+    "sha256": "de73f2de5390b99ced672afedf877e9571ad0d99e07ee7b173e46d671bf70863"
+  },
+  {
+    "path": "word/media/image15.png",
+    "size": 396945,
+    "sha256": "b43d8528c4d3519351c4f6f2d862c17bd3c34af3ebda470515efe537b1fa4b22"
+  },
+  {
+    "path": "word/theme/theme1.xml",
+    "size": 8397,
+    "sha256": "2760e6e84d4bf365af6570192dbe9cb57bb32653388d0ea041d116b25b1ca0a2"
+  },
+  {
+    "path": "word/settings.xml",
+    "size": 4663,
+    "sha256": "8dbac06cab6ca6b4d7a65610d77473165f56a359be3d7f21d85b660df2b9a72e"
+  },
+  {
+    "path": "word/numbering.xml",
+    "size": 9892,
+    "sha256": "5d4242e616381897042997a6c53b667b2091c6be62499fe7e17cc208e745ef6b"
+  },
+  {
+    "path": "word/styles.xml",
+    "size": 43753,
+    "sha256": "92d6dd515ba64663378de1183ffebdd188344e63d0a494f1f6dbad80e01bb76f"
+  },
+  {
+    "path": "word/webSettings.xml",
+    "size": 1083,
+    "sha256": "4a225c07c64feb7f5e4ef8b4444bfe94c0f81e35cb00632fef988cf909172f82"
+  },
+  {
+    "path": "word/fontTable.xml",
+    "size": 2737,
+    "sha256": "62c5220411a3fb3156c901c9dc440f9b3c407f72e27e150cbb62bfae711a3e2c"
+  },
+  {
+    "path": "docProps/core.xml",
+    "size": 785,
+    "sha256": "3e557ae88b832085964b5e2404b4340b905850a1f8c39e83fd1c6d3cedddcc70"
+  },
+  {
+    "path": "docProps/app.xml",
+    "size": 997,
+    "sha256": "a4f720fa33b1de122394c9aba7198421eb016516eb74e18cb753b2f1a70c1260"
+  }
+]

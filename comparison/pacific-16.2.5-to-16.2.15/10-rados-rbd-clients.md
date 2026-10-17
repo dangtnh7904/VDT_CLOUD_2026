@@ -66,6 +66,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; likelihood và applica
 
 **Mixed-version.** Client library thực hiện diff quyết định behavior; hai backup workers base/target có thể trả timing hoặc extent sequence khác trên cùng image. Upgrade cluster daemon không tự bật image feature.
 
+**Activation và rollback.** Thay đổi chỉ kích hoạt explicit khi client gọi diff/backup; restart daemon hoặc nâng OSD không tự ghi object-map theo path này. Với một diff read-only, có thể failback worker về base vì không có format migration, nhưng hạ binary không sửa manifest/export sai đã tạo: phải loại artifact đó và chạy lại full/reference diff rồi xác minh checksum trước khi dùng cho restore.
+
 **Kiểm chứng.** Chọn image có parent, nhiều snapshots, grow/shrink, zero/discard và object-map valid/invalid. So target fast-diff với full/reference diff, kiểm checksum của export/restore và tính ổn định extent order; thử khi exclusive-lock lấy được và không lấy được. Stop rollout client backup nếu byte range hoặc restored content lệch, dù job nhanh hơn.
 
 **Đánh giá.** Rủi ro **cao cho backup/sync correctness**, confidence **high**.
@@ -79,6 +81,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; likelihood và applica
 **Data/rollback boundary.** Cache file có thể chứa dirty user data chỉ tồn tại local trước khi writeback hoàn tất. Xóa/recreate file để vượt gate có thể mất dữ liệu. Chiều ngược lại cũng không được code chứng minh an toàn: base không có version gate cho cấu trúc target đã đổi pointer width. Vì vậy không reopen cache layout 1 bằng base như một rollback thử nghiệm tùy ý.
 
 **Applicability.** Chỉ áp dụng cho RBD persistent cache mode `ssd` với cache file hiện hữu. RWL/pmem không dùng chính SSD layout transition này, dù vẫn cần RBD-003.
+
+**Mixed/full phase.** Layout được đọc bởi process đang sở hữu cache file, nên tỷ lệ OSD/MON base/target không làm nó tương thích hơn. Trong mixed client rollout, worker target sẽ từ chối layout 0 trong khi worker base không có gate cho layout 1; chỉ sau khi từng cache được drain và chuyển theo procedure đã kiểm chứng mới được coi là full target. Không handover cùng cache file giữa hai cohort.
 
 **Kiểm chứng/hành động.** Inventory image/client có PWL, mode, file path, cache state `present/clean/empty` và exclusive-lock owner. Thiết kế drain/flush/invalidate bằng procedure upstream/vendor đã test; giữ recovery copy và chứng minh data đã tới cluster trước client switch. Trong lab, mở bản sao cache base bằng target và xác nhận failure signal dự kiến; không thử trên cache dirty duy nhất.
 
@@ -99,6 +103,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; likelihood và applica
 
 **Mixed-version.** PWL là cache local của client đang giữ exclusive-lock. Handover VM/QEMU hoặc worker giữa base và target mà không drain rõ ràng có thể đổi code đọc/ghi cùng cache metadata. Cluster HEALTH_OK không quan sát đầy đủ dirty local cache.
 
+**Ranh giới rollback và phần chưa biết.** Điểm failback an toàn là sau khi cache đã flush, clean/empty và lock được release; hạ binary không sửa metadata đã hỏng hoặc user data còn dirty chỉ ở local media. Ngoài layout riêng tại RBD-002, nhóm fix này không chứng minh một migration ngược, nên cache đã được target ghi phải qua crash/reopen test trước khi giao lại base. Hiện chưa có inventory mode/path, dirty-entry count, exclusive-lock owner và handover workflow của môi trường đích; thiếu các giá trị đó thì finding vẫn là blocker có điều kiện.
+
 **Kiểm chứng.** Trên disposable image, chạy overlapping writes, flush, discard, crash/restart và lock handover cho mode thực dùng; kiểm checksum sau recovery, cache clean/empty state, journal/cache metrics và client latency. Mọi client upgrade phải có stop condition nếu cache init lỗi, dirty count không về 0 hoặc checksum lệch.
 
 **Đánh giá.** Rủi ro **cao khi PWL bật**, confidence **high**.
@@ -111,6 +117,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; likelihood và applica
 
 **Mixed-version.** Client base/target phát journal events khác nhau. Nếu VM/QEMU/rbd-nbd worker được nâng từng phần, cùng image workload có thể chỉ treo ở worker cũ; health của mirror daemon không thay thế client telemetry.
 
+**Tác động và rollback.** Failure mode gây mất availability của request, tăng capacity journal không giới hạn và có thể assert client; nếu discard/commit ordering sai, durability phải được xác minh lại sau reopen. Đây không phải format migration, nhưng failback sang base sẽ đưa bug trở lại và không tự thu nhỏ journal hoặc hoàn tất request treo. Chỉ rollback client sau khi dừng workload, journal/replay đã hội tụ và checksum đạt; nếu không, giữ target để recovery trên bản sao. Chưa biết image nào bật journaling, tần suất TRIM và ngưỡng journal thực tế nên phải inventory trước canary.
+
 **Kiểm chứng.** Chạy discard/TRIM aligned, misaligned và cross-object trên image journaling; quan sát I/O completion, journal object growth, client stack/timeout, mirror replay lag và data after reopen. Stop nếu request không complete hoặc journal tăng không hội tụ.
 
 **Đánh giá.** Rủi ro **cao theo feature/workload**, confidence **high**.
@@ -120,6 +128,8 @@ Mức rủi ro là hậu quả khi điều kiện đúng; likelihood và applica
 **Evidence.** Các dòng `1259`, `1279`, `1280`, `1282`, `2442`, `2592` map duy nhất tới commit `319ada6774d5e6f4fdf0b06eace63da7f82941b7`. Base API boolean có thể trả `false` khi RADOS client mới chưa có OSDMap hoặc pool không tồn tại, giống kết quả pool không ở self-managed snapshot mode. Caller `rados cppool` vì thế có thể không in warning/không yêu cầu confirmation guard.
 
 **Trước → sau.** Target query chờ/refresh map và tách error khỏi false; CLI không tiếp tục dựa trên một negative giả. Đây là correctness/safety cho operator tool, không tác động steady-state RBD I/O.
+
+**Activation/mixed và rollback.** Path chỉ chạy khi operator hoặc automation gọi explicit `rados cppool`; restart hay full daemon rollout không tự kích hoạt. Trong mixed environment, version của CLI tại từng invocation quyết định có guard đúng, vì vậy chỉ cho phép target CLI từ một host đã pin. Pool đích và objects đã copy là state bền vững: ranh giới reversible là trước command; hạ binary không undo copy, còn xóa pool đích là change phá hủy riêng cần checksum/approval chứ không phải rollback package.
 
 **Kiểm chứng/hành động.** Không dùng copy pool trong upgrade trừ change riêng. Trong lab, thử existing normal pool, self-managed snapshot pool và nonexistent pool bằng fresh client; xác nhận target phân biệt return/error và guard. Xác minh dữ liệu copy trước khi xóa nguồn bất kể CLI warning.
 
@@ -153,6 +163,8 @@ Target còn sửa RefreshRequest retry/ENOENT, pool-validation lockup và một 
 **Kiểm chứng.** Trên canary tạo controlled lock contention, watch disconnect, client blocklist và MGR failover; quan sát error code, request completion, exclusive-lock owner, rewatch, task/schedule recovery và ảnh hưởng module MGR khác. Stop nếu I/O treo, lock không có owner hợp lệ hoặc phải restart toàn MGR để module phục hồi.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo failure path**, confidence **high**.
+
+**Tác động và rollback boundary.** Availability cải thiện ở failure path cụ thể: target `ManagedLock::send_acquire_lock()` hoàn tất callback với `-EBLOCKLISTED` khi watch handle bằng `0` và watcher đã blocklisted, thay vì giữ request ở `STATE_WAITING_FOR_REGISTER`. Test `AcquireLockBlocklistedWatch` trong `src/test/librbd/test_mock_ManagedLock.cc` kiểm lỗi và trạng thái không sở hữu lock; test đã đọc, chưa chạy. Đây không phải proof mọi client error sẽ tự retry an toàn. Failback client/MGR cần dừng hoặc quiesce consumer, chụp owner/watch/blocklist state rồi mở lại bằng cohort base chỉ sau khi không còn pending I/O/lock ownership mơ hồ. Hạ client không xóa blocklist entry hay chuyển owner, và có thể tái mở request hang đã vá; không force-break lock hoặc un-blocklist client cũ để hoàn tất rollback khi writer mới còn hoạt động. Riêng hunk lock không chứng minh cluster-wide downgrade an toàn; các persistent cache/state gate trong report này vẫn áp dụng.
 
 ## 5. Trivial/support changes
 

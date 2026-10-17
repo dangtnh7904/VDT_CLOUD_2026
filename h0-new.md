@@ -1,3 +1,5 @@
+> **Tài liệu nghiên cứu/lịch sử — 09/10/2026:** quyết định triển khai và lộ trình hiện hành nằm ở [README](README.md) và [plan tổng PA2](plan-tổng.md). Nội dung PA1, H0, phương án so sánh hoặc target tương lai bên dưới không phải backlog/gate đang dùng; giữ để đối chiếu nguồn.
+
 # H0 cho Ceph — Hiện trạng, cơ sở đề xuất và thiết kế kiểm chứng toàn vẹn dữ liệu
 
 **Phiên bản tài liệu:** 3.0 — bản đề xuất bằng tiếng Việt**Ngày:** 02/10/2026**Trạng thái:** Thiết kế nghiên cứu; chưa triển khai và chưa nghiệm thu production**Phạm vi:** Ghi/đọc của client, replicated pool, erasure-coded pool, recovery/backfill, PA1, điều khiển chính sách và kiểm chứng giá trị của từng level.

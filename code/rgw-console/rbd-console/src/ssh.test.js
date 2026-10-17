@@ -1,13 +1,17 @@
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   __resetForTests, __setClientFactoryForTests, connect, disconnect, exec, status,
 } from "./ssh.js";
 
 class FakeClient extends EventEmitter {
   constructor(mode = "idle") { super(); this.mode = mode; }
-  connect() { queueMicrotask(() => this.emit("ready")); }
+  connect(config) { this.config = config; queueMicrotask(() => this.emit("ready")); }
   end() { this.emit("close"); }
   exec(_command, callback) {
     const stream = new EventEmitter();
@@ -15,8 +19,75 @@ class FakeClient extends EventEmitter {
     stream.destroy = () => {};
     callback(null, stream);
     if (this.mode === "output") queueMicrotask(() => stream.emit("data", Buffer.alloc(32)));
+    if (this.mode === "binary") queueMicrotask(() => {
+      stream.emit("data", Buffer.from([0, 255, 254]));
+      stream.emit("data", Buffer.from([128, 65]));
+      stream.emit("close", 0);
+    });
   }
 }
+
+beforeEach(() => { process.env.RBD_SSH_HOST_KEY_REQUIRED = "false"; });
+afterEach(() => {
+  delete process.env.RBD_SSH_HOST_KEY_REQUIRED;
+  delete process.env.RBD_SSH_HOST_KEY_SHA256;
+  delete process.env.RBD_SSH_KNOWN_HOSTS_PATH;
+});
+
+test("binary OSDMap output preserves bytes across SSH chunks", async () => {
+  __setClientFactoryForTests(() => new FakeClient("binary"));
+  try {
+    await connect();
+    const result = await exec("ceph osd getmap -o /dev/stdout", { binary: true });
+    assert.ok(Buffer.isBuffer(result.stdout));
+    assert.deepEqual(result.stdout, Buffer.from([0, 255, 254, 128, 65]));
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("SSH host key fingerprint is pinned and mismatches are rejected", async () => {
+  const expectedKey = Buffer.from("test-host-public-key");
+  const fingerprint = createHash("sha256").update(expectedKey).digest("base64").replace(/=+$/, "");
+  process.env.RBD_SSH_HOST_KEY_REQUIRED = "true";
+  process.env.RBD_SSH_HOST_KEY_SHA256 = `SHA256:${fingerprint}`;
+  const client = new FakeClient();
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    assert.equal(client.config.hostVerifier(expectedKey), true);
+    assert.equal(client.config.hostVerifier(Buffer.from("different-host-key")), false);
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("SSH connection fails closed when host-key pinning is required but absent", async () => {
+  process.env.RBD_SSH_HOST_KEY_REQUIRED = "true";
+  delete process.env.RBD_SSH_HOST_KEY_SHA256;
+  __setClientFactoryForTests(() => new FakeClient());
+  try {
+    await assert.rejects(() => connect(), error => error.code === "SSH_HOST_KEY_CONFIG_INVALID");
+  } finally { disconnect(); __resetForTests(); }
+});
+
+test("SSH known-hosts pin accepts only the configured host key", async () => {
+  const expectedKey = Buffer.from("known-host-public-key");
+  const root = mkdtempSync(join(tmpdir(), "storage-lab-known-hosts-"));
+  const knownHosts = join(root, "known_hosts");
+  writeFileSync(knownHosts, `ceph-admin ssh-ed25519 ${expectedKey.toString("base64")}\n`, { mode: 0o600 });
+  process.env.RBD_HOST = "ceph-admin";
+  process.env.RBD_SSH_HOST_KEY_REQUIRED = "true";
+  process.env.RBD_SSH_KNOWN_HOSTS_PATH = knownHosts;
+  const client = new FakeClient();
+  __setClientFactoryForTests(() => client);
+  try {
+    await connect();
+    assert.equal(client.config.hostVerifier(expectedKey), true);
+    assert.equal(client.config.hostVerifier(Buffer.from("unexpected-key")), false);
+  } finally {
+    disconnect();
+    __resetForTests();
+    delete process.env.RBD_HOST;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("SSH command output cap is enforced", async () => {
   process.env.RBD_MAX_OUTPUT_BYTES = "8";

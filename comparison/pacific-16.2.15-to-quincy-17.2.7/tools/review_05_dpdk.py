@@ -11,8 +11,8 @@ affect = {
     "src/msg/async/dpdk/DPDKStack.h": ("MSG-056", "DPDKStack owns eal instance and overrides worker naming; startup/shutdown and lcore affinity paths differ."),
     "src/msg/async/dpdk/dpdk_rte.cc": ("MSG-056", "EAL initialization now reports failure, applies NIC allowlist, and stops/joins master thread instead of detached static loop."),
     "src/msg/async/dpdk/dpdk_rte.h": ("MSG-056", "EAL lifecycle and work queue move from static globals to per-instance state with explicit stop."),
-    "src/msg/async/dpdk/DPDK.cc": ("MSG-057", "DPDK NIC init gates TSO on ms_dpdk_enable_tso and exposes PMD stats/xstats via admin socket; error paths and DPDK API compatibility also change."),
-    "src/msg/async/dpdk/DPDK.h": ("MSG-057", "TX mbuf uses buf_iova/rte_mem_virt2iova, DPDK NIC registers stats hook and changes initialization error handling."),
+    "src/msg/async/dpdk/DPDK.cc": ("MSG-057", "DPDK NIC init gates TSO on ms_dpdk_enable_tso and adds PMD stats/xstats hooks; in the target endpoint XstatSocketHook::call has five parameters while AdminSocketHook requires six including inbl, causing a conditional source-build blocker with WITH_DPDK=ON. Default WITH_DPDK is OFF; NIC API and error paths also change."),
+    "src/msg/async/dpdk/DPDK.h": ("MSG-057", "TX mbuf uses buf_iova/rte_mem_virt2iova and DPDKDevice gains stats-hook state; the associated target DPDK.cc hook has a five-versus-six-parameter override mismatch under WITH_DPDK=ON, so PMD command availability requires a buildable artifact and matching DPDK ABI."),
 }
 trivial = {
     "src/msg/async/dpdk/ARP.cc": "T05-dpdk-optional: ARP packet queue return changes Tub to optional; same empty check, move and pop sequence.",

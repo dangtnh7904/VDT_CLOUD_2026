@@ -1,8 +1,10 @@
 # So sánh Ceph Pacific v16.2.5 → v16.2.15
 
-> **Trạng thái bàn giao 7 — 2026-09-17:** đã chốt nguồn, hoàn thành inventory và đủ mười lăm cặp phân tích `01`–`15`; component partition, CSV ledger và cross-reference đã qua acceptance. [Checklist nâng cấp](./UPGRADE-CHECKLIST.md) đã nhập các gate quyết định của toàn suite.
+> **Trạng thái bàn giao 7 — 2026-09-17:** đã chốt nguồn, hoàn thành inventory và đủ mười lăm cặp phân tích `01`–`15`; component partition, CSV ledger và cross-reference đã qua acceptance. [Checklist nâng cấp](./UPGRADE-CHECKLIST%281%29.md) đã nhập các gate quyết định của toàn suite.
 >
 > **Phạm vi:** net diff trực tiếp giữa hai đầu tag Pacific. Đây chưa phải đánh giá GO/NO-GO Production và chưa phải kết luận tác động cho một cluster cụ thể.
+
+> **Bổ sung kiểm chứng offline 13/10/2026:** cổng nhị phân đã khóa đủ `2.665/2.665` dòng (`517 affect`, `2.148 trivial`, `0` chưa phân loại) và [finding-quality](./FINDING-QUALITY-STATUS.md) đạt strict `127/127`. Native suite có 24 YAML sạch nhưng recipe đi qua `16.2.7`, chưa phải direct exact-hop. [12 pin](./EXACT-HOP-PINS.md) `PENDING_INPUT`; [85 evidence ID](./RUNTIME-EVIDENCE-MANIFEST.template.json) và [16 test pack](./RUNTIME-TEST-SELECTION.md) `NOT_RUN`; [20 As-Is](./AS-IS-EVIDENCE.md) `NOT_CAPTURED`; [20 action](./UPGRADE-ACTION-REGISTER.md) `PENDING_INPUT`; [GO/NO-GO](./GO-NO-GO-REGISTER.md) là `NOT_READY_FOR_DECISION`.
 
 ## Mục lục nhanh
 
@@ -50,6 +52,29 @@ Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không p
 22. [Upgrade validation](./15-upgrade-validation.md) bổ sung `ceph-crash` privilege drop, mixed-version `cls/cmpomap`, IPv6 mount formatting, CLI parsing, dencoder plugins và evidence boundaries của Pacific p2p/legacy suites. Repository recipe không phải run result; release-note text phải được đối chiếu với hunk/history và owner finding.
 23. Bộ báo cáo đã hoàn tất acceptance nhưng **không đưa GO/NO-GO Production**: chưa có As-Is cluster, artifact thực tế, test lab/canary, rollback rehearsal hay sign-off. Trạng thái checklist vì vậy vẫn là `HOLD`.
 
+### 2.1. Cổng nhị phân đã đối soát
+
+| Owner | Affect | Trivial | Tổng |
+| --- | ---: | ---: | ---: |
+| 01 | 32 | 13 | 45 |
+| 02 | 26 | 11 | 37 |
+| 03 | 5 | 1 | 6 |
+| 04 | 39 | 13 | 52 |
+| 05 | 27 | 65 | 92 |
+| 06 | 5 | 15 | 20 |
+| 07 | 31 | 654 | 685 |
+| 08 | 31 | 118 | 149 |
+| 09 | 26 | 50 | 76 |
+| 10 | 79 | 395 | 474 |
+| 11 | 71 | 396 | 467 |
+| 12 | 97 | 140 | 237 |
+| 13 | 30 | 21 | 51 |
+| 14 | 0 | 8 | 8 |
+| 15 | 18 | 248 | 266 |
+| **Toàn suite** | **517** | **2.148** | **2.665** |
+
+Owner 07–15 vẫn giữ các cột disposition cũ để truy lịch sử; nhãn canonical mới ánh xạ `material/conditional/mixed → affect` và `support/trivial → trivial`. Owner 01–06 được chuyển từ ledger/evidence cụ thể trong từng báo cáo, không suy từ `P0/P1/P2` hay path.
+
 ## 3. Mục lục bộ báo cáo
 
 | Thứ tự | Markdown | CSV thay đổi liên quan | Trạng thái | Mục đích |
@@ -72,7 +97,7 @@ Hai tag là annotated tags; bảng ghi **commit SHA sau khi peel tag**, không p
 | 14 | [14-security-cross-reference.md](./14-security-cross-reference.md) | [14-security-cross-reference.csv](./14-security-cross-reference.csv) | **Đã phân tích** | Security fix/CVE đã xác minh và liên kết về báo cáo owner |
 | 15 | [15-upgrade-validation.md](./15-upgrade-validation.md) | [15-upgrade-validation.csv](./15-upgrade-validation.csv) | **Đã phân tích** | Ma trận thay đổi → bằng chứng → tình huống kiểm chứng |
 
-Từ phần `00` trở đi, mỗi phần dùng Markdown cho phân tích và CSV cùng basename cho danh sách file thay đổi liên quan. Mọi component CSV giữ 21 cột inventory làm prefix và bổ sung disposition/evidence ở bên phải. Kế hoạch gốc nằm tại [PLAN-pacific-16.2.5-to-16.2.15.md](../PLAN-pacific-16.2.5-to-16.2.15.md); gate triển khai tổng hợp nằm tại [UPGRADE-CHECKLIST.md](./UPGRADE-CHECKLIST.md).
+Từ phần `00` trở đi, mỗi phần dùng Markdown cho phân tích và CSV cùng basename cho danh sách file thay đổi liên quan. Mọi component CSV giữ 21 cột inventory làm prefix và bổ sung impact/evidence ở bên phải. Kế hoạch gốc nằm tại [PLAN-pacific-16.2.5-to-16.2.15.md](./PLAN-pacific-16.2.5-to-16.2.15.md); gate triển khai tổng hợp nằm tại [UPGRADE-CHECKLIST(1).md](./UPGRADE-CHECKLIST%281%29.md). [Exact-hop register](./EXACT-HOP-PINS.md), [manifest pin template](./EXACT-HOP-PIN-MANIFEST.template.json), [runtime evidence template](./RUNTIME-EVIDENCE-MANIFEST.template.json), [test selection](./RUNTIME-TEST-SELECTION.md), [As-Is register](./AS-IS-EVIDENCE.md), [action register](./UPGRADE-ACTION-REGISTER.md) và [GO/NO-GO register](./GO-NO-GO-REGISTER.md) tạo lớp kiểm chứng có thể validate; các dữ liệu phụ thuộc môi trường vẫn chưa chạy/chưa khóa.
 
 ## 4. Phương pháp
 
@@ -95,7 +120,7 @@ Từ phần `00` trở đi, mỗi phần dùng Markdown cho phân tích và CSV 
 - Mỗi file có đúng một owner chính `01`–`15`; owner tree thắng keyword lồng bên trong. Ví dụ toàn bộ cây dashboard thuộc `07`, suite `krbd` thuộc `10`, suite `fs` thuộc `11`.
 - Rename được gán theo path đích. Path cũ chỉ là metadata; đặc biệt không dùng rename `R100 0/0` của marker rỗng để suy ra owner hoặc ý nghĩa nghiệp vụ.
 - `P0/P1/P2` là triage đọc: runtime lõi/cluster state/protocol trước; runtime vận hành/config/deploy/client tiếp theo; test/doc/generated/cơ học làm bằng chứng hỗ trợ.
-- Các cột `review_mode` và `analysis_decision` trong inventory là triage ban đầu. Khi hoàn tất một component, disposition cuối (`material`, `conditional`, `support`, `trivial` hoặc `mixed`) cần được đối soát với toàn bộ dòng CSV thay vì suy ra từ path/P-level.
+- Các cột `review_mode` và `analysis_decision` trong inventory là triage ban đầu. Verdict canonical là đúng một `upgrade_impact=affect|trivial`; mọi `affect` phải có finding ổn định và mọi dòng phải có lý do. Disposition năm nhãn cũ chỉ được giữ để tương thích và phải ánh xạ nhất quán, không được dùng như nhãn thứ ba của cổng nhị phân.
 
 ### 4.4 Phương pháp cho các báo cáo tiếp theo
 
@@ -103,7 +128,7 @@ Với file được chọn sâu: đọc hunk và hai phiên bản của symbol l
 
 Chỉ đưa vào finding chi tiết khi có chuỗi tác động đáng tin cậy tới chuẩn bị rollout, mixed-version, restart/replay, compatibility, dữ liệu, availability, rollback, thời lượng ổn định hoặc tín hiệu validation. Xác suất thấp vẫn được giữ nếu chuỗi tác động có bằng chứng và được ghi `conditional`; client/frontend/test/build không bị loại theo tên thư mục, nhưng nếu không có chuỗi này thì chỉ được tổng hợp là **trivial/support** trong Markdown và vẫn giữ đầy đủ trong CSV.
 
-Thứ tự bằng chứng là: **code/diff và test trong hai source tree → commit/PR/advisory chính thức → tài liệu đầu vào**. [ceph-analysis.md](../../ceph-analysis.md) là danh sách giả thuyết cần kiểm chứng; [submodule.md](../submodule.md) là ghi chú tham khảo đã được đối chiếu lại phần gitlink. Nội dung, lệnh hoặc khuyến nghị trong các tài liệu này không tự động trở thành yêu cầu thao tác trên cluster.
+Thứ tự bằng chứng là: **code/diff và test trong hai source tree → commit/PR/advisory chính thức → tài liệu đầu vào**. [ceph-analysis.md](../../ceph-analysis.md) là danh sách giả thuyết cần kiểm chứng; [submodule.md](./submodule.md) là ghi chú tham khảo đã được đối chiếu lại phần gitlink. Nội dung, lệnh hoặc khuyến nghị trong các tài liệu này không tự động trở thành yêu cầu thao tác trên cluster.
 
 ## 5. Cách đọc inventory
 
@@ -155,3 +180,11 @@ git rev-list --count v16.2.5..v16.2.15
 ```
 
 Kết quả kiểm soát mong đợi: hai SHA như mục 1; working tree sạch; 2.665 file; `A605/M1842/D162/R56`; `+323147/-176246`; 5.547 commit trong khoảng lịch sử.
+
+Chạy toàn bộ kiểm tra offline hiện tại từ root workspace:
+
+```bash
+python comparison/pacific-16.2.5-to-16.2.15/tools/validate_all.py
+```
+
+Runner kiểm strict source/binary gate, migration ledger, native suite graph/YAML, exact-hop template, runtime-evidence template, test-pack/source-asset coverage, As-Is/action coverage, GO/NO-GO arithmetic, finding-quality strict-zero và positive/negative self-test. Kết quả `ALL 11 OFFLINE VALIDATORS PASSED` chỉ xác nhận tính nhất quán offline; 12 pin và 20 action vẫn `PENDING_INPUT`, 20 As-Is `NOT_CAPTURED`, 16 test pack và 85 gate/test `NOT_RUN`.

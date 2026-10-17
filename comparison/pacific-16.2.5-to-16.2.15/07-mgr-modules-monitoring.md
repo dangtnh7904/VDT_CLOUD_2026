@@ -71,6 +71,8 @@ Mức rủi ro là mức ảnh hưởng khi điều kiện đúng, không phải
 
 **Activation và mixed phase.** Cluster chỉ có một active MGR tại một thời điểm, nên binary đang active quyết định behavior. Race có xác suất tăng trong promote/failback, OSD restart/reconnect, metadata refresh hoặc service-map churn — chính là các sự kiện thường xuất hiện trong rolling upgrade.
 
+**Phần chưa biết.** Chưa có As-Is về active/standby placement, daemon reconnect rate, service-map churn, module recovery SLO và lịch sử MGR assert; phải chụp chúng trước canary để phân biệt fix được kích hoạt với một lỗi nền có sẵn.
+
 **Kiểm chứng/hành động.** Canary target standby rồi promote có kiểm soát; theo dõi MGR restart/assert, daemon reconnect, service-map epoch, stale slow-op health và thời gian API/module hồi phục. Thử failback về base trước khi rollout rộng nếu rollback MGR nằm trong runbook.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo điều kiện**, confidence **high**. Target chủ yếu giảm lỗi; rủi ro vận hành nằm ở việc failover làm lộ path này và ở tín hiệu health thay đổi.
@@ -85,6 +87,8 @@ Mức rủi ro là mức ảnh hưởng khi điều kiện đúng, không phải
 
 **Activation và mixed phase.** Per-module finisher có hiệu lực khi target MGR làm active và module xử lý command/notify. TTL path chỉ đáng chú ý nếu operator bật cache hoặc quy trình package đi qua `v16.2.8`; một bước nhảy trực tiếp tới endpoint đã chứa fix không mang regression trung gian đó vào trạng thái cuối.
 
+**Activation mode và rollback.** Finisher đổi tự động sau restart/promote target; TTL cache là config opt-in và giữ tắt ở default. Không có persistent data migration, nên có thể failback active MGR sau khi drain command/callback và standby base đã bắt kịp. Hạ binary không hoàn tất callback đã treo hoặc phục hồi notification bị trễ; phải kiểm module queue/state rồi replay thao tác idempotent nếu contract cho phép.
+
 **Kiểm chứng/hành động.** Chọn ít nhất hai module, cố tình làm một callback chậm trong staging và xác nhận module khác vẫn phản hồi; theo dõi finisher backlog/thread. Pin đúng endpoint package và tránh dừng rollout ở `16.2.8`. Nếu muốn bật TTL cache vì cluster lớn, benchmark riêng sau upgrade thay vì thay knob đồng thời với canary.
 
 **Đánh giá.** Rủi ro **trung bình**, confidence **high**. Đây chủ yếu là availability improvement; historical deadlock là release-selection guard, không phải lỗi còn lại ở target.
@@ -98,6 +102,8 @@ Target upstream đã thêm declaration cho Dashboard, devicehealth, insights, k8
 **Trước → sau.** Base fan-out notification rộng hơn. Target gọi `notify()` chỉ khi loại event có trong `NOTIFY_TYPES`. Module custom có method `notify()` nhưng không có declaration có thể load với notify set rỗng/log lỗi và không còn nhận event; đây là silent behavior change nguy hiểm hơn một lỗi import rõ ràng.
 
 **Activation và mixed phase.** Chỉ target active MGR áp dụng gate. Failover base ↔ target có thể làm cùng module lúc nhận, lúc mất event. Module polling-only hoặc không override `notify()` không bị ảnh hưởng.
+
+**Activation mode và impact.** Gate chạy tự động khi target active phát event; việc sửa custom module là explicit code/config deployment. Impact là availability/correctness của automation/telemetry do module cung cấp: event bị bỏ im lặng có thể để state ngoài cluster stale dù Ceph core vẫn khỏe. Không có persistent schema migration, nhưng failback chỉ phục hồi fan-out trong tương lai, không phát lại event đã bỏ; consumer phải reconcile từ authoritative state.
 
 **Kiểm chứng/hành động.** Inventory toàn bộ `mgr module ls`, package/site path và module được mount/copy ngoài source Ceph. Với mỗi override `notify()`, khai báo đúng subset enum target: `NotifyType.mon_map`, `pg_summary`, `health`, `clog`, `osd_map`, `fs_map` hoặc `command`; test một event thật và log callback sau promote/failback. `service_map` không phải member khả dụng ở endpoint này. Không dùng một danh sách “all” tự chế vì mục tiêu thay đổi là giảm fan-out.
 
@@ -119,6 +125,8 @@ Một ý tưởng `autoscale-profile` từng xuất hiện giữa lịch sử r�
 **Trước → sau.** Target có thêm cách đánh dấu pool dự kiến lớn, một maintenance control toàn cục và guard tránh proposal không hợp lệ/quá lớn. Điều này có thể đổi recommendation hoặc nhịp hội tụ, nhưng upgrade tự nó không buộc mọi pool đổi `pg_num` nếu mode/flags không cho phép action.
 
 **Activation và mixed phase.** Active MGR tính recommendation/action. Sau failover base ↔ target, cùng OSDMap có thể được diễn giải khác ở các edge mới. Tác động tăng khi pool ở `on`, có target ratio/bulk flag, đang gần `pg_num_max`, hoặc topology có overlapping roots.
+
+**Activation mode và rollback.** Recommendation chạy tự động khi module active; đổi `bulk`, `noautoscale`, mode hoặc chấp nhận PG proposal là thao tác explicit/config. Trước canary lưu toàn bộ pool properties và freeze action. Hạ MGR có thể đổi cách tính tiếp theo nhưng không hoàn tác `pg_num`/OSDMap epoch đã commit; rollback state phải dùng command/change record đã diễn tập, và không giảm PG theo suy đoán.
 
 **Kiểm chứng/hành động.** Trước rollout lưu `ceph osd pool autoscale-status`, pool flags/mode, target ratio, `pg_num_min/max` và pending recommendation. Trong canary, freeze các thay đổi PG không cần thiết hoặc dùng maintenance control theo runbook đã test; sau rollout phải unset/verify rõ ràng. So sánh recommendation trước/sau từng lần active MGR đổi, không dùng riêng Dashboard display làm nguồn quyết định.
 
@@ -147,6 +155,8 @@ curl -fsS http://TARGET_MGR:9283/metrics | promtool check metrics
 
 Đồng thời kiểm tra Prometheus target state, `up`, scrape error log và một tập golden queries. Nếu parser lỗi, không dùng endpoint đó làm stop/go. Yêu cầu vendor package/backport có code endpoint được đối chiếu và test parser; hoặc dùng nguồn tín hiệu độc lập đã được phê duyệt. Báo cáo không xác nhận một config workaround an toàn cho lỗi format này.
 
+**Ranh giới rollback.** Đây là exposition runtime, không ghi cluster format: failback active MGR về base có thể loại metric lỗi sau khi module/API đã hồi phục. Tuy nhiên package rollback không lấp khoảng telemetry/alert đã mất trong lúc parser từ chối scrape và base cũng không có metric mới này. Giữ nguồn health độc lập, lưu raw exposition lỗi, và chỉ quay lại target khi artifact/backport vượt `promtool` gate.
+
 **Đánh giá.** Rủi ro **cao** và là **blocker cho monitoring gate**, confidence **high** về code path/lịch sử. Chưa chạy runtime parser nên kết luận hệ thống cụ thể vẫn cần gate trên.
 
 ### MGR-006 — Metric/schema và standby contract thay đổi trong mixed version
@@ -158,6 +168,8 @@ Các net changes khác gồm pool read/write gauge → counter (`46ae4d7e91c76be
 Target cũng làm standby Prometheus discoverable (`24e843a075a74daf4708f51e2a2f050d2f8c1a47`) và thêm option (`305648a2a13ec94fa5dc0b55bd6166f975360de9`): với default, `/` trên standby trỏ người đọc tới active URI còn `/metrics` trả body rỗng. `standby_behaviour=error` chỉ làm route `/` trả HTTP error có code cấu hình; route `/metrics` trên standby vẫn trả `200` với body rỗng.
 
 **Tác động/mixed phase.** Active MGR quyết định schema và value. Query/rule giả định series luôn tồn tại, kiểu cũ hoặc host-level version có thể cho kết quả khác khi active đổi. Scraper trỏ vòng qua mọi MGR mà không phân biệt active có thể nhận body rỗng từ standby và tạo tín hiệu sai. Tuy nhiên phải xử lý MGR-005 trước: schema đúng không có ý nghĩa nếu toàn scrape bị parser loại.
+
+**Activation, rollback và phần chưa biết.** Schema/standby route đổi tự động khi Prometheus module chạy trên active/standby; `standby_behaviour` là config explicit. Không có persistent cluster migration, nên có thể failback MGR, nhưng dashboards/rules đã đổi sang counter/schema target cũng phải rollback atomically; hạ binary không bù sample bị thiếu. Chưa biết scrape topology, service discovery, LB health route, rules và remote-write consumers thực tế, nên cần inventory trước khi sửa contract.
 
 **Kiểm chứng/hành động.** Chụp golden set metric names/types/labels ở base; canary target rồi diff exposition schema, query output, missing series và cardinality. Kiểm tra riêng mixed host để nhãn version đúng từng daemon. Nếu dùng `standby_behaviour=error`, load balancer phải health-check route `/`; scrape/health-check riêng `/metrics` không tự loại standby vì vẫn nhận `200`. Không chỉ nhìn HTTP status: xác nhận target được chọn là active và body có series mong đợi.
 
@@ -173,6 +185,8 @@ Target cũng làm standby Prometheus discoverable (`24e843a075a74daf4708f51e2a2f
 
 **Activation và mixed phase.** SSL context được tạo khi server khởi động, nên thay đổi lộ ra ở restart/promote target MGR. Active flip có thể luân phiên TLS minimum và URL behavior nếu VIP/LB đi thẳng tới MGR instances.
 
+**Ranh giới rollback và phần chưa biết.** Có thể failback Dashboard sau khi drain session/API request; TLS minimum trở về base nhưng đó là mở lại TLS 1.2, không phải rollback security trung tính. Nếu bật `UNSAFE_TLS_v1_2`, lưu config và approval để có thể unset/restart khi clients đã sửa. Chưa có browser/proxy/API-client TLS inventory, direct-standby routing và SNI/certificate matrix của môi trường nên compatibility vẫn là gate.
+
 **Kiểm chứng/hành động.** Trước rollout kiểm tra TLS 1.3 từ browser, reverse proxy, API client, certificate chain/SNI và VIP. Trong canary test direct active, direct standby và qua LB; test login/session, redirect sau failover và API `Accept` version. Chỉ bật TLS 1.2 sau đánh giá security và phải restart/retest endpoint.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo điều kiện**, confidence **high**. Owner set không có direct test chứng minh minimum TLS 1.3 end-to-end.
@@ -185,6 +199,8 @@ Target cũng làm standby Prometheus discoverable (`24e843a075a74daf4708f51e2a2f
 
 **Activation và mixed phase.** Chỉ áp dụng khi module `stats`/CephFS perf query được dùng. Active MGR base/target quyết định schema; MDS rank failover kích hoạt re-registration path.
 
+**Activation mode, impact và rollback.** Operator/consumer gọi command hoặc bật stats query explicit; failover rank kích hoạt re-registration tự động. Impact là observability/API compatibility, không phải CephFS data format. Có thể failback active MGR vì query state là runtime, nhưng parser/dashboard v2 phải rollback cùng lúc và sample đã bỏ không được tái tạo. Chưa có consumer/schema inventory nên phải coi mọi script ngoài source là unresolved cho tới khi chạy golden JSON.
+
 **Kiểm chứng/hành động.** Lưu golden JSON base, chạy parser/cephfs-top thực tế với target, kiểm tra `version=2`, nhiều filesystem/client và counters. Sau đó failover rank 0, xác nhận metric tiếp tục cập nhật, không chỉ command trả thành công.
 
 **Đánh giá.** Rủi ro **trung bình-cao theo điều kiện**, confidence **high**.
@@ -196,6 +212,8 @@ Target cũng làm standby Prometheus discoverable (`24e843a075a74daf4708f51e2a2f
 **Trước → sau.** Trên cluster nhiều PG hoặc đang recovery, target giảm CPU/data-copy pressure lên MGR. Đổi polling/event timing có thể làm display tiến độ khác nhịp với base; nó không đổi recovery correctness của OSD.
 
 **Activation và mixed phase.** Module `progress` phải bật và cluster có recovery/backfill. Active MGR version quyết định cách tổng hợp; sau failover event cache được dựng lại.
+
+**Activation mode, impact và rollback.** Module được enable explicit, còn event/polling chạy tự động trong recovery. Impact là observability và MGR resource usage; recovery correctness vẫn thuộc OSD. Không có persistent migration, nên failback MGR sau promote/drain là khả thi, nhưng progress cache/display cũ không phải nguồn rollback và lịch sử sample không được phục hồi. Chưa có PG scale, recovery SLO, MGR CPU/RSS baseline và consumer của `ceph progress`, nên chỉ dùng finding sau khi thu As-Is.
 
 **Kiểm chứng/hành động.** Trong canary recovery an toàn, so `ceph progress` với PG-state/OSD recovery counters và MGR CPU/RSS; test active-MGR failover giữa event. Không dùng `ceph progress` một mình làm tiêu chí hoàn tất recovery.
 
@@ -214,6 +232,8 @@ Target package vẫn đưa generated file về cùng path `/etc/prometheus/ceph/
 **Kiểm chứng/hành động.** Export running rules và Alertmanager config trước upgrade; lập map 18 tên cũ → rule target hoặc quyết định deprecate. Chạy rule syntax/unit check, staging rule evaluation, route/inhibition simulation và một alert injection có kiểm soát. Sau deploy xác nhận checksum/runtime rule, reload success, pending/firing behavior và notification destination — không chỉ kiểm tra file trên disk.
 
 **Đánh giá.** Rủi ro **cao theo điều kiện**, confidence **high**.
+
+**Mixed/full và rollback boundary.** Prometheus đang giữ rules base vẫn phát các tên cũ ngay cả khi MGR đã target; một monitoring replica reload rules target có thể đồng thời phát tên mới trong khi replica khác còn base. Sau full deployment, closure phải dựa vào running rules của mọi evaluator và route/inhibition/silence đang dùng, không chỉ checksum package. Rollback riêng rule contract cần khôi phục bộ rules, Alertmanager config và mapping tên đã snapshot như một bộ, reload rồi kiểm pending/firing state cùng notification destination. Hạ MGR image không hoàn nguyên file mounted hoặc rules đã reload; cũng không thu hồi notification/ticket đã phát. Trước khi failback rules, kiểm metric compatibility với exporter hiện hành để tránh rules base trở thành im lặng; deployment này chưa có bằng chứng route simulation hay reload rehearsal.
 
 ## 5. Gate theo pha rollout
 

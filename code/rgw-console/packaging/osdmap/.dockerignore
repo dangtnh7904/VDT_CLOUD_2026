@@ -1,0 +1,13 @@
+# Only the fixed worker source may enter this image's build context.
+**
+!Dockerfile
+!Dockerfile.minimal
+!worker.py
+!minimal/
+!minimal/verify_runtime.py
+!minimal/licenses/
+!minimal/licenses/COPYING
+!minimal/licenses/COPYING-GPL2
+!minimal/licenses/COPYING-LGPL2.1
+!minimal/licenses/COPYING-LGPL3
+!minimal/licenses/SOURCES.json

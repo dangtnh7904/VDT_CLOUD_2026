@@ -1,3 +1,5 @@
+> **Phạm vi sử dụng 09/10/2026:** giữ MOP này làm nguồn theo thành phần/hồ sơ cũ. Phần phương án OSD/H0 được thay bởi [plan tổng PA2](../plan-tổng.md), gồm deep-scrub trước và sau handoff. Đối chiếu [comparison tổng](../comparison/README.md) và cập nhật MOP OSD trước thực thi.
+
 # MOP nâng cấp Ceph Pacific 16.2.5 → 16.2.15
 
 **Dự án:** PRJ GD2 — RGW/RBD, thử PA1/PA2 và kiểm chứng H0/H1  

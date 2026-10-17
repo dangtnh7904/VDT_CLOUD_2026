@@ -1,125 +1,161 @@
+# Plan tổng — Nâng cấp Ceph bằng PA2 luân chuyển spare
 
-**Plan nâng cấp tổng quát của bạn là: nâng theo từng chặng phiên bản; trong mỗi chặng nâng lần lượt từng loại daemon; riêng OSD triển khai từ canary nhỏ rồi mở rộng theo từng đợt.**
+**Cập nhật: 12/10/2026.** Kế hoạch hiện hành thay các phương án tổng cũ. Phạm vi đầu tiên: cephadm, RGW/RBD và replicated pool. EC/topology chưa kiểm chứng cần thiết kế và capability riêng trước khi đưa vào scope. Quy mô 1.600 OSD/24 PB là bối cảnh trong tài liệu nguồn, chưa phải inventory hiện tại đã xác nhận.
 
-Dưới đây là **MOP ở mức trình tự thực hiện**, áp dụng cho cụm **cephadm, phục vụ RGW + RBD** của bạn.
+Liên quan: [README](README.md) · [Comparison](comparison/README.md) · [Console](code/README.md) · [Plan console](code/plan%285%29.md) · [Benchmark](benchmark/README.md).
 
-1. **Chia toàn bộ quá trình thành ba chặng phiên bản**
+## 1. Quyết định và đầu ra
 
-   Giữ các mốc trong lộ trình bạn đã chọn:
+1. Chỉ dùng `PA2_ROTATING_SPARE`: **X → S, nâng X; Y → X, nâng Y; Z → Y…** Kế thừa controlled drain, replica validation, gate và canary; bỏ bước trả dữ liệu về nguồn cũ.
+2. `KEEP_ROTATED_PLACEMENT` là end state chuẩn. Restore cấu hình tạm theo ledger, giữ mapping cần cho placement đã xoay. Không tự trả về baseline placement.
+3. Hoàn tất và ổn định từng hop trước hop kế tiếp. Một chain không trộn target release.
+4. Mỗi hop có gói quyết định: comparison → việc cần sửa trước → MOP/gate → execution evidence → benchmark nếu bật → closeout.
+5. Console đang phát triển; simulator và dữ liệu mock không đóng gate cluster.
 
-   | Chặng | Phiên bản nguồn → đích | Cách thực hiện                                           |
-   | ------ | ---------------------------- | ----------------------------------------------------------- |
-   | 1      | **16.2.5 → 16.2.15**  | Hoàn thành nâng các thành phần của cụm lên 16.2.15 |
-   | 2      | **16.2.15 → 17.2.7**  | Lặp lại quy trình nâng theo từng loại daemon          |
-   | 3      | **17.2.7 → 18.2.7**   | Lặp lại quy trình và hoàn tất tại phiên bản đích |
+Nếu placement sau xoay không đạt policy, HOLD và lập revision khắc phục (`RECONCILE_TO_POLICY`) với PG/bytes, ownership, gate và chi phí riêng. Đây không phải bước return mặc định.
 
-   **Hoàn thành và theo dõi ổn định một chặng rồi mới bắt đầu chặng tiếp theo.** Ví dụ, khi đang nâng các OSD từ 16.2.15 lên 17.2.7, chưa đưa một nhóm OSD đi tiếp lên 18.2.7.
+## 2. Lộ trình và hiện trạng
 
-   Các mốc trên là lộ trình dự án hiện tại; việc chốt bản vá cụ thể để triển khai production là quyết định riêng.
-2. **Kết hợp rolling upgrade, staggered upgrade và canary**
+| Hop | Phạm vi | Bằng chứng hiện có | Điều kiện chuyển tiếp |
+|---|---|---|---|
+| H1 | 16.2.5 → 16.2.15 | Source/binary, coverage và finding quality strict 127/127 đã validate; runtime `NOT_RUN`; decision `NOT_READY_FOR_DECISION` | Khóa artifact/harness, capture As-Is, chạy lab/canary/rollback |
+| H2 | 16.2.15 → 17.2.7 | Source/binary và coverage đã validate; quality 44/441, còn 397 gap; 12 pin `PENDING_INPUT`, runtime `NOT_RUN`; decision `NOT_READY_FOR_DECISION` | Bổ sung finding evidence, capture As-Is, khóa artifacts, chạy lab/canary/rollback sau H1 closeout |
+| H3 | 17.2.7 → 18.2.7 | Source/binary 4.434/4.434, 188/188 finding đạt quality audit; 24 As-Is group, 52 runtime gate, 19 test pack, 12 exact-hop pin và 34 action đã thiết kế | Hiện `NOT_READY_FOR_DECISION`: cần gán owner, capture As-Is, khóa artifact/harness, chạy gate/rollback và phê duyệt GO/NO-GO |
 
-   Ba cách này kết hợp với nhau trong cùng một quy trình:
+Tài liệu H1 hoàn thành không có nghĩa mọi daemon production đã nâng. Snapshot `as-is-base/` và hồ sơ `test/` phải gắn ngày/FSID/scope, không dùng như trạng thái trực tiếp.
 
-   | Cách triển khai           | Áp dụng trong plan                                                                                                             |
-   | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-   | **Rolling upgrade**   | Thay phiên bản và khởi động lại từng daemon hoặc nhóm nhỏ, trong khi các thành phần còn lại tiếp tục phục vụ |
-   | **Staggered upgrade** | Chia việc nâng thành các đợt có giới hạn phạm vi và có khoảng dừng giữa các đợt                                |
-   | **Canary**            | Nâng một phạm vi nhỏ trước để quan sát hoạt động thực tế, sau đó mới mở rộng                                  |
+## 3. Luồng công việc
 
-   Trong mỗi chặng, thứ tự cephadm đối với các thành phần chính của bạn là:
+| Luồng | Đầu ra bàn giao | Phụ thuộc |
+|---|---|---|
+| As-Is | Version/digest, client, topology, pool/CRUSH/PG, capacity, DB/WAL, config, SLO | Thu mới trước rollout |
+| Comparison | Finding áp dụng, activation, key/API cần sửa/bỏ, boundary và test | Đúng hai endpoint + artifact thực |
+| MOP PA2 | Chain/group, lệnh theo capability, timeout/gate, pause/resume, phục hồi | Applicability, planner và dry-run |
+| Console | Inventory → plan → observed-state gate → ledger/evidence → report | Lát cắt trong plan console |
+| Benchmark | BEFORE/DURING/AFTER, tool/overhead, giới hạn so sánh | Profile/ngưỡng chốt trước run |
+| Closeout | Version coverage, placement bàn giao, stable window, gap và owner | Evidence cho mọi phần áp dụng |
 
-   **MGR → MON → crash → OSD → RGW → rbd-mirror nếu có.**
+Owner, cửa sổ, timeout, headroom và SLO điền trong change record. Không lấy số minh họa của lab thành ngưỡng production.
 
-   Nếu cụm có CephFS, **MDS nằm sau OSD và trước RGW**. Thứ tự daemon vẫn được cephadm áp dụng khi dùng staggered upgrade. :chatgpt-content-reference{index="0"}
-3. **Bắt đầu bằng MGR: nâng standby rồi chuyển vai trò active**
+## 4. Trước mỗi hop
 
-   Trình tự đề xuất:
+- [ ] Chốt FSID/môi trường, daemon/client/pool scope và source/target digest; đánh giá downstream/vendor delta.
+- [ ] Đối chiếu config database, effective config và file; lập action cho removed/renamed/default mới, API/script cũ và dependency/tool.
+- [ ] Điền applicability YES/NO/UNKNOWN; giải quyết UNKNOWN ở phase chịu ảnh hưởng. N/A cần bằng chứng không dùng.
+- [ ] Kiểm MGR standby, MON quorum, host, registry/pull, package/container runtime và telemetry độc lập.
+- [ ] Chốt size/min_size, release/features, client support cho upmap, CRUSH, override, balancer/autoscaler và flags cản recovery/scrub.
+- [ ] Đánh giá toàn maintenance set và thêm một failure theo policy N+1; capacity/replica headroom đủ suốt handoff.
+- [ ] Baseline có hash/timestamp; nguồn khôi phục và rehearsal phù hợp boundary của hop.
+- [ ] Chốt benchmark profile nếu bật; health/QoS vận hành vẫn bắt buộc.
+- [ ] Review MOP theo PA2 mới; không dùng nguyên MOP OSD/H0 drain-return cũ.
 
-   - Nâng MGR standby lên phiên bản đích.
-   - Chuyển vai trò active sang một MGR đã nâng.
-   - Nâng MGR active cũ và các MGR còn lại.
-   - Để MGR mới vận hành ổn định trước khi chuyển sang MON.
+Chi tiết tại [comparison tổng](comparison/README.md). Chỉ xử lý mục áp dụng; sự xuất hiện của repair/trim/migrate/feature trong báo cáo không tự tạo yêu cầu chạy chúng.
 
-   Cách này đưa phần quản lý và điều phối nâng cấp lên phiên bản mới trước. MGR hỗ trợ mô hình một active và các standby tiếp quản khi failover. :chatgpt-content-reference{index="1"}
+## 5. Trình tự daemon
 
-   **Riêng chặng 16.2.5 → 16.2.15:** các bộ lọc staggered upgrade chỉ có từ Pacific **16.2.11**. Vì vậy cần nâng MGR trước bằng quy trình chuyển tiếp được Ceph hướng dẫn; sau khi MGR mới điều hành, tiếp tục chia phạm vi nâng bằng các bộ lọc. :chatgpt-content-reference{index="2"}
-4. **Nâng MON lần lượt, sau đó hoàn thành nhóm crash**
+Cephadm đi theo **MGR → MON → crash → OSD → MDS nếu có → RGW → rbd-mirror nếu có**, tiếp các service thực dùng. Staggered filters có từ Pacific 16.2.11; H1 phải chuyển tiếp MGR từ 16.2.5 trước khi dựa vào filters. `--limit` giới hạn tổng daemon nâng trong lần chạy, không quyết số OSD down đồng thời. [Ceph Pacific upgrade](https://docs.ceph.com/en/pacific/cephadm/upgrade/).
 
-   Với MON, thực hiện từng daemon:
+| Thành phần | Thực hiện | Gate chuyển tiếp |
+|---|---|---|
+| MGR | Nâng standby, xác minh, chuyển active, hoàn tất MGR còn lại | Active/standby, module, orchestrator migration, metrics/parser, digest |
+| MON | Từng MON, đợi trở lại quorum trước MON kế | Quorum/sync/election, auth, logs và workload |
+| crash | Hoàn tất theo orchestrator | Collection/submission và quyền |
+| OSD | PA2 mục 6–8, đổi image đúng OSD đã chuẩn bị | Isolation, replica/scrub, down set, version, ledger |
+| MDS nếu có | MOP riêng rank/standby-replay/client theo hop | Metadata/workload, restore state, compatibility |
+| RGW | Drain traffic theo LB/endpoint, canary rồi rolling | S3/checksum, auth/TLS, multipart và feature đang dùng |
+| Mirror/client/tool | Kế hoạch dịch vụ và compatibility riêng | Backlog/failover/cache, cephadm/ceph-common, monitoring |
 
-   **Nâng MON thứ nhất → đợi MON đó trở lại quorum → nâng MON tiếp theo.**
+Không để upgrade toàn cụm tự nâng OSD chưa qua PA2 gate. Controller, manual MOP và orchestrator phải có quyền điều phối rõ, không có hai tác nhân mutation độc lập.
 
-   Nếu có ba MON thì đi lần lượt qua cả ba; duy trì quorum trong suốt quá trình. Kết thúc bước này, toàn bộ MON của chặng đang thực hiện đã chạy phiên bản đích.
+## 6. Chuẩn bị chain
 
-   Tiếp theo nâng các daemon **crash** theo thứ tự của cephadm, rồi mới chuyển sang OSD.
+U = nguồn sắp nâng; D = đích ở bản đích; S = spare đầu; R = thiết bị replacement. Chain có thứ tự; wave gồm một/nhiều chain trong cùng hop. Handoff set bao phủ toàn PG cần bàn giao khỏi nguồn, chia group có revision.
 
-   Trong plan này, bạn hoàn thành phần **MGR, MON và crash trước khi bắt đầu canary OSD**.
-5. **Nâng một OSD canary theo PA1**
+| Lượt | Handoff | Trạng thái sau lượt |
+|---|---|---|
+| Chuẩn bị | S chưa nhận dữ liệu production | S đúng digest, khỏe, đủ capacity, isolate; chỉ là spare candidate |
+| 1 | X → S, nâng X | S giữ PG của X; X thành spare candidate |
+| 2 | Y → X, nâng Y | X giữ PG của Y; Y thành spare candidate |
+| 3 | Z → Y, nâng Z | Y giữ PG của Z; Z thành spare candidate |
+| Cuối | Hoàn tất nguồn trong scope | Giữ placement sau xoay, bàn giao spare cuối |
 
-   Đây là vòng nâng đầu tiên để chứng minh toàn bộ quy trình OSD hoạt động được.
+S cũng phải nâng nếu chưa ở bản đích, sau isolation/maintenance gate. Spare không có nghĩa thiết bị đã zap hoặc bytes cũ đã biến mất. Nâng daemon giữ ID/incarnation; replacement mới đổi incarnation.
 
-   Gọi **X** là OSD cần nâng và **S** là OSD hoặc nhóm spare nhận vị trí thay thế phù hợp. Trình tự PA1 đề xuất:
+Mỗi cặp kiểm lại toàn mapping từng PG, không trùng replica/failure domain, CRUSH root/class/rule, capacity/DB/WAL, QoS, digest và reservation. D không thuộc down set của chain khác. Nếu một D không đủ, lập tập đích/chain khả thi hoặc BLOCKED; không hạ size/min_size hay nới CRUSH.
 
-   | Bước | Thực hiện                                                                                  | Vai trò của X                                            |
-   | ------ | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-   | 5.1    | Hạ ưu tiên primary của X, xác nhận các PG đã chuyển primary như dự kiến         | Giảm trách nhiệm xử lý yêu cầu ở vai trò primary  |
-   | 5.2    | Điều chuyển các PG khỏi X sang S theo từng nhóm nhỏ                                  | Dần rút khỏi các PG đang phục vụ                    |
-   | 5.3    | Chờ việc điều chuyển hoàn tất, rồi đổi image và khởi động lại đúng daemon X | Chạy phiên bản mới                                     |
-   | 5.4    | Đưa một nhóm PG canary trở lại X, trước tiên cho X tham gia ở vai trò replica     | Nhận dữ liệu và tham gia phục vụ trong phạm vi nhỏ |
-   | 5.5    | Cho X đảm nhiệm primary trong phạm vi canary đã xác định                            | Thử hoạt động primary trên phiên bản mới           |
-   | 5.6    | Đưa các PG còn lại trở về theo từng nhóm, khôi phục vai trò bình thường       | Trở lại vận hành đầy đủ                            |
+Primary-affinity là đầu vào chọn primary, không ngăn nhận PG. Phải kiểm trạng thái thực sau thay đổi. [CRUSH/primary-affinity](https://docs.ceph.com/en/pacific/rados/operations/crush-map/#primary-affinity), [upmap/client requirements](https://docs.ceph.com/en/pacific/rados/operations/upmap/).
 
-   `primary-affinity` điều chỉnh việc chọn primary; `pg-upmap` điều chỉnh vị trí PG. PA1 kết hợp hai cơ chế này thành quy trình điều phối của dự án. :chatgpt-content-reference{index="3"}
+## 7. Một lượt U → D
 
-   **Canary chỉ hoàn thành sau khi X đã quay lại phục vụ dữ liệu và được theo dõi ổn định**, không dừng ở việc container mới khởi động thành công.
+| Bước | Hành động | Evidence/gate |
+|---|---|---|
+| 1. Bind | U/D/incarnation, map epoch, groups, before/current/desired, digest, owner | Plan revision, reservation/lease khớp thực tế |
+| 2a. Kiểm trước chuyển | Hoàn tất chuẩn bị affinity/flags theo plan và chờ ổn định; deep-scrub mới toàn handoff set tại placement hiện tại; chờ completion và kết quả sạch | `PRE_HANDOFF_SCRUB_ACCEPTED` gắn PG/set revision, mapping, incarnation và timestamp |
+| 2b. Admission | Recheck kết quả scrub trước chuyển, đích đúng bản, isolation, topology, headroom và down set | `SPARE_ADMISSION_ALLOWED` chỉ cho canary U/D này |
+| 3. Canary | Recheck actual role, D nhận group đầu làm replica | Mapping hội tụ, actual primary khác D, active+clean |
+| 4. Kiểm sau chuyển | Deep-scrub mới lần thứ hai sau catch-up; thu completion/lỗi | `HANDOFF_GROUP_ACCEPTED` đúng group |
+| 5. Mở rộng | Lặp chuyển → hội tụ → kiểm theo budget | Mọi PG có coverage; không truyền PASS nhóm đầu |
+| 6. Bàn giao | Đối chiếu toàn membership, restore affinity D đúng policy, quan sát | `HANDOFF_COMPLETE`: U vắng toàn scope, D đã kiểm/ổn định |
+| 7. Nâng U | Recheck isolation, capacity/N+1, `ok-to-stop` toàn down set, redeploy | Đúng daemon/digest, không PG phát sinh phá isolation |
+| 8. Rotate | U khỏe, đúng version, còn isolate; ghi ledger | `SPARE_ROTATED`, chưa tự đạt replica PASS |
+| 9. Lượt kế | Inventory/map mới, admission nguồn kế → U | Không tái dùng gate cũ |
 
-   Phần điều chuyển PG có thể phát sinh backfill. Vì vậy, thời gian một vòng PA1 bao gồm cả **đưa PG ra, nâng daemon và đưa PG trở lại**. Cephadm đảm nhiệm thay image/redeploy; việc điều phối PA1 cần được thực hiện riêng.
-6. **Mở rộng từ một OSD sang nhóm nhỏ, rồi nâng các OSD còn lại theo đợt**
+Isolation kiểm cả `up[]`/`acting[]` trên **mọi pool/PG có thể dùng U**, kể cả PG mới. Không còn primary chưa đủ. Affinity áp dụng toàn OSD, chỉ restore khi mọi PG trong handoff set và membership phát sinh đều được kiểm.
 
-   Sau canary đầu tiên, mở rộng theo trình tự:
+**Hai lượt deep-scrub bắt buộc:** lượt trước bao phủ toàn handoff set và hoàn tất sau chuẩn bị affinity/flags và trước thay membership PG đầu tiên của lượt U→D; lượt sau chạy cho từng group sau khi D catch-up/active+clean. Không tái dùng marker trước chuyển cho lượt sau hoặc thay deep-scrub bằng scrub thường. Mỗi PG lưu stage PRE_HANDOFF/POST_HANDOFF, request/start/completion mới, mapping/incarnation, errors và evidence.
 
-   | Đợt                   | Phạm vi đề xuất                                                    | Mục đích                                                       |
-   | ----------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-   | Canary đầu tiên      | 1 OSD                                                                  | Chứng minh một vòng nâng hoàn chỉnh                         |
-   | Canary bổ sung         | OSD đại diện cho nhóm phần cứng hoặc cấu hình khác, nếu có | Tránh kết luận cho cả cụm từ một loại OSD                 |
-   | Nhóm nhỏ              | Một nhóm vài OSD được chọn trước                              | Đánh giá tác động khi có nhiều vòng nâng cùng diễn ra |
-   | Triển khai diện rộng | Các batch với quy mô đã được chứng minh                       | Hoàn thành phần OSD của chặng                                |
+Nếu pre-scrub lỗi, thiếu completion hoặc còn PG chưa kiểm thì không handoff; post-scrub chưa đạt thì không mở group tiếp, restore affinity, nâng U hay rotate. Mapping/incarnation/set thay đổi liên quan hoặc có lỗi mới thì re-evaluate/invalidate evidence bị ảnh hưởng trước hành động tiếp; không vô hiệu chỉ vì epoch tăng không liên quan. Với workload đang ghi, đây là kiểm nhất quán ở thời điểm scrub, không phải snapshot bất biến.
 
-   Với khoảng **1.600 OSD**, quy trình sau canary sẽ lặp theo batch. Có thể tổ chức nhiều OSD cùng tiến hành PA1, nhưng phải chọn chúng theo quan hệ PG, failure domain và khả năng đáp ứng của spare, mạng, đĩa.
+Deep-scrub cần completion mới; command thành công/marker cũ không đủ. Thiếu evidence → BLOCKED/INCONCLUSIVE, lỗi thật → HOLD. Không tự repair để biến lỗi thành PASS. Đây là acceptance policy của dự án, cần adapter/lab chứng minh trên từng hop.
 
-   Cần phân biệt:
+## 8. Canary và hoàn thành wave
 
+Canary tối thiểu **X → S, nâng X, Y → X, nâng Y**, để X sau nâng thực sự nhận dữ liệu. Bổ sung cohort thiết bị, DB/WAL, class/pool, host/tải khác. Mở rộng theo evidence hành vi, phục hồi và QoS, không theo số OSD lab.
 
-   - **Kích thước batch:** số OSD thuộc một đợt.
-   - **Mức song song:** số OSD đang được điều chuyển dữ liệu hoặc restart cùng lúc.
+Các giới hạn độc lập: `batch_size`, `chain_parallelism`, `handoff_parallelism`, `max_simultaneous_down`, `scrub_concurrency`, `promotion_parallelism`, `max_pg_per_handoff_group`, `max_bytes_per_handoff_group`. Runner có concurrency/iodepth riêng.
 
-   `--limit N` của staggered upgrade giới hạn tổng số daemon được nâng trong lần chạy đó; nó không có nghĩa là cho phép dừng đồng thời N daemon. :chatgpt-content-reference{index="4"}
+`WAVE_COMPLETE` yêu cầu:
 
-   Với PA1, mỗi lần đổi image phải nhắm đúng OSD đã được chuẩn bị. Sau mỗi batch, dành một khoảng theo dõi rồi mới tiếp tục hoặc tăng phạm vi.
-7. **Hoàn thành OSD rồi nâng RGW theo kiểu canary và rolling**
+- [ ] Mọi OSD trong scope, kể cả S đầu/spare cuối, đúng target digest/version.
+- [ ] Tất cả handoff set có đủ coverage deep-scrub trước và sau chuyển, hội tụ và replica evidence đạt; dịch vụ đủ stable window.
+- [ ] Placement sau xoay được bàn giao; override/dependency có owner; cấu hình tạm được restore đúng ledger.
+- [ ] Bật lại balancer/autoscaler nếu đã đổi, ghi data movement và chờ ổn định; tính chi phí vào report.
+- [ ] Spare cuối chưa nhận PG sau nâng ghi `replica_validation=NOT_EXERCISED`, không replica PASS. Nếu policy yêu cầu kiểm đường dữ liệu của spare này, thêm bài admission/lab riêng hoặc giữ phần đó chưa đóng.
+- [ ] Báo HOLD/exception/gap, evidence và QoS riêng.
 
-   Khi toàn bộ OSD của chặng đã lên phiên bản đích, chuyển sang RGW.
+## 9. Pause, resume và phục hồi
 
-   Nếu production có nhiều RGW sau load balancer, trình tự đề xuất là:
+HOLD khi mapping/replica sai, inconsistency, quorum/daemon lỗi, vượt stop policy QoS, thiếu capacity, mất gate/telemetry bắt buộc hoặc resource bị tác nhân khác sửa. Pause chặn mutation mới; recovery đã chạy có thể tiếp tục.
 
-   - Rút một RGW khỏi luồng request mới và xử lý các kết nối đang tồn tại theo cơ chế của hệ thống.
-   - Nâng RGW đó lên phiên bản đích.
-   - Đưa nó trở lại với phạm vi lưu lượng nhỏ để làm canary.
-   - Theo dõi hoạt động S3.
-   - Tiếp tục lần lượt với các RGW còn lại.
+Resume đọc FSID, U/D/incarnation, mapping, digest, lease, command outcome và dependency. Timeout không chứng minh lệnh chưa chạy. State khác plan cần revision/recheck, không chỉ tăng con trỏ chain.
 
-   Nếu ứng dụng truy cập trực tiếp từng RGW, cần tổ chức chuyển endpoint hoặc lịch gián đoạn tương ứng; khả năng rolling liên tục phụ thuộc vào cách cung cấp endpoint.
+Giữ dữ liệu trên OSD đang phục vụ; không giả U sau drain còn đủ replica, không coi S đầu là backup cả chuỗi, không đảo toàn chain/nạp map cũ.
 
-   Nếu có **rbd-mirror**, nâng dịch vụ này sau RGW theo thứ tự cephadm. Còn các máy sử dụng RBD qua `librbd`, QEMU hoặc kernel client cần một kế hoạch cập nhật client riêng, theo khả năng tương thích của phiên bản đích.
-8. **Khép lại chặng hiện tại rồi lặp quy trình cho chặng tiếp theo**
+Ưu tiên containment và forward-fix phù hợp lỗi. R sạch chạy bản cũ chỉ là lựa chọn **có điều kiện**: floor/features còn tương thích, replica lành/headroom đủ, provision/activation/image đã kiểm. `ok-to-stop` không thay `safe-to-destroy`; destroy/purge/zap có quyết định riêng. Không mở store đã được bản mới ghi bằng binary cũ. Nếu không tương thích, ghi `BLOCKED_ROLLBACK_VERSION_INCOMPATIBLE` và dùng recovery cho target. [BlueFS boundary H1](comparison/pacific-16.2.5-to-16.2.15/02-bluestore-bluefs.md), [cephadm boundary H1](comparison/pacific-16.2.5-to-16.2.15/08-cephadm-orchestrator.md).
 
-   Kết thúc mỗi chặng:
+## 10. Benchmark và kiểm dữ liệu
 
-   - Hoàn tất các thao tác nâng còn lại của orchestrator và ghi nhận các mốc release đã được chuyển.
-   - Hoàn trả các điều chỉnh tạm thời của PA1, giữ lại các mapping vốn có trước đó.
-   - Đưa cụm vào một khoảng vận hành bình thường để quan sát với workload RGW và RBD thực tế.
-   - Sau đó bắt đầu chặng tiếp theo từ **MGR**, và lặp lại toàn bộ trình tự.
+Theo [protocol benchmark](benchmark/README.md): BEFORE trước hoạt động can thiệp đầu (kể cả deep-scrub trước chuyển hoặc chuẩn bị S trong scope); DURING gồm chuẩn bị S, pre-deep-scrub, handoff, post-deep-scrub, redeploy/rotate/end-state; AFTER sau `AFTER_WAVE_STABLE`. Plateau giữa chain vẫn là DURING.
 
-   Ở mỗi lần chuyển major, tổ chức lại canary; kết quả canary của 16.2.15 không thay thế cho canary của 17.2.7 hoặc 18.2.7.
+So RBD/RGW theo cùng dataset/profile/client/load model. Đo IOPS offered/completed, MiB/s, p50/p95/p99, error/timeout, stall, SLO violation, bytes backfill và thời gian ổn định. Cohort REMAP/NEIGHBOR/CONTROL cần proof; endpoint-only ghi `SERVICE_ONLY`.
 
-   Nếu phát sinh vấn đề trong một đợt, **dừng mở rộng tại đợt đó và xử lý trước khi tiếp tục**. Việc pause/stop upgrade không tự đưa daemon về phiên bản cũ; tài liệu Quincy và Reef cũng nêu rõ dừng quá trình nâng không cung cấp khả năng downgrade về major trước. :chatgpt-content-reference{index="5"}
+Bench tool gồm collector/planner/controller/API/UI/evidence store và Warp/fio/client/tool đổi version. Tách đổi Ceph khỏi đổi tool. Benchmark tùy chọn; monitoring vận hành bắt buộc. Không hứa giảm 50% thời gian từ việc bỏ chiều return.
+
+## 11. Kế hoạch thực hiện
+
+| Mốc | Công việc | Điều kiện hoàn thành |
+|---|---|---|
+| P0 | As-Is/action register H1, reconcile hồ sơ MGR/MON với hiện tại | Không UNKNOWN trong scope canary; biết artifact/boundary |
+| P1 | MOP OSD PA2 thay drain-return; chain trên topology snapshot; ngưỡng/window | Review/dry-run full scope và recovery đạt |
+| P2 | Console inventory/evidence/portable, bỏ PA1 khỏi tạo run mới | Regression đúng scope, chạy từ config sạch |
+| P3 | PA2 live lab: handoff/scrub/redeploy, lease/reconcile | Hai lượt; đủ pre/post scrub, stale evidence, timeout, restart, double-worker, tail spare đúng |
+| P4 | Bench/lab đại diện, tool overhead và topology/load cohorts | Profile tái lập, concurrency có số đo |
+| P5 | Canary H1 → batch → closeout wave/service | Runtime gate/evidence đủ, temporary state có disposition |
+| P6 | Hoàn thiện comparison H2 song song P0–P4 | Action/checklist riêng đầy đủ, H1 closeout trước runtime H2 |
+| P7 | Baseline mới 16.2.15, canary mới, rollout H2 | Target coverage 17.2.7 và aftercare đạt |
+
+Chưa đặt ETA toàn cụm. Chốt 24 PB là logical/used/raw; tính traffic gồm chuẩn bị, ghi mới, retry, scrub và cân bằng cuối wave. Không nhân tuyến tính thời gian một OSD lab lên cả cụm.
+
+## 12. Bàn giao
+
+Tài liệu thống nhất PA2; finding → action → test/gate → evidence trace được hai chiều. Console hiển thị chain, U/D, gate/coverage đúng. Mỗi wave có config snapshot, ledger/map/events/raw evidence, version coverage, stable window; benchmark có raw samples/profile hoặc NOT_REQUESTED. Production acceptance cần evidence của chính môi trường đó.

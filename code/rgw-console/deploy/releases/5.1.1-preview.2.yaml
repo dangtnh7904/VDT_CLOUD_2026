@@ -1,0 +1,84 @@
+schema_version: 1
+status: deployed_local_lab_only_unreleased_preview
+validated_on: "2026-10-13"
+timezone: Asia/Saigon
+application:
+  local_tag: storage-lab-console:5.1.1-preview.2
+  local_index_digest: sha256:44c809d6ebc46c66e43152b746ba167e83fbbcebfa6f905bcd79c21f0c395c84
+  amd64_manifest_digest: sha256:72b88b55c29c4b8b49161865eea75aad01132df6335ca6a87d7286019e4fc6e8
+  configuration_digest: sha256:0829c87bfc5b613d17207099e71ec3b7e09096f908fc9d71c154bfae973b043a
+  platform: linux/amd64
+  published: false
+  schema: 21
+  capacity_guard_source_sha256: 575dc26aa38158a95e94ade395e0cc79122d03159ea2025dd1e05a25d94fe7c9
+  capacity_source_matches_built_image: true
+  comparison_source_sha256: b12879a921ea8ce58e5a5845d35474d990ac33a351b295f92e014412ecf5f3e1
+  styles_source_sha256: 2534451fba3ca1d4220ebffed4de0c1a37bf2c5a907b70b3d29bb08c26e8f66f
+fixes:
+  - Preserve selected collections A/B across date, phase, search and history page changes; clear pair and result on daemon type change.
+  - Explain configured capacity warning thresholds in snapshot reasons, preserving operator notes and missing or stale source warnings.
+  - Restrict the no-warning fallback to NORMAL and render missing pool scope in Vietnamese as a warning.
+  - Keep daemon selection checkboxes at 16 by 16 pixels rather than inheriting text input dimensions.
+tests:
+  frontend: {passed: 20, failed: 0, skipped: 0}
+  typescript: PASS
+  frontend_local_and_image_build: PASS
+  backend_focused: {passed: 61, failed: 0, skipped: 0}
+  backend_scope: [capacity_telemetry_and_decision, as_is, as_is_history, as_is_release_safety, osdmap_preview, console_security]
+  backend_invocation_note: release_safety_uses_discover_s_tests_to_resolve_its_existing_sibling_fixture_import
+  synthetic_api_real_worker:
+    passed: 38
+    failed: 0
+    worker_version: 16.2.15-minimal-preview.2
+    worker_restarted_from_stopped_state: true
+    dedicated_database: osdmap_synthetic_20261013_fix
+    isolated_network: slc-v51-release-tests
+    source: generated_offline_fixtures_no_live_ceph
+    tamper_injection_executed: true
+    tampered_response: {status_code: 503, code: OSDMAP_RESULT_IDENTITY_MISMATCH}
+    database_artifact_rows_created: 2
+    report_path: ../dist/bugfix-20261013/integration-preview2-current-diagnostic.json
+    report_sha256: fd06a51af6de15460f2b9a49f6113f37dfbfd71155713562c6538fdeb26e5f1d
+    test_script_sha256: 61f6d1e497b924ed4c92c37dcba31ef3dbd3da90af441c4b443585ffd4b0de6a
+    first_historical_failure_reproduced: false
+    first_historical_failure_root_cause: UNCONFIRMED
+deployment:
+  url: http://127.0.0.1:8080
+  api_started_at: "2026-10-13T15:12:08+07:00"
+  configuration_path: ../local-images.preview.json
+  readonly: true
+  mutations_lab_and_legacy_features: disabled
+  worker_ref: storage-lab-osdmap@sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  worker_manifest: osdmap-16.2.15-minimal-preview.2.yaml
+  readiness_schema_and_version: PASS
+  worker_strict_capability_and_fresh_heartbeat: PASS
+  all_five_services_running_without_restart_or_oom: PASS
+  all_previous_mounts_preserved: PASS
+  mutation_endpoints_still_denied: PASS
+  database_container_and_volume_preserved: true
+  as_is_collections_unchanged: 4
+  as_is_events_unchanged: 8
+  evidence_files_paths_sizes_and_sha256_unchanged: 9
+  private_checkpoint_directory: ../../runtime/local-bugfix-20261013
+  private_database_backup_sha256: 17592eb26df7991cfede82741e7785ae76b1d38899dcd1978c3488670fabfd30
+  previous_container_suffix: before-v5-20261013-151203
+  previous_containers_retained_stopped: true
+  docker_hub: unchanged_published_rc1
+  production_test_8443: unchanged
+  ceph_mutations: none
+browser:
+  original_phase_change_cleared_selected_pair: REPRODUCED_ON_PREVIEW_1
+  selecting_a_before_and_b_after_keeps_a: PASS
+  date_and_search_filter_changes_keep_pair: PASS
+  comparison_of_three_saved_rgw_daemons: PASS
+  daemon_type_change_clears_pair_and_result: PASS
+  checkbox_dimensions: {width: 16, height: 16}
+  screenshot: ../../runtime/comparison-fixed-20261013.png
+  download_retest: BLOCKED_BROWSER_PERMISSION_DECLINED
+acceptance:
+  confirmed_ui_and_capacity_bugs: FIXED
+  localhost_smoke: PASS
+  first_synthetic_failure_stability_review: OPEN
+  full_production_acceptance: NOT_PASSED
+  new_image_security_rescan: NOT_RUN
+  docker_hub_publish: NOT_RUN

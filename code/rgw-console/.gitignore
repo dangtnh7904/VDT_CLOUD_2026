@@ -5,3 +5,7 @@ node_modules/
 dist/
 .vite/
 .venv/
+runtime/*
+!runtime/.gitkeep
+config/profiles/*.yaml
+!config/profiles/*.yaml.example

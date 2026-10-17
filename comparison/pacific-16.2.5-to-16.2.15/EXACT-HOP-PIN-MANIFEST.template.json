@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "comparison": "pacific-16.2.5-to-16.2.15",
+  "validation_label": "NOT_EXACT_HOP_VALID",
+  "base": { "ref": "v16.2.5", "source_sha": "0883bdea7337b95e4b611c768c0279868462204a", "package_identities": [], "image_reference": "", "image_digest": "", "image_inspect_sha256": "", "cephadm_sha256": "", "cephadm_provenance": "" },
+  "target": { "ref": "v16.2.15", "source_sha": "618f440892089921c3e944a991122ddc44e60516", "package_identities": [], "image_reference": "", "image_digest": "", "image_inspect_sha256": "", "cephadm_sha256": "", "cephadm_provenance": "" },
+  "job": { "run_id": "", "work_items": [], "expanded_job_config_sha256": "", "workload_seed": "", "started_utc": "", "ended_utc": "", "topology_evidence": "" },
+  "delivery": { "registry": "", "mirror": "", "pull_by_digest_verified": false, "evidence": [] },
+  "distro_lanes": [],
+  "harness": { "ceph_suite_sha": "618f440892089921c3e944a991122ddc44e60516", "teuthology_sha": "", "local_patches": [], "expanded_yaml_evidence": "" },
+  "completion_oracle": { "passed": false, "versions_sha256": "", "orchestrator_state_sha256": "", "image_inspect_sha256s": [], "expected_daemon_counts": {}, "observed_daemon_counts": {}, "role_inventory_evidence": "" },
+  "client_matrix": { "disposition": "PENDING_INPUT", "reason": "", "evidence": [], "old_client_new_daemon": [], "new_client_old_daemon": [] },
+  "release_floor_guard": { "disposition": "PENDING_INPUT", "reason": "", "fixture_quarantined": false, "approval_evidence": "", "evidence": [] },
+  "archive": { "uri": "", "manifest_sha256": "", "owner": "", "failure_triage": "" },
+  "pins": [
+    { "id": "PIN-01", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-02", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-03", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-04", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-05", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-06", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-07", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-08", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-09", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-10", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-11", "status": "PENDING_INPUT", "reason": "", "evidence": [] },
+    { "id": "PIN-12", "status": "PENDING_INPUT", "reason": "", "evidence": [] }
+  ]
+}

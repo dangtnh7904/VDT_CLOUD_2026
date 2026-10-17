@@ -86,6 +86,8 @@ Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực ti�
 
 **Mixed/full.** Local theo OSD. OSD target tự áp dụng filtering khi mount; OSD base không có. Không cần migration/config để nhận fix, nhưng workload SSD với threshold `0` thường không đi nhánh này. Full upgrade chỉ đồng nhất implementation; không tự chứng minh không còn deferred transaction cũ—target xử lý chúng ở replay.
 
+**Ranh giới rollback.** Trước lần target mount/replay đầu tiên, bản snapshot block/DB là mốc quay lại bit-for-bit. Sau khi target đã loại deferred extent stale và commit replay, hạ binary không phục hồi transaction cũ—và cũng không nên phục hồi vì nó có thể đè BlueFS. Không có encoding mới trong nhóm fix này, nên chỉ failback binary sau clean unmount, fsck/read-only validation và xác nhận không còn deferred replay pending; nếu validation lỗi, phục hồi snapshot thay vì mở luân phiên base/target.
+
 **Tác động và mức chắc chắn.** Category: correctness/durability và performance-policy. Priority `P0`; rủi ro **cao theo điều kiện** vì hậu quả có thể là RocksDB corruption, nhưng chuỗi kích hoạt hẹp. Confidence `high` cho corruption/fix; không tuyên bố target nhanh hơn vì chưa benchmark. Cần xác nhận giá trị hiệu dụng threshold theo từng OSD.
 
 **Test đã đọc.** `src/test/objectstore/test_deferred.cc`, `run_test_deferred.sh` (commit `eaa02600bb96af3f523666d3a70fd451e438416e`), `StoreTestSpecificAUSize.ReproBug56488Test` (`093ba5fc6b68debbd9a2c6b85c7bb11f3f49c73e`) và các case `DeferredOnBigOverwrite*`, `DeferredDifferentChunks` trong `store_test.cc`. Script cố ý tạo crash và compact DB; chưa được chạy ở đây.
@@ -105,6 +107,8 @@ Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực ti�
 
 **Mixed/full.** Local theo từng OSD và chỉ OSD đang chạy conversion bị tác động. Mixed cluster không tạo schema wire mới. Sau full upgrade, legacy data vẫn tồn tại cho tới khi quy trình kiểm tra/chuyển đổi được thực hiện. Activation cần thao tác explicit; không gộp vào bước restart nâng cấp.
 
+**Ranh giới rollback.** Legacy→per-PG conversion/repair là mutation bền vững; mốc reversible là snapshot/checksum RocksDB trước `quick_fix()` hoặc repair. Sau khi transaction rewrite/compaction đã commit, hạ binary không dựng lại keyspace legacy và không khôi phục key bị ghi sai. Dừng ở lỗi đầu tiên, giữ OSD out, đối chiếu key/value count; rollback bằng snapshot đã thử restore, không bằng chạy conversion ngược.
+
 **Tác động và mức chắc chắn.** Category: correctness/availability/operability. Priority `P0`; rủi ro **cao khi chạy conversion**, thấp nếu chỉ rolling restart. Confidence `high`. Chưa biết As-Is có legacy OMAP, số key/object hoặc dung lượng RocksDB cần cho rewrite/compaction.
 
 **Test đã đọc.** `StoreTestOmapUpgrade.WithOmapHeader`, `.NoOmapHeader`, `.LargeLegacyToPG`; commits `7690f72dfa649da90276ede1907b84862b3b1e98`, `cd49a5017a6af0547b139ef687382b419de202aa`. Test lazy-omap-stats ở CSV `2426–2428` cải thiện orchestration deep-scrub của test, không tự chứng minh runtime OMAP migration.
@@ -123,6 +127,8 @@ Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực ti�
 **Điều kiện kích hoạt.** Scan xảy ra khi fsck chạy; mutation shared-blob được guard bởi `depth != FSCK_SHALLOW && repair`. Option ngữ cảnh `bluestore_fsck_shared_blob_tracker_size` ở target là fraction `0.03125` của `osd_memory_target`; kích thước thực phụ thuộc cấu hình OSD, không được hard-code là một lượng RAM cố định trong runbook.
 
 **Mixed/full.** Local và offline/maintenance theo OSD. Upgrade bình thường không tự chạy repair trừ khi deployment đã bật fsck/repair-on-open tương ứng; phải kiểm kê config. Sau full upgrade, không có auto-heal lịch sử nếu operator không gọi repair. Không dùng `quick-fix` thay cho deep/non-shallow shared-blob repair.
+
+**Ranh giới rollback.** Read-only fsck không đổi store; deep repair thì sửa/xóa shared-blob keys và extent/accounting nên điểm rollback kết thúc trước mutation đầu tiên. Hạ phiên bản không hoàn nguyên các key đã sửa. Mỗi OSD phải có snapshot/clone và checksum metadata trước repair; nếu post-repair deep fsck hoặc object read validation thất bại, giữ daemon offline và khôi phục snapshot thay vì tiếp tục sửa trên bản duy nhất.
 
 **Tác động và mức chắc chắn.** Category: correctness/availability/resource usage. Priority `P0`; rủi ro **cao khi repair trên dữ liệu thật**, thấp nếu không chạy repair trong cửa sổ upgrade. Confidence `high`; còn thiếu dung lượng OSD, `osd_memory_target`, số clone/shared-blob và snapshot workload của cluster.
 
@@ -144,6 +150,8 @@ Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực ti�
 
 **Mixed/full.** Toàn bộ local. OSD đã nâng dùng selector/compaction mới, OSD cũ dùng logic cũ; không có shared BlueFS state. Sau full upgrade, cảnh báo và placement nhất quán hơn, nhưng dung lượng `block.db` không tự thay đổi. Activation tự động trừ migration/layout tool.
 
+**Ranh giới rollback.** Nhóm diff không đưa ra encoding mới, nên binary có thể failback sau clean shutdown và offline fsck. Tuy nhiên compaction/file allocation đã commit làm thay đổi BlueFS log và vị trí SST; hạ binary không hoàn tác placement, không nới `block.db` và không khôi phục log cũ. Với migrate/rewrite explicit, snapshot/checksum trước tool là mốc reversible; lỗi replay/mount sau compaction phải phục hồi bản đó, không chạy qua lại hai binary trên store chưa xác minh.
+
 **Tác động và mức chắc chắn.** Category: availability/correctness/operability/performance-policy. Priority `P0`; rủi ro `trung bình`. Confidence `high` cho state transition và alert. Commit nói preallocation giúp giảm fragmentation, nhưng báo cáo **không khẳng định mức cải thiện hiệu năng** vì chưa benchmark và chưa biết RocksDB options/layout thực tế.
 
 **Test đã đọc.** `test_simple_compaction_sync/async`, `test_compaction_sync/async`, `test_update_ino1_delta_after_replay`, `BluefsWriteInSingleDiskEnvTest`, `BluefsWriteInNoWalDiskEnvTest`, `SpilloverTest` và `SpilloverFixed*`.
@@ -163,6 +171,8 @@ Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực ti�
 
 **Mixed/full.** Placement extent là local, không cần on-disk migration và không tạo wire incompatibility. OSD target có thể chọn offset khác OSD base cho cùng mẫu free space; đó không phải lỗi replication. Sau full upgrade, allocation policy đồng nhất nhưng fragmentation hiện hữu không tự biến mất.
 
+**Ranh giới rollback.** Extent mới được target cấp phát vẫn dùng format cũ, nên failback binary chỉ sau clean unmount/fsck là khả thi; nó không di chuyển extent về LBA mà base từng chọn và không hoàn tác fragmentation/cooldown history. Nếu target assert lúc init vì override alignment, dừng trước khi cho OSD ghi, sửa/khôi phục config rồi thử lại. Snapshot metadata trước canary là recovery boundary khi allocator validation phát hiện overlap hoặc free-space accounting lệch.
+
 **Tác động và mức chắc chắn.** Category: availability/performance/space efficiency. Priority `P0`; rủi ro `trung bình`, tăng nếu config override không hợp lệ hoặc OSD gần đầy/phân mảnh. Confidence `medium`: code/test xác định semantics, nhưng tác động latency/fragmentation là phụ thuộc workload nên chưa định lượng.
 
 **Test đã đọc.** `Allocator_test.test_alloc_47883`, `fastbmap_allocator_test.test_l2_contiguous_alignment`, `test_4G_alloc_bug*` và `test_claim_free_l2`. Test expected offset thay đổi xác nhận semantics mới; nó không phải benchmark Production.
@@ -176,6 +186,8 @@ Các finding `BS-001/002/003/006/007/008/010` có thể tác động trực ti�
 **Điều kiện kích hoạt.** Tự động dưới object read/write/cache pressure; `head_pad` cần small unaligned write chạm vùng đã có logical extent. Blob-use tracker xuất hiện với blob có nhiều allocation unit và clone/split/GC. Không yêu cầu option mới.
 
 **Mixed/full.** Local per OSD; PG replicas có thể chạy hai implementation trong rolling upgrade nhưng object format được đọc/ghi bằng encoding cũ tương thích trong các type này—`alloc_au` là runtime bookkeeping, không được thêm vào DENC. Sau full upgrade, mọi OSD dùng refcount/cache mới.
+
+**Ranh giới rollback.** Vì diff giữ encoding cũ, không có one-way format gate; có thể hạ binary sau clean shutdown và kiểm scrub/fsck. Tuy vậy package rollback không đảo ngược user writes đã commit, cũng không sửa onode/blob state nếu lỗi runtime đã làm accounting lệch. Dừng canary khi refcount/assert/memory không hội tụ; dùng replica recovery hoặc snapshot OSD đã xác minh theo runbook thay vì kỳ vọng restart base tự chữa dữ liệu.
 
 **Tác động và mức chắc chắn.** Category: correctness/availability/memory observability. Priority `P0`; rủi ro `trung bình`. Confidence `medium`: refcount intent và endpoint diff rõ, nhưng không có dedicated regression test cho toàn bộ concurrency của onode cache trong các file đổi.
 

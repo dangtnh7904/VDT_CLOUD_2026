@@ -1,0 +1,90 @@
+schema_version: 1
+status: historical_failure_not_reproduced_with_confirmed_diagnostic_gap
+investigated_on: "2026-10-13"
+timezone: Asia/Saigon
+historical:
+  failed_report_path: ../dist/api-worker-smoke-20261013/report/integration-preview2.json
+  failed_report_sha256: fc5594a095ea68578eb5442edfa5bf212fa4026aa5ebf81a617d52dcacc568fc
+  checks_passed: 32
+  assertion: tampered_real_worker_result_identity_rejected
+  missing_evidence: [http_status, response_code, worker_envelope, tamper_hook_execution]
+  original_source_path: ../dist/integration-rootcause-20261013/historical_script.py
+  original_source_sha256: ea523c81ae3da14450c14471a5a1dcac80c1c2fd8d354969840cb3e06bd7cefb
+  original_command_id: exec-9424de06-5f6d-40fb-b229-44d319d43a4b
+  original_command_duration_ms: 8005
+  original_script_timeout_seconds: 90
+  timeout_90_seconds: RULED_OUT_BY_COMMAND_DURATION
+  worker_1_stopped_and_worker_2_spool_separate: VERIFIED_IN_COMMAND_HISTORY
+  actual_original_response: NOT_RECOVERABLE_FROM_SAVED_EVIDENCE
+reproduction:
+  application_index_digest: sha256:8fee0b7383ceb64a4b464ff0dadaad7f8fc6b52a9f132d42eb83123b60eea3cc
+  worker_index_digest: sha256:baf1c9e802990b88c8910bbb94a45bb80f8de9ec5f0b5eada0dd6076e6a8d893
+  application_version: 5.1.1-preview.1
+  worker_version: 16.2.15-minimal-preview.2
+  user: "10001:10001"
+  worker_resources: {cpu: 1, memory_mib: 1536, pids: 32}
+  client_resources: {cpu: 1, memory_mib: 1536, pids: 128}
+  database: osdmap_synthetic_rootcause_20261013
+  source: closed_in_process_generated_offline_fixtures
+  test_network: internal
+  worker_network: none
+  replay_runs: 20
+  successful_runs: 20
+  checks_per_run: 38
+  cold_worker_starts: 7
+  externally_traced_runs: 15
+  api_unwrapped_runs: 5
+  historical_failure_reproduced: false
+  replay_manifest_path: ../dist/integration-rootcause-20261013/replay-manifest.json
+  replay_manifest_sha256: 2023b4c06b42db8932a8a1a6358d1fb5ca9839de83c9a318cf65db8761b992f2
+  trace_caveats:
+    - Wrappers add execution and IO timing overhead.
+    - Heartbeat diagnostic rereads the file after the actual capability decision.
+fault_controls:
+  intentional_injection_not_historical_root_cause: true
+  initial_three_control_reports_retained: true
+  with_actual_http_trace:
+    capability_stale:
+      actual_response: {status_code: 503, code: OSDMAP_CAPABILITIES_STALE}
+      assertion_failed_after_checks: 32
+      report_path: ../dist/integration-rootcause-20261013/fault-control-capability-stale-http.json
+      report_sha256: 5d229ccf2c1cfa7d9c6f6c93c8c9dc8998e2bb8503319a19cd7753ced4f95551
+    worker_tool_failure:
+      actual_response: {status_code: 409, code: OSDMAP_TOOL_FAILED}
+      assertion_failed_after_checks: 32
+      report_path: ../dist/integration-rootcause-20261013/fault-control-worker-tool-failed-http.json
+      report_sha256: 27cf2979cd66a8daf0a788b5c2d4bbec6b70d1b201bf34c8b555ea609d2cd7d2
+    result_oserror:
+      actual_response: {status_code: 503, code: OSDMAP_UNAVAILABLE}
+      assertion_failed_after_checks: 32
+      report_path: ../dist/integration-rootcause-20261013/fault-control-result-read-oserror-http.json
+      report_sha256: 39971c098a9459c78106ba4d256364d549481125542697389f65533824d5ac7a
+diagnostic_improvements:
+  current_test_source_path: ../../packaging/osdmap/test_api_worker_integration.py
+  current_test_source_sha256: 81e347f61d2b92823557c776c298999d3b37befa63e434d55d8b6406d73bb3dd
+  external_runner_source_path: ../../packaging/osdmap/diagnose_historical_integration.py
+  external_runner_source_sha256: 1321abd1aa1f0c5b54f28f47f9b61473eb0fd68062a1c8b365b73539d63f8ed5
+  marker_required_by_assertion: true
+  actual_capability_envelope_stage_and_no_save_diagnostic: true
+  guard_tests: {passed: 9, failed: 0}
+  current_integration: {passed: 38, failed: 0}
+  current_report_path: ../dist/integration-rootcause-20261013/current-diagnostic-complete.json
+  current_report_sha256: d3fe47682280eabe845f02d391a833d82a4c49b4cbc081176f94dd3487cdb35f
+preservation:
+  synthetic_database_artifact_rows: 54
+  synthetic_archive_path: ../dist/integration-rootcause-20261013/synthetic-database.dump
+  synthetic_archive_sha256: 162bd58f45699ac63df10dfa9d84a840c2728eaa4ae7be96d09ea32f8cab3469
+  archive_toc_read: PASS
+  archive_restore_rehearsal: NOT_RUN
+  test_services_stopped_after_investigation: true
+  generated_report_and_evidence_volumes_retained: true
+  live_local_app_version_unchanged: 5.1.1-preview.2
+  live_local_ready_and_readonly: PASS
+  ceph_mutations: none
+  image_build_or_registry_publish: none
+verdict:
+  original_underlying_failure: UNCONFIRMED
+  diagnostic_gap: CONFIRMED_AND_FIXED_IN_TEST_RUNNER
+  first_run_failure_stability_review: OPEN
+  original_failed_report_replaced_or_suppressed: false
+  report: ../../docs/INTEGRATION_FAILURE_INVESTIGATION.md

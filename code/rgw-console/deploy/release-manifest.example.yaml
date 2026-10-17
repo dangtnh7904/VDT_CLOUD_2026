@@ -1,0 +1,55 @@
+schema_version: 1
+status: candidate
+release:
+  application: storage-lab-console
+  version: 0.0.0-example
+  source_revision: REPLACE_WITH_GIT_COMMIT
+  built_at: REPLACE_WITH_RFC3339_TIME
+  config_schema: 1
+image:
+  reference: registry.example.invalid/storage-lab-console:0.0.0
+  index_digest: sha256:REPLACE_WITH_64_HEX_DIGEST
+  platforms:
+    linux_amd64: sha256:REPLACE_WITH_64_HEX_DIGEST
+  expected_uid_gid: "10001:10001"
+database:
+  engine: PostgreSQL
+  tested_version: REPLACE_WITH_TESTED_VERSION
+  min_schema: 19
+  max_schema: 19
+  migration_policy: forward-only
+executor:
+  version: 1.1.0
+  protocol_version: 1
+collector:
+  version: 1.0.2
+  schema_version: 1
+  install_path: /opt/storage-lab/collect_osd.py
+  sha256: REPLACE_WITH_COLLECTOR_SHA256
+support:
+  host_runtime: REPLACE_WITH_TESTED_DOCKER_AND_COMPOSE_VERSIONS
+  baseline_platform: linux/amd64
+  baseline_ceph: Pacific replicated pools
+features:
+  inventory_read_only: candidate
+  upgrade_dry_run: candidate
+  legacy_rgws3: disabled_by_default
+  legacy_rbd: disabled_by_default
+  lab_validation: disabled_by_default
+  upgrade_live_mutation: blocked_pending_live_acceptance
+known_limitations:
+  - SSH host-key pinning is implemented and unit-tested, but the target key must still be verified through an independent trusted channel and exercised during environment acceptance.
+  - Authentication/TLS is supplied by a trusted management ingress; bind loopback without one.
+  - This example is not a published release and every REPLACE_* field invalidates acceptance.
+artifacts:
+  image_archive_sha256: REPLACE_WITH_ARCHIVE_SHA256
+  sbom_sha256: REPLACE_WITH_SBOM_SHA256
+  vulnerability_report_sha256: REPLACE_WITH_SCAN_REPORT_SHA256
+acceptance:
+  lab_a: NOT_RUN
+  second_environment_same_digest: NOT_RUN
+  offline_load_without_pull: NOT_RUN
+  fresh_database_migration: NOT_RUN
+  existing_database_upgrade: NOT_RUN
+  persistence_after_recreate: NOT_RUN
+  backup_restore: NOT_RUN

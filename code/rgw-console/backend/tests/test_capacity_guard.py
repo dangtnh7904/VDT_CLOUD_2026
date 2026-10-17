@@ -87,6 +87,45 @@ class _SnapshotConnection:
 
 
 class CapacityTelemetryResponseTests(unittest.TestCase):
+    def test_fresh_capacity_warning_explains_the_matching_configured_threshold(self):
+        settings = policy(fsid=str(uuid4()), observe_only=True)
+        for used, state, threshold in (
+            (650, "NORMAL", None),
+            (675, "THROTTLED", "67.0%"),
+            (690, "PAUSED_CAPACITY", "68.0%"),
+            (702, "EMERGENCY_CAPACITY", "70.0%"),
+        ):
+            with (
+                self.subTest(state=state),
+                patch.object(capacity_guard, "get_settings", return_value=settings),
+                patch.object(capacity_guard, "_load_control_and_snapshot", return_value=telemetry(settings.ceph_expected_fsid, used=used)),
+                patch.object(capacity_guard, "connection", return_value=nullcontext(_SnapshotConnection())),
+            ):
+                response = snapshot_response()
+            self.assertEqual(response["state"], state)
+            if threshold is None:
+                self.assertEqual(response["reasons"], [])
+            else:
+                self.assertIn("osd.0", response["reasons"][0])
+                self.assertIn(threshold, response["reasons"][0])
+                self.assertIn(f"{used / 1000:.1%}", response["reasons"][0])
+
+    def test_capacity_warning_keeps_operator_reason_and_explains_missing_scope(self):
+        settings = policy(fsid=str(uuid4()))
+        control, snapshot, osds = telemetry(settings.ceph_expected_fsid, used=702)
+        control["reason"] = "Ghi chú vận hành"
+        with (
+            patch.object(capacity_guard, "get_settings", return_value=settings),
+            patch.object(capacity_guard, "_load_control_and_snapshot", return_value=(control, snapshot, osds)),
+            patch.object(capacity_guard, "connection", return_value=nullcontext(_SnapshotConnection())),
+        ):
+            response = snapshot_response()
+            missing = snapshot_response(scope_type="pool", scope="unknown-pool")
+        self.assertEqual(response["reasons"][0], "Ghi chú vận hành")
+        self.assertIn("70.2%", response["reasons"][1])
+        self.assertEqual(missing["state"], "BLOCKED_UNKNOWN_CAPACITY")
+        self.assertIn("unknown-pool", missing["reasons"][1])
+
     def test_no_snapshot_distinguishes_configuration_state(self):
         configured = policy(fsid=str(uuid4()))
         with (
@@ -331,6 +370,15 @@ class CapacityConcurrencyIntegrationTests(unittest.TestCase):
             conn.execute("DELETE FROM capacity_snapshots WHERE fsid=%s", (self.fsid,))
 
     def test_fsid_lock_and_pending_allocations_prevent_overbooking(self):
+        # PostgreSQL may run in a VM whose clock is a few milliseconds ahead of
+        # the host. This test exercises reservation concurrency, not clock sync.
+        captured_at = self.snapshot_telemetry[1]["captured_at"]
+
+        class SnapshotClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return captured_at + timedelta(seconds=1)
+
         def attempt(request_id: str):
             try:
                 return require_admission(
@@ -344,6 +392,7 @@ class CapacityConcurrencyIntegrationTests(unittest.TestCase):
 
         with (
             patch.object(capacity_guard, "get_settings", return_value=self.settings),
+            patch.object(capacity_guard, "datetime", SnapshotClock),
             patch.object(
                 capacity_guard,
                 "_load_control_and_snapshot",

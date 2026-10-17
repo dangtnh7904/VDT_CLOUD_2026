@@ -1,0 +1,3462 @@
+{
+  "sha256": "9b3f3eff790e4986e15325349d4800655191197f52b654b828c8002fc845c9a2",
+  "sections": [
+    {
+      "page_width": 8.5,
+      "page_height": 11.0,
+      "left_margin": 1.0,
+      "right_margin": 1.0,
+      "top_margin": 1.0,
+      "bottom_margin": 1.0,
+      "header_distance": 0.5,
+      "footer_distance": 0.5
+    }
+  ],
+  "paragraphs": [
+    {
+      "idx": 0,
+      "style": "Heading 1",
+      "text": "MOP PA1 OSD",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 1,
+      "style": "Heading 2",
+      "text": "As-Is",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 2,
+      "style": "List Paragraph",
+      "text": "Tạo thư mục",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 3,
+      "style": "Normal",
+      "text": "export X=1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 4,
+      "style": "Normal",
+      "text": "export EVIDENCE=\"$HOME/pa1-prelab-$(date +%Y%m%d-%H%M%S)\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 5,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 6,
+      "style": "Normal",
+      "text": "mkdir -p \"$EVIDENCE\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 7,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 8,
+      "style": "Normal",
+      "text": "echo \"X=osd.$X\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 9,
+      "style": "Normal",
+      "text": "echo \"Evidence=$EVIDENCE\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 10,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 11,
+      "style": "List Paragraph",
+      "text": "As is",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 12,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 13,
+      "style": "Normal",
+      "text": "ceph -s | tee \"$EVIDENCE/01-ceph-s.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 14,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 15,
+      "style": "Normal",
+      "text": "ceph health detail \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 16,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/02-health-detail.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 17,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 18,
+      "style": "Normal",
+      "text": "ceph versions \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 19,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/03-versions.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 20,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 21,
+      "style": "Normal",
+      "text": "ceph quorum_status -f json-pretty \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 22,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/04-quorum-status.json\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 23,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 24,
+      "style": "Normal",
+      "text": "ceph osd tree \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 25,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/05-osd-tree.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 26,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 27,
+      "style": "Normal",
+      "text": "ceph osd df tree \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 28,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/06-osd-df-tree.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 29,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 30,
+      "style": "Normal",
+      "text": "ceph osd dump -f json-pretty \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 31,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/07-osd-dump.json\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 32,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 33,
+      "style": "Normal",
+      "text": "ceph osd getcrushmap \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 34,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/08-crushmap.bin\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 35,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 36,
+      "style": "Normal",
+      "text": "ceph config dump \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 37,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/09-config-dump.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 38,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd osd.$X \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 39,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/10-X-pgs.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 40,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 41,
+      "style": "Normal",
+      "text": "ceph pg ls-by-primary osd.$X \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 42,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/11-X-primary-pgs.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 43,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd osd.$X -f json-pretty \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 44,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/12-X-pgs.json\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 45,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 46,
+      "style": "Normal",
+      "text": "ceph pg ls-by-primary osd.$X -f json-pretty \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 47,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/13-X-primary-pgs.json\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 48,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd osd.$X -f json \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 49,
+      "style": "Normal",
+      "text": "  | jq -r '.pg_stats[].pgid' \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 50,
+      "style": "Normal",
+      "text": "  | while read PG; do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 51,
+      "style": "Normal",
+      "text": "      ceph pg map \"$PG\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 52,
+      "style": "Normal",
+      "text": "    done \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 53,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/14-X-pg-mapping.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 54,
+      "style": "Normal",
+      "text": "ceph osd tree \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 55,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/15-tree-before-S.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 56,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 57,
+      "style": "Normal",
+      "text": "ceph osd dump \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 58,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/16-osd-dump-before-S.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 59,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 60,
+      "style": "Normal",
+      "text": "ceph osd dump | grep '^flags' \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 61,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/17-osd-flags.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 62,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 63,
+      "style": "Normal",
+      "text": "ceph osd dump | grep -E 'pg_upmap|pg_temp' \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 64,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/18-existing-overrides.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 65,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 66,
+      "style": "Normal",
+      "text": "ceph balancer status \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 67,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/19-balancer-status.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 68,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 69,
+      "style": "Normal",
+      "text": "ceph osd pool autoscale-status \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 70,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/20-autoscale-status.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 71,
+      "style": "Heading 2",
+      "text": "Ok to stop ",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 72,
+      "style": "Normal",
+      "text": "ceph -s",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 73,
+      "style": "Normal",
+      "text": "ceph osd ok-to-stop 1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 74,
+      "style": "Normal",
+      "text": "ceph balancer status",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 75,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd 1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 76,
+      "style": "Normal",
+      "text": "ceph pg ls-by-primary 1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 77,
+      "style": "Normal",
+      "text": "phải để unmanaged: true",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 78,
+      "style": "Normal",
+      "text": "tắt balancer",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 79,
+      "style": "Normal",
+      "text": "ceph config set osd osd_crush_initial_weight 0",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 80,
+      "style": "Normal",
+      "text": "ceph balancer off",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 81,
+      "style": "Normal",
+      "text": "ceph balancer status",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 82,
+      "style": "Normal",
+      "text": "rồi bắt đầu add osd ",
+      "runs": [
+        {
+          "font": "Aptos Display",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 83,
+      "style": "Normal",
+      "text": "additional : phải tắt pg autoscale",
+      "runs": [
+        {
+          "font": "Aptos Display",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 84,
+      "style": "Normal",
+      "text": "ceph osd pool autoscale-status \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 85,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/58-autoscale-before-freeze.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 86,
+      "style": "Normal",
+      "text": "for POOL in $(ceph osd pool ls); do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 87,
+      "style": "Normal",
+      "text": "    ceph osd pool set \"$POOL\" pg_autoscale_mode off",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 88,
+      "style": "Normal",
+      "text": "done",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 89,
+      "style": "Normal",
+      "text": "ceph osd pool autoscale-status \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 90,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/59-autoscale-after-freeze.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 91,
+      "style": "Normal",
+      "text": "ceph orch daemon add osd ${S_HOST}:${S_DEV} (osd S backup)",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 92,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 93,
+      "style": "Normal",
+      "text": "Trả initial",
+      "runs": [
+        {
+          "font": "ap",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 94,
+      "style": "Normal",
+      "text": "ceph config rm osd osd_crush_initial_weight",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 95,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 96,
+      "style": "Normal",
+      "text": "as is m1",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 97,
+      "style": "Normal",
+      "text": "EVIDENCE=~/pa1-prelab-20260923-090845",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 98,
+      "style": "Normal",
+      "text": "ceph -s > \"$EVIDENCE/21-after-S-ceph-s.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 99,
+      "style": "Normal",
+      "text": "ceph osd tree > \"$EVIDENCE/22-after-S-tree.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 100,
+      "style": "Normal",
+      "text": "ceph osd df tree > \"$EVIDENCE/23-after-S-df.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 101,
+      "style": "Normal",
+      "text": "ceph osd dump > \"$EVIDENCE/24-after-S-osd-dump.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 102,
+      "style": "Normal",
+      "text": "ceph osd getmap -o \"$EVIDENCE/25-osdmap-S-weight0.bin\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 103,
+      "style": "Normal",
+      "text": "ceph osd getcrushmap -o \"$EVIDENCE/26-crush-S-weight0.bin\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 104,
+      "style": "Normal",
+      "text": "ceph pg dump pgs > \"$EVIDENCE/27-pgs-S-weight0.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 105,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $S > \"$EVIDENCE/28-S-pgs-weight0.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 106,
+      "style": "Normal",
+      "text": "rồi giờ tạo giả lập mô phỏng với S",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 107,
+      "style": "Normal",
+      "text": "ceph osd crush reweight osd.$S 0.0001",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 108,
+      "style": "Normal",
+      "text": "cp \"$EVIDENCE/25-osdmap-S-weight0.bin\" \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 109,
+      "style": "Normal",
+      "text": "   \"$EVIDENCE/29-osdmap-S-small.bin\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 110,
+      "style": "Normal",
+      "text": "osdmaptool \"$EVIDENCE/29-osdmap-S-small.bin\" \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 111,
+      "style": "Normal",
+      "text": "  --adjust-crush-weight ${S}:0.0001 \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 112,
+      "style": "Normal",
+      "text": "  --save",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 113,
+      "style": "Normal",
+      "text": "Simulation luôn với weight của 25 29",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 114,
+      "style": "Normal",
+      "text": "osdmaptool \"$EVIDENCE/25-osdmap-S-weight0.bin\" \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 115,
+      "style": "Normal",
+      "text": "  --test-map-pgs \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 116,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/30-map-weight0.txt\" 2>&1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 117,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 118,
+      "style": "Normal",
+      "text": "osdmaptool \"$EVIDENCE/29-osdmap-S-small.bin\" \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 119,
+      "style": "Normal",
+      "text": "  --test-map-pgs \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 120,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/31-map-small.txt\" 2>&1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 121,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 122,
+      "style": "Normal",
+      "text": "Diff",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 123,
+      "style": "Normal",
+      "text": "diff -u \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 124,
+      "style": "Normal",
+      "text": "  \"$EVIDENCE/30-map-weight0.txt\" \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 125,
+      "style": "Normal",
+      "text": "  \"$EVIDENCE/31-map-small.txt\" \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 126,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/32-map-diff.txt\"",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 127,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 128,
+      "style": "Normal",
+      "text": "Để weight thành 0.001 để cho Vì `pg-upmap-items` tới một OSD có effective weight bằng 0 có thể bị MON coi là mapping không hợp lệ, S phải có weight dương khi thật sự nhận PG.",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 129,
+      "style": "Normal",
+      "text": "ceph osd crush reweight osd.$S 0.0001",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 130,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 131,
+      "style": "Normal",
+      "text": "đã kiểm tra và chưa được gắn thêm với PG nào",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 132,
+      "style": "Normal",
+      "text": "Lưu primary hiện tại:",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 133,
+      "style": "Normal",
+      "text": "ceph pg ls-by-primary $X > \"$EVIDENCE/33-X-primary-before.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 134,
+      "style": "Normal",
+      "text": "Snapshot trước của bạn cho thấy osd.1 có khá nhiều primary, nên giờ:",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 135,
+      "style": "Normal",
+      "text": "ceph osd primary-affinity osd.$X 0",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 136,
+      "style": "Normal",
+      "text": "ceph osd primary-affinity osd.$S 0",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 137,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 138,
+      "style": "Normal",
+      "text": "chụp checkpoint",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 139,
+      "style": "Normal",
+      "text": "ceph osd tree > \"$EVIDENCE/34-after-primary-affinity-tree.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 140,
+      "style": "Normal",
+      "text": "ceph pg ls-by-primary $X > \"$EVIDENCE/35-X-primary-after.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 141,
+      "style": "Normal",
+      "text": "ceph -s > \"$EVIDENCE/36-after-primary-affinity-ceph-s.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 142,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 143,
+      "style": "Normal",
+      "text": "lưu mapping",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 144,
+      "style": "Normal",
+      "text": "ceph pg map $PG \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 145,
+      "style": "Normal",
+      "text": "  | tee \"$EVIDENCE/37-canary-${PG}-before.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 146,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 147,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 148,
+      "style": "Normal",
+      "text": "Canary 9.6(least affect one )",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 149,
+      "style": "Normal",
+      "text": "ceph osd pg-upmap-items $PG $X $S",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 150,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 151,
+      "style": "Normal",
+      "text": " ",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 152,
+      "style": "Normal",
+      "text": "chỉ có mỗi canary PG vừa làm",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 153,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 154,
+      "style": "Normal",
+      "text": "lưu lại",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 155,
+      "style": "Normal",
+      "text": "ceph pg map $PG \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 156,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/38-canary-${PG}-after.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 157,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 158,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $S \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 159,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/39-S-pgs-after-canary.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 160,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 161,
+      "style": "Normal",
+      "text": "ceph -s \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 162,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/40-after-canary-ceph-s.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 163,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 164,
+      "style": "Normal",
+      "text": "Lấy toàn bộ PG trên X",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 165,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $X -f json \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 166,
+      "style": "Normal",
+      "text": "  | jq -r '.pg_stats[].pgid' \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 167,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/41-X-all-pgs-to-drain.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 168,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 169,
+      "style": "Normal",
+      "text": "wc -l \"$EVIDENCE/41-X-all-pgs-to-drain.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 170,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 171,
+      "style": "Normal",
+      "text": "giờ drain từng pg theo batch 1 ",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 172,
+      "style": "Normal",
+      "text": "for BATCH in \"$EVIDENCE\"/batch-*; do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 173,
+      "style": "Normal",
+      "text": "    echo",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 174,
+      "style": "Normal",
+      "text": "    echo \"=========================================\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 175,
+      "style": "Normal",
+      "text": "    echo \"Running: $BATCH\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 176,
+      "style": "Normal",
+      "text": "    echo \"=========================================\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 177,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 178,
+      "style": "Normal",
+      "text": "    while IFS= read -r PG; do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 179,
+      "style": "Normal",
+      "text": "        [ -z \"$PG\" ] && continue",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 180,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 181,
+      "style": "Normal",
+      "text": "        echo \"UPMAP $PG : osd.$X -> osd.$S\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 182,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 183,
+      "style": "Normal",
+      "text": "        ceph osd pg-upmap-items \"$PG\" \"$X\" \"$S\" </dev/null || exit 1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 184,
+      "style": "Normal",
+      "text": "    done < \"$BATCH\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 185,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 186,
+      "style": "Normal",
+      "text": "    echo \"Waiting for all PGs to become active+clean...\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 187,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 188,
+      "style": "Normal",
+      "text": "    while :; do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 189,
+      "style": "Normal",
+      "text": "        BAD=$(",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 190,
+      "style": "Normal",
+      "text": "            ceph pg dump pgs_brief -f json 2>/dev/null \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 191,
+      "style": "Normal",
+      "text": "            | jq '[.pg_stats[] | select(.state != \"active+clean\")] | length'",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 192,
+      "style": "Normal",
+      "text": "        )",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 193,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 194,
+      "style": "Normal",
+      "text": "        echo \"PG not active+clean: $BAD\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 195,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 196,
+      "style": "Normal",
+      "text": "        if [ \"$BAD\" -eq 0 ]; then",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 197,
+      "style": "Normal",
+      "text": "            echo \"Batch converged.\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 198,
+      "style": "Normal",
+      "text": "            break",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 199,
+      "style": "Normal",
+      "text": "        fi",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 200,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 201,
+      "style": "Normal",
+      "text": "        sleep 5",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 202,
+      "style": "Normal",
+      "text": "    done",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 203,
+      "style": "Normal",
+      "text": "done",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 204,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 205,
+      "style": "Normal",
+      "text": "đã hết pg sau khi drain và đã ok-to-stop",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 206,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 207,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 208,
+      "style": "Normal",
+      "text": "A5: nâng đúng osd.$X lên 16.2.15, giữ toàn bộ PG ở S/Y/Z.",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": true
+        },
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 209,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 210,
+      "style": "Normal",
+      "text": "Ckpt cuối trước update:",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 211,
+      "style": "Normal",
+      "text": "ceph -s > \"$EVIDENCE/54-dr-ready-ceph-s.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 212,
+      "style": "Normal",
+      "text": "ceph health detail > \"$EVIDENCE/55-dr-ready-health.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 213,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $X > \"$EVIDENCE/56-X-pgs-before-upgrade.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 214,
+      "style": "Normal",
+      "text": "ceph osd ok-to-stop $X \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 215,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/57-X-ok-to-stop.txt\" 2>&1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 216,
+      "style": "Normal",
+      "text": "ceph versions > \"$EVIDENCE/58-versions-before-upgrade.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 217,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 218,
+      "style": "Normal",
+      "text": "set noout",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 219,
+      "style": "Normal",
+      "text": "ceph osd set-group noout osd.$X",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 220,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 221,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 222,
+      "style": "Normal",
+      "text": "kiểm tra daemon hiện tại",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 223,
+      "style": "Normal",
+      "text": "ceph orch ps --daemon_type osd --format yaml | less",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 224,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 225,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 226,
+      "style": "Normal",
+      "text": "ceph orch ps --daemon_type osd --format yaml \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 227,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/60-osd-containers-before-X-upgrade.yaml\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 228,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 229,
+      "style": "Normal",
+      "text": "ceph versions \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 230,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/61-versions-before-X-upgrade.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 231,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 232,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $X \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 233,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/62-X-pgs-final-before-upgrade.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 234,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 235,
+      "style": "Normal",
+      "text": "Lấy public image:",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 236,
+      "style": "Normal",
+      "text": "export TARGET_IMAGE='quay.io/ceph/ceph:v16.2.15'",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 237,
+      "style": "Normal",
+      "text": "echo \"$TARGET_IMAGE\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 238,
+      "style": "Normal",
+      "text": "osd 1 nằm trên ceph-node2 nên là phải sang ceph node2 \t",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 239,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 240,
+      "style": "Normal",
+      "text": "pull public image",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 241,
+      "style": "Normal",
+      "text": "sudo docker pull quay.io/ceph/ceph:v16.2.15",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 242,
+      "style": "Normal",
+      "text": "ceph orch daemon redeploy osd.$X --image \"$TARGET_IMAGE\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 243,
+      "style": "Normal",
+      "text": "kiểm tra daemon",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 244,
+      "style": "Normal",
+      "text": "ceph versions ceph osd metadata $X | grep -E '\"ceph_version\"|\"hostname\"' ceph orch ps --daemon_type osd --format yaml",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 245,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 246,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 247,
+      "style": "Normal",
+      "text": "A6",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 248,
+      "style": "Normal",
+      "text": "ceph versions \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 249,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/59-versions-after-X-upgrade.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 250,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 251,
+      "style": "Normal",
+      "text": "ceph -s \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 252,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/60-after-X-upgrade-ceph-s.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 253,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 254,
+      "style": "Normal",
+      "text": "ceph osd tree \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 255,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/61-after-X-upgrade-tree.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 256,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 257,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $X \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 258,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/62-X-pgs-after-upgrade.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 259,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 260,
+      "style": "Normal",
+      "text": "ceph health detail \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 261,
+      "style": "Normal",
+      "text": "  > \"$EVIDENCE/63-after-X-upgrade-health.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 262,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 263,
+      "style": "Normal",
+      "text": "ceph osd rm-pg-upmap-items $PG",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 264,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 265,
+      "style": "Normal",
+      "text": "đây là để trả lại hết pg về",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 266,
+      "style": "Normal",
+      "text": "while IFS= read -r PG; do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 267,
+      "style": "Normal",
+      "text": "    [ -z \"$PG\" ] && continue",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 268,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 269,
+      "style": "Normal",
+      "text": "    echo \"RETURN $PG : clear X=$X -> S=$S upmap\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 270,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 271,
+      "style": "Normal",
+      "text": "    ceph osd rm-pg-upmap-items \"$PG\" </dev/null || true",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 272,
+      "style": "Normal",
+      "text": "done < \"$EVIDENCE/41-X-all-pgs-to-drain.txt\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 273,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 274,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 275,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 276,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 277,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 278,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 279,
+      "style": "Normal",
+      "text": "while :; do",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 280,
+      "style": "Normal",
+      "text": "    BAD=$(",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 281,
+      "style": "Normal",
+      "text": "        ceph pg dump pgs_brief -f json 2>/dev/null \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 282,
+      "style": "Normal",
+      "text": "        | jq '[.pg_stats[] | select(.state != \"active+clean\")] | length'",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 283,
+      "style": "Normal",
+      "text": "    )",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 284,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 285,
+      "style": "Normal",
+      "text": "    echo \"$(date) PG not active+clean: $BAD\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 286,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 287,
+      "style": "Normal",
+      "text": "    if [ \"$BAD\" -eq 0 ]; then",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 288,
+      "style": "Normal",
+      "text": "        echo \"ALL PGs converged.\"",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 289,
+      "style": "Normal",
+      "text": "        break",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 290,
+      "style": "Normal",
+      "text": "    fi",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 291,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 292,
+      "style": "Normal",
+      "text": "    sleep 5",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 293,
+      "style": "Normal",
+      "text": "done",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 294,
+      "style": "Normal",
+      "text": "check",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 295,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 296,
+      "style": "Normal",
+      "text": "",
+      "runs": [
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 297,
+      "style": "Normal",
+      "text": "kiểm tra xem là cái upmap còn không ",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 298,
+      "style": "Normal",
+      "text": "ceph osd dump -f json \\",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 299,
+      "style": "Normal",
+      "text": "  | jq '.pg_upmap_items'",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 300,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 301,
+      "style": "Normal",
+      "text": "Rétore afinity",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 302,
+      "style": "Normal",
+      "text": "ceph osd primary-affinity osd.$X 1",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 303,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 304,
+      "style": "Normal",
+      "text": "reweight lại về 0 cái S",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 305,
+      "style": "Normal",
+      "text": "ceph osd crush reweight osd.$S 0",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 306,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 307,
+      "style": "Normal",
+      "text": "kiểm tra xem osd S back up còn PG được crush map mới đẩy vào không ",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 308,
+      "style": "Normal",
+      "text": "ceph pg ls-by-osd $S",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 309,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 310,
+      "style": "Normal",
+      "text": "set bỏ noout",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 311,
+      "style": "Normal",
+      "text": "ceph osd unset-group noout osd.$X",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 312,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 313,
+      "style": "Normal",
+      "text": "đã checksum lại so với bản gốc bản này là bản sau khi osd X được làm primary",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": null,
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 314,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 315,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 316,
+      "style": "Normal",
+      "text": "chứng minh không bị ảnh hưởng osd x mồ côi , drained dữ liệu và upmap, ",
+      "runs": [
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Aptos",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 317,
+      "style": "Normal",
+      "text": "deep scrub truowsc upgrade, chuwnsg minh check sum H0 taijsao no can kem error",
+      "runs": [
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        },
+        {
+          "font": "Courier New",
+          "size": null,
+          "bold": null
+        }
+      ]
+    },
+    {
+      "idx": 318,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 319,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    },
+    {
+      "idx": 320,
+      "style": "Normal",
+      "text": "",
+      "runs": []
+    }
+  ],
+  "table_count": 0
+}
