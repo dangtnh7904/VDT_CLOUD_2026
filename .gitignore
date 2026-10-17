@@ -7,3 +7,6 @@ ceph_pa1_h0_report_ppt169_20260928/
 projects/
 .chart-data-*/
 .codex-*/
+benchmark/runs/
+benchmark/scripts/
+benchmark/
